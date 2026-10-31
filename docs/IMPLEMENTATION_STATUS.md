@@ -911,6 +911,39 @@ Neither was found by inspection. Nothing was hidden to make a step pass: the
 
 ---
 
+## No code comments (2026-11-01)
+
+**Status: removed across the active tree, and enforced from now on.** The rule is
+in `AGENTS.md` ("No code comments — mandatory, every agent"); this is the receipt.
+
+| | |
+| --- | --- |
+| Comments removed | **5,357** in **136** files — Rust, TypeScript, JavaScript, shell, Swift, CSS/HTML/XML, TOML/YAML/JSONC |
+| Scanned | every tracked file under `crates/`, `apps/`, `scripts/` and the root, by extension |
+| Excluded | `docs/` (documentation), `reference/` (archived prototype), `.trail/cache/`, `target/`, `node_modules/`, `dist/`, `build/`, lockfiles, `LICENSE`, binary assets |
+| Preserved | shebangs, `LICENSE`, and every non-comment byte |
+| Enforcement | `python3 scripts/no_comments.py check` — per-language lexers, exits non-zero on any comment |
+
+Removal is lexer-based rather than pattern-based, because a `//` inside a string, a
+`#` inside `${var#pattern}`, a `/*` inside a TypeScript regex literal and a Rust
+lifetime that looks like an unterminated character literal all resemble comments.
+Detection and rewriting share one lexer, which is why `check` and `strip` cannot
+disagree.
+
+No functional comment directive existed to preserve: no `@ts-expect-error`, no
+lint-disable, no `@vite-ignore`, and no doc-test depended on a removed `///` (all
+four crates reported zero doc-tests before and after). The only permitted
+comment-like forms left are the shebangs at the top of the shell and Python tools.
+
+Verification after removal: `cargo test --workspace` **280 passed, 0 failed**;
+`cargo clippy --workspace --all-targets` clean; `cargo fmt --all --check` clean;
+`pnpm typecheck`, `pnpm test` **228 passed**, `pnpm build` all exit 0;
+`bash -n` on every script; `swiftc -parse`; `node --check`; `python3 -m json.tool`
+on every JSON file; and `scripts/no_comments.py check` reporting none left. The
+only added lines in the whole change are blank or reformatted by `cargo fmt`.
+
+---
+
 ## M3b — retained posters, skip segments, local suggestions (2026-10-29)
 
 **Status: host-verified on macOS.** Three gaps that made the desktop feel unfinished

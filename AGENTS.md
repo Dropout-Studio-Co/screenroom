@@ -113,6 +113,37 @@ are external and are not part of Git.
 - The private Dropout Design System source and generated private token values
   stay out of Git and out of any public artifact.
 
+## No code comments — mandatory, every agent
+
+This repository has **no comments in its code**, and none may be added. The rule
+covers every language, every file and every kind of change — implementation,
+refactor, debug, review, test, script, configuration — and every agent or
+subagent that works here, whoever launched it.
+
+- Never write a comment: no line, block, inline, doc or explanatory comment, in
+  any language.
+- Never commit commented-out code, and never add `TODO`, `FIXME`, `HACK`, `NOTE`
+  or similar markers.
+- Write self-explanatory code instead: names that say what a thing is, small
+  functions, types that carry the meaning, structure that shows the intent.
+- Documentation belongs in `docs/`, `AGENTS.md` or a README — never in source.
+  The rationale that used to sit above a function belongs in the document that
+  covers that area.
+- Never reintroduce a comment "because it was there before". The tree has none.
+
+Permitted, because they are not commentary: a shebang line; a legally required
+licence header; and a directive the toolchain needs in order to work at all —
+where removing it would change what the build does. Name such an exception in the
+commit message. Nothing in the current tree needs one.
+
+**Enforced, not merely stated.** `python3 scripts/no_comments.py check` lexes
+every active source file with a per-language lexer — a `//` inside a string, a
+`#` inside `${var#pattern}` and a `/*` inside a TypeScript regex are not mistakes
+for comments — and exits non-zero if it finds one. `strip` is the same lexer in
+rewrite mode, so the check cannot disagree with the rewrite. Both read
+`git ls-files`, so `docs/`, `reference/`, generated output and lockfiles are out
+of scope. Run `check` with the other checks before committing.
+
 ## Testing without taking over the desktop
 
 **Background-first, always.** Development and verification run on the owner's own
@@ -234,6 +265,8 @@ scripts/probe-library.sh ROOT OUT.jsonl      # read-only ffprobe of a real libra
 scripts/capture-window.sh OUT.png            # Screenshot of Screenroom's own window
 scripts/drive-app.sh library|enter|space|left|right|capture NAME   # foreground, gated
 cargo run -p screenroom-core --example prepare_library -- LIB.DB MEDIA_ROOT
+
+python3 scripts/no_comments.py check         # the no-comments rule, lexed per language
 ```
 
 ## Gotchas

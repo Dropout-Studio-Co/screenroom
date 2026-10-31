@@ -226,7 +226,8 @@ All test media must be **generated or rights-cleared**, tiny except bounded stre
 
 Keyboard/remote-only across key journeys; visible focus, contrast, reduced motion, screen reader names where platform supports, Unicode subtitles, preservation of focus after metadata updates. Security review: media-root auth, path traversal/symlinks, provider redirect/URL allowlist, subtitle/import XSS, untrusted NFO parsing, native IPC bad values, FFmpeg command argument safety, API credential redaction; no accidental Git check-in of videos/logs/private device files.
 
-Run local checks (strict $0): formatting, lint, Svelte/TS diagnostics, Rust format/clippy/tests, unit+contract tests, browser Playwright/axe as appropriate, integration jobs and device-specific checks. No mandatory paid CI runner. Keep commands in root package scripts once introduced.
+Run local checks (strict $0): formatting, lint, Svelte/TS diagnostics, Rust format/clippy/tests, unit+contract tests, browser Playwright/axe as appropriate, integration jobs, device-specific checks and `python3 scripts/no_comments.py check`
+(the repo-wide no-comments rule; see `AGENTS.md`). No mandatory paid CI runner. Keep commands in root package scripts once introduced.
 
 ## 7. Evidence receipts and release exit
 
