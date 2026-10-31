@@ -32,7 +32,7 @@ function pkgAbove(file) {
   for (let d = path.dirname(file), i = 0; i < 6; d = path.dirname(d), i++) {
     try {
       if (PKGS.includes(JSON.parse(fs.readFileSync(path.join(d, 'package.json'), 'utf8')).name)) return path.join(d, 'dist', 'claude');
-    } catch {  }
+    } catch {}
   }
   return null;
 }
@@ -44,7 +44,7 @@ function onPath() {
     for (const bin of BINS) {
       const p = path.join(d, bin);
       if (!fs.existsSync(p)) continue;
-      try { out.push(pkgAbove(fs.realpathSync(p))); } catch {  }
+      try { out.push(pkgAbove(fs.realpathSync(p))); } catch {}
       out.push(...fromPkg(d));
     }
   }
@@ -88,19 +88,19 @@ function best(dirs, name) {
 }
 
 function entry(name, cheapOnly) {
-  
+
   const cheap = [remembered(), ...fromPkg(dir), ...fromPkg(path.join(path.dirname(process.execPath), '..', 'lib')), ...onPath()];
   const hit = best(cheap, name);
   if (hit) return path.join(hit, name);
   const gr = cheapOnly ? null : globalRoot();
   const global = gr && best(PKGS.map((p) => path.join(gr, ...p.split('/'), 'dist', 'claude')), name);
   if (global) return path.join(global, name);
-  return path.join(dir, 'dist', 'claude', name); 
+  return path.join(dir, 'dist', 'claude', name);
 }
 
 const FAST = process.argv[2] === 'pre-bash';
 const target = entry(FAST ? 'pre-bash.js' : "hooks.js", FAST);
-if (fs.existsSync(target)) import(pathToFileURL(target).href).then((m) => m.main(process.argv[2])).catch(() => {  });
+if (fs.existsSync(target)) import(pathToFileURL(target).href).then((m) => m.main(process.argv[2])).catch(() => {});
 else if (process.argv[2] === 'session-start') offerTrail();
 
 function offerTrail() {
@@ -112,8 +112,8 @@ function offerTrail() {
   const field = (text, key, max) => {
     const line = text.split('\n').find((l) => l.startsWith(key + ':'));
     let value = line ? line.slice(key.length + 1).trim() : '';
-    
-    
+
+
     if (value.length > 1 && value[0] === "'" && value[value.length - 1] === "'") {
       value = value.slice(1, -1).replace(/''/g, "'");
     } else if (value.length > 1 && value[0] === '"' && value[value.length - 1] === '"') {
@@ -153,7 +153,7 @@ function liveFiles(learnings, files) {
     };
     const id = /^l-[0-9a-f]{6,16}$/.test(get('id')) ? get('id') : 'l-' + crypto.createHash('sha1').update(f).digest('hex').slice(0, 6);
     const status = ['held', 'replaced', 'retired'].includes(get('status')) ? get('status') : 'active';
-    
+
     const date = get('date') || (/^\d{4}-\d{2}-\d{2}/.exec(f) || [''])[0];
     return { f, id, date, status, replaces: get('replaces') };
   });

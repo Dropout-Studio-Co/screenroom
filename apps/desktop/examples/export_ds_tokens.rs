@@ -93,17 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut out = String::new();
     out.push_str(
-        "//! Generated from the private Dropout Design System. DO NOT COMMIT.\n\
-         //!\n\
-         //! Regenerate with:\n\
-         //! `cargo run -p screenroom-desktop --example export_ds_tokens`\n\
-         //!\n",
-    );
-    out.push_str(&format!("//! Source: {}\n", tokens_path.display()));
-    out.push_str(&format!("//! Pinned at: {provenance}\n\n"));
-    out.push_str(
         "use crate::design::{ControlScale, Palette, RadiusScale, Spacing, Tokens, TypeScale, color};\n\n\
-         /// Semantic Dropout Design System tokens resolved for iced.\n\
          pub const PINNED: Tokens = Tokens {\n    palette: Palette {\n",
     );
     for line in &palette {
