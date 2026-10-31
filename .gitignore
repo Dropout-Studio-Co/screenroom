@@ -92,3 +92,6 @@ Thumbs.db
 !**/Cargo.lock
 !package-lock.json
 !**/package-lock.json
+
+__pycache__/
+*.pyc
