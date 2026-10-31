@@ -68,8 +68,7 @@ test('a round trip preserves the library', () => {
 })
 
 test('one unreadable row is dropped and counted, not the whole library', () => {
-  // The owner's history exists nowhere else, so a single bad row must never cost
-  // everything. The row is refused and the count is reported.
+
   const document = JSON.stringify({
     formatVersion: STORE_FORMAT_VERSION,
     profiles: [{ id: 'p1', name: 'Owner' }],
@@ -112,8 +111,6 @@ test('an oversized or over-long document is refused before it is parsed', () => 
   const tooLong = 'x'.repeat(9 * 1024 * 1024)
   assert.equal(decodeSnapshot(tooLong).reset, true)
 
-  // The row ceiling is checked before any row is read, so the rows here are as small
-  // as a row can be: the refusal is about how many there are, not about their size.
   const tooManyRows = JSON.stringify({
     formatVersion: STORE_FORMAT_VERSION,
     items: Array.from({ length: MAX_ROWS + 1 }, () => ({})),
@@ -138,7 +135,7 @@ test('a state change returns a new snapshot and leaves the old one alone', () =>
   assert.equal(before.items[0]?.positionMs, 0, 'the previous snapshot must not be mutated')
   assert.equal(after.items[0]?.positionMs, 30_000)
   assert.equal(after.items[0]?.updatedMs, 99)
-  // An id that is not there changes nothing, rather than adding a row.
+
   assert.equal(withItemProgress(before, 'missing', 1, 1, false, 1).items.length, 1)
 })
 
@@ -155,7 +152,6 @@ test('generated ids are stable-looking and never contain a path', () => {
   assert.ok(!id.includes('/') && !id.includes('\\'))
 })
 
-/** The session id the client hands out. Every callback has to carry this one back. */
 const LIVE_SESSION = 'session-1'
 
 function snapshotFor(sequence: number, positionMs: number): PlaybackSnapshot {
@@ -182,15 +178,12 @@ test('progress is written, and a stale callback still cannot overwrite it', () =
   )
   assert.equal(service.items()[0]?.positionMs, 30_000)
 
-  // Sequence 1 arrives late, after 2 was accepted.
   assert.equal(
     service.recordProgress({ sessionId: LIVE_SESSION, generation: 1 }, snapshotFor(1, 5_000), 'work-1'),
     false,
   )
   assert.equal(service.items()[0]?.positionMs, 30_000, 'the playhead went backwards')
 
-  // And a session that has ended writes nothing at all, even when the numbers look
-  // newer: the id is what decides, not the sequence.
   service.endSession(LIVE_SESSION)
   assert.equal(
     service.recordProgress({ sessionId: LIVE_SESSION, generation: 1 }, snapshotFor(9, 900_000), 'work-1'),
@@ -205,8 +198,6 @@ test('a rescan never resets a position the scanner did not measure', () => {
   service.beginSession(LIVE_SESSION, 'item-1')
   service.recordProgress({ sessionId: LIVE_SESSION, generation: 1 }, snapshotFor(1, 120_000), 'work-1')
 
-  // The scanner reports the same file with no progress of its own, which is what it
-  // always does: progress belongs to the owner, not to the walk.
   service.replaceCatalog([item({ positionMs: 0, durationMs: 0 })], [source])
   assert.equal(service.items()[0]?.positionMs, 120_000)
   assert.equal(service.items()[0]?.durationMs, 600_000, 'a measured duration is kept')
@@ -241,9 +232,6 @@ test('the playback preferences and the last scan survive a restart', () => {
     reason: null,
   })
 
-  // A new service over the same bytes is what a restart is, and both facts have to
-  // come back: a television that forgot its subtitle language every launch would be a
-  // television nobody configures twice.
   const second = new LibraryService(port)
   assert.deepEqual(second.settings(), {
     subtitles: 'auto',
@@ -255,8 +243,7 @@ test('the playback preferences and the last scan survive a restart', () => {
 })
 
 test('a version 1 document is read with default settings rather than refused', () => {
-  // The whole point of the version number: a document written before the preferences
-  // existed must still open its library.
+
   const raw = JSON.stringify({
     formatVersion: 1,
     profiles: [],
@@ -303,8 +290,6 @@ test('a scan writes the catalogue, the sources and the report in one document', 
     },
   })
 
-  // One write, because localStorage on a 2021 TV is synchronous: three writes is three
-  // chances to be interrupted halfway through a library update.
   assert.equal(writes, 1)
   assert.equal(service.items()[0]?.title, 'Renamed')
   assert.equal(service.items()[0]?.positionMs, 90_000, 'the position is still the owner’s')
@@ -313,8 +298,7 @@ test('a scan writes the catalogue, the sources and the report in one document', 
 })
 
 test('a device that refuses a write says so instead of assuming it worked', () => {
-  // Tizen's localStorage throws when the quota is full, so a full disk must not look
-  // like a saved position.
+
   const port = createMemoryStorage()
   const service = new LibraryService(port)
   const full = {
@@ -341,8 +325,7 @@ test('an unchanged state is not written twice', () => {
   const service = new LibraryService(counting)
   service.replaceCatalog([item()], [source])
   const afterFirst = writes
-  // The same catalog again: nothing changed, so nothing is written. A write per
-  // frame would be felt in the frame budget on a 2021 TV.
+
   service.replaceCatalog([item()], [source])
   assert.equal(writes, afterFirst)
 })

@@ -1,29 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-/**
- * The whole TV scan, against a simulated Tizen filesystem.
- *
- * This is the closest thing to a device test that can run on a laptop, and it is worth
- * being precise about what it proves and what it does not:
- *
- * * **It proves the wiring.** Drives are asked for, walked, planned, stored as one
- *   document, and read back through the same accessors the screens use. Every one of
- *   those steps is the production code; only the platform above it is simulated.
- * * **It does not prove a TV.** A simulated `listDirectory` cannot fail the way a USB
- *   drive on a 2021 television fails, and it says nothing about permissions, timing or
- *   AVPlay. Gate G5 stays blocked until the owner's set is attached.
- *
- * The simulation is deliberately the *documented* shape: `listStorages` reports a label,
- * a type and a state, and `listDirectory` reports entry names.
- */
-
 import { createMemoryStorage, LibraryService } from '../src/core/storage.ts'
 import { homeShelf } from '../src/core/browse.ts'
 import { MAX_STORE_CHARS } from '../src/core/store.ts'
 import { library, scanDrives, useStoragePort } from '../src/app/runtime.ts'
 
-/** A filesystem as a map from directory location to the names it holds. */
 type Tree = Record<string, string[]>
 
 interface FakeFilesystem {
@@ -41,12 +23,6 @@ interface FakeFilesystem {
   readonly toURI: (path: string) => string
 }
 
-/**
- * Installs a fake Tizen global over the given drives.
- *
- * `deny` names locations whose listing fails with a permission error, which is what a
- * revoked grant looks like from inside the app.
- */
 function install(trees: Record<string, Tree>, deny: readonly string[] = []): void {
   const isDir = (location: string): boolean =>
     Object.values(trees).some((tree) => tree[location] !== undefined)
@@ -95,7 +71,6 @@ function install(trees: Record<string, Tree>, deny: readonly string[] = []): voi
   ;(globalThis as { tizen?: unknown }).tizen = { filesystem }
 }
 
-/** A fresh library, so one test's catalogue cannot leak into the next. */
 function freshLibrary(): void {
   useStoragePort(createMemoryStorage())
 }
@@ -124,8 +99,7 @@ test('a scan catalogues a USB drive and grants it in one pass', async () => {
       .sort(),
     ['Movies/Dune.2021.2160p.mkv', 'Shows/Severance.S01E01.mkv', 'Shows/Severance.S01E02.mkv', 'Shows/Severance.S01E04.mkv'],
   )
-  // A hidden folder is not descended into, which is what keeps `.Trashes` and its
-  // discarded film out of the library.
+
   assert.equal(
     library()
       .items()
@@ -136,7 +110,7 @@ test('a scan catalogues a USB drive and grants it in one pass', async () => {
   assert.equal(sources.length, 1)
   assert.equal(sources[0]?.label, 'removable1')
   assert.equal(sources[0]?.state, 'available')
-  // The label is the location, not a mount path this app invented.
+
   assert.equal(sources[0]?.rootPath, 'removable1')
   assert.ok((sources[0]?.lastScanMs ?? 0) > 0, 'the source records when it was scanned')
 })
@@ -168,7 +142,6 @@ test('a rescan keeps every id, so the progress already stored stays attached', a
   const before = new Map(library().items().map((item) => [item.relativePath, item.id]))
   assert.ok(before.size > 0)
 
-  // The drive is scanned again with one more file on it.
   install({
     removable1: {
       ...MEDIA_DRIVE,
@@ -195,7 +168,6 @@ test('a file that is gone keeps its row and its position, and loses only playbac
     .find((item) => item.relativePath.endsWith('Severance.S01E02.mkv'))
   assert.ok(target !== undefined)
 
-  // A position, written the way the player writes one.
   library().beginSession('play-1', target.id)
   library().recordProgress(
     { sessionId: 'play-1', generation: 1 },
@@ -212,7 +184,6 @@ test('a file that is gone keeps its row and its position, and loses only playbac
   )
   assert.equal(library().items().find((item) => item.id === target.id)?.positionMs, 240_000)
 
-  // The file is deleted from the drive, and the drive is scanned again.
   install({
     removable1: {
       ...MEDIA_DRIVE,
@@ -234,7 +205,6 @@ test('a drive that is pulled out becomes disconnected and keeps every position',
   await scanDrives()
   const count = library().items().length
 
-  // The TV no longer lists the drive at all.
   install({})
   const report = await scanDrives()
 
@@ -298,8 +268,6 @@ test('an internal storage is listed but never walked', async () => {
   })
   await scanDrives()
 
-  // The TV's own flash is not a film library, and walking it would catalogue the
-  // platform's bookkeeping.
   assert.equal(
     library()
       .items()
@@ -317,14 +285,6 @@ test('the scan report is stored, so Settings can describe it after a restart', a
   assert.deepEqual(library().lastScan(), report)
 })
 
-/**
- * A drive shaped like the owner's own: two top folders, films loose inside one of them,
- * and twenty shows nested two levels deeper under `Season NN`.
- *
- * This is the shape the report came from — "a lot of movies and TV shows inside folders
- * inside the USB" — and it is 1,200 files, which is also the size at which page-based
- * browsing stopped being a library.
- */
 function nestedDrive(): Tree {
   const tree: Tree = { removable1: ['Movies', 'Shows'] }
   const films: string[] = []
@@ -351,9 +311,7 @@ function nestedDrive(): Tree {
 }
 
 test('a thousand nested files reach the library, survive a restart, and show on Home', async () => {
-  // The defect this test pins: the scan reported over a thousand files and the
-  // screens showed none. Proving the walk is not enough — the catalogue has to be
-  // written, read back by a *new* service, and reachable from the screen's own rules.
+
   const port = createMemoryStorage()
   useStoragePort(port)
   install({ removable1: nestedDrive() })
@@ -377,12 +335,10 @@ test('a thousand nested files reach the library, survive a restart, and show on 
     `1,200 rows encode to ${stored.length} characters, which must fit the reader's ceiling`,
   )
 
-  // A fresh service over the same bytes is what a restart does.
   const restarted = new LibraryService(createMemoryStorage(stored))
   assert.equal(restarted.items().length, 1200)
   assert.equal(restarted.loadReport().lostStoredState, false)
 
-  // And the screen's own rule reaches every one of them.
   const shelf = homeShelf(restarted.items())
   assert.equal(shelf.fromResume, false)
   assert.equal(shelf.items.length, 1200)

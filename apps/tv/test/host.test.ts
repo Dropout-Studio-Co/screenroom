@@ -4,15 +4,6 @@ import assert from 'node:assert/strict'
 import { detectHost, hostSummary, readDeviceInfo } from '../src/platform/env.ts'
 import { hasAvPlay } from '../src/platform/tizen.ts'
 
-/**
- * These tests pin the one platform fact the first installed build got wrong on the
- * owner's television: `webapis` is a **sibling** of `tizen` on `window`, not a member of
- * it. Reading `tizen.webapis.avplay` returns `undefined` on a real TV, so the app
- * concluded it was a browser and sent playback to a `<video>` element that cannot open
- * a local file there. The set's own boot record read `avplay=0 filesystem=1`, which is
- * the contradiction these tests exist to prevent.
- */
-
 const globals = globalThis as { tizen?: unknown; webapis?: unknown }
 
 function install(shape: { tizen?: unknown; webapis?: unknown }): void {
@@ -25,7 +16,6 @@ afterEach(() => {
   delete globals.webapis
 })
 
-/** The minimum a TV provides: device APIs on `tizen`, media APIs on `webapis`. */
 const tizenDeviceApis = {
   filesystem: { listStorages() {} },
   tvinputdevice: { registerKey() {}, registerKeyBatch() {}, getSupportedKeys: () => [] },
@@ -57,7 +47,7 @@ test('a TV with AVPlay is reported as the TV, not as a browser preview', () => {
   const host = detectHost()
   assert.equal(host.kind, 'tizen')
   assert.match(hostSummary(host), /AVPlay is present/)
-  // Nothing about the report may suggest a preview when the TV is live.
+
   assert.equal(host.notes.some((note) => note.includes('desktop browser')), false)
 })
 
@@ -67,8 +57,7 @@ test('the nested form is still accepted, for hosts that expose it that way', () 
 })
 
 test('a host with tizen device APIs but no AVPlay is a browser, and says so', () => {
-  // This is exactly what the owner's TV reported before the fix: `filesystem=1` with
-  // `avplay=0`. Reporting it as a browser is then correct — the bug was the reading.
+
   install({ tizen: tizenDeviceApis })
   const host = detectHost()
   assert.equal(host.avplay, false)
@@ -91,7 +80,7 @@ test('the device identity comes from webapis.productinfo', () => {
   assert.deepEqual(readDeviceInfo(), {
     model: 'UA50AU8000',
     firmwareVersion: 'T-KTMAKUC-1490.3',
-    // `getVersion()` is the product version and must not be read as the Tizen version.
+
     platformVersion: null,
     productVersion: '6.0',
   })

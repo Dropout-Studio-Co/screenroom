@@ -12,7 +12,6 @@ import {
   type TrackChoice,
 } from '../src/core/tracks.ts'
 
-/** A decoder-reported track, with only the parts a test cares about spelled out. */
 function track(type: string, index: number, language: string | null = null): TrackChoice {
   return {
     type,
@@ -22,7 +21,6 @@ function track(type: string, index: number, language: string | null = null): Tra
   }
 }
 
-/** One catalogued episode, with the fields a next-episode test needs. */
 function episode(
   id: string,
   season: number,
@@ -51,8 +49,7 @@ function episode(
 }
 
 test('only the subtitle kinds the TV actually renders are offered beside a video', () => {
-  // The four extensions are Samsung's own list. `.ass` and `.ssa` are deliberately
-  // absent: offering a file the decoder refuses is worse than not offering it.
+
   assert.deepEqual([...SUBTITLE_SIDECAR_EXTENSIONS], ['smi', 'srt', 'sub', 'ttxt'])
   assert.deepEqual(sidecarFileNames('Show/S01E01'), [
     'Show/S01E01.smi',
@@ -75,11 +72,10 @@ test('the menu lists audio, then the subtitle switch, then the subtitle tracks',
     rows.map((row) => row.key),
     ['audio:1', 'audio:2', 'text:off', 'text:3'],
   )
-  // The chosen audio track is the marked one; the un-chosen one is not.
+
   assert.equal(rows[1]?.selected, true)
   assert.equal(rows[0]?.selected, false)
-  // Nothing has been chosen for text, and the decoder is not silenced, so "off" is the
-  // truthful state: a file starts with no subtitle track picked.
+
   assert.equal(rows[2]?.selected, true)
   assert.equal(rows[3]?.selected, false)
 })
@@ -126,7 +122,7 @@ test('only audio and text are switchable', () => {
 
 test('a stored preference picks the matching track, in either language spelling', () => {
   const tracks = [track('AUDIO', 0, 'eng'), track('AUDIO', 1, 'deu'), track('TEXT', 2, 'deu')]
-  // `de` against `deu` is the spelling difference the rule exists for.
+
   const choice = chooseTracks(tracks, {
     subtitles: 'auto',
     subtitleLanguage: 'de',
@@ -140,8 +136,7 @@ test('a stored preference picks the matching track, in either language spelling'
 })
 
 test('an empty preference selects nothing at all', () => {
-  // Leaving the decoder's own default is not the same as choosing a track for the
-  // owner: a film must not open on the commentary because it was listed first.
+
   const choice = chooseTracks([track('AUDIO', 0, 'eng'), track('AUDIO', 1, 'eng')], {
     subtitles: 'off',
     subtitleLanguage: '',
@@ -182,8 +177,7 @@ test('the next episode is the one file exactly one number up, or nothing', () =>
 })
 
 test('a gap in the numbering is never skipped over', () => {
-  // Episode 2 is missing. Jumping to 3 is how somebody watches the second half of a
-  // story without knowing they missed the first.
+
   const library = [episode('e1', 1, 1), episode('e3', 1, 3)]
   assert.equal(nextEpisode(library, library[0]!), null)
 })

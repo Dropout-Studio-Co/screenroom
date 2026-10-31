@@ -57,7 +57,6 @@ test('left on the first column returns to the rail', () => {
   assert.equal(rail.zone, 'rail')
   assert.equal(rail.content, 5, 'the card index is kept for the way back')
 
-  // Anywhere else left is an ordinary one-card move, exactly as on the desktop.
   const secondColumn = moveNav({ zone: 'content', rail: 1, content: 6 }, 'left', BOUNDS)
   assert.equal(secondColumn.zone, 'content')
   assert.equal(secondColumn.content, 5)

@@ -1,34 +1,19 @@
-//! Recovery: interrupted work, refused migrations, and a damaged file.
-//!
-//! These are the paths a user reaches only after something has already gone wrong,
-//! which is exactly why they are tested rather than assumed. The claim under test
-//! throughout is that nothing is deleted and the reason is stated: a crash must not
-//! cost watch history, and a file this build cannot read must be reported rather
-//! than silently replaced by an empty one.
-
 use std::fs;
 
 use rusqlite::Connection;
 use screenroom_core::{Ingest, Library, LibraryQuery, parse_filename};
 use tempfile::TempDir;
 
-/// Opens the database directly, to read state the public API does not expose.
-///
-/// A second connection to the same file is how these tests observe the rows a
-/// crash left behind; reading them through the library's own API would test the
-/// API against itself.
 fn raw(directory: &TempDir) -> Connection {
     Connection::open(directory.path().join("library.db")).expect("reading connection")
 }
 
-/// Reads one integer from the database directly.
 fn raw_count(directory: &TempDir, sql: &str) -> i64 {
     raw(directory)
         .query_row(sql, [], |row| row.get(0))
         .expect(sql)
 }
 
-/// A file-backed library plus one ingested, readable media file.
 fn library_with_a_file(directory: &TempDir) -> (Library, String) {
     let media = directory.path().join("media");
     fs::create_dir_all(&media).unwrap();
@@ -58,8 +43,6 @@ fn a_playback_session_open_when_the_process_died_is_closed_on_reopen() {
     let (library, file_id) = library_with_a_file(&directory);
     let profile = library.profiles().unwrap().remove(0);
 
-    // A session that is opened, written to, and then abandoned: the process ends
-    // here without `end_session` ever running.
     let session = library
         .start_session(&profile.id, &file_id)
         .expect("session");
@@ -87,7 +70,6 @@ fn a_playback_session_open_when_the_process_died_is_closed_on_reopen() {
         "a crashed process cannot stay authoritative for a session"
     );
 
-    // The whole point: the viewing is still resumable.
     let watching = reopened
         .continue_watching(&profile.id, 5)
         .expect("continue");
@@ -108,8 +90,6 @@ fn a_job_that_was_running_when_the_process_died_is_queued_again() {
     let (_library, _file_id) = library_with_a_file(&directory);
     let database = directory.path().join("library.db");
     {
-        // Written directly because no first-party caller creates jobs yet; the
-        // guarantee under test belongs to opening the library, not to the writer.
         let connection = Connection::open(&database).unwrap();
         connection
             .execute(
@@ -183,9 +163,7 @@ fn a_future_schema_is_refused_and_named() {
 fn a_damaged_database_is_reported_rather_than_replaced() {
     let directory = TempDir::new().expect("temp dir");
     let database = directory.path().join("library.db");
-    // A page-sized run of garbage: enough that SQLite accepts the header area and
-    // then fails its own integrity check, which is the case the user hits after a
-    // filesystem error.
+
     fs::write(&database, vec![0x7f; 64 * 1024]).unwrap();
     let before = fs::read(&database).unwrap();
 
@@ -206,8 +184,7 @@ fn a_damaged_database_is_reported_rather_than_replaced() {
 fn a_database_with_no_schema_is_initialised_rather_than_refused() {
     let directory = TempDir::new().expect("temp dir");
     let database = directory.path().join("library.db");
-    // A zero-byte file is what a first run leaves behind, and what an interrupted
-    // creation leaves behind. It must become a usable library.
+
     fs::write(&database, b"").unwrap();
 
     let library = Library::open(&database).expect("a fresh library");
@@ -241,11 +218,10 @@ fn progress_survives_the_whole_recovery_sequence() {
             ended: false,
         })
         .expect("checkpoint");
-    // No `end_session`: the process is treated as having died here.
+
     drop(session);
     drop(library);
 
-    // Reopen several times, as a user relaunching after each crash would.
     for _ in 0..3 {
         let reopened = Library::open(directory.path().join("library.db")).expect("reopen");
         let watching = reopened

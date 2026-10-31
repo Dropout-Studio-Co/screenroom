@@ -1,5 +1,3 @@
-//! Store contract tests: identity, queries, availability, progress and lists.
-
 use std::fs;
 
 use screenroom_core::{
@@ -61,10 +59,6 @@ fn overlapping_roots_are_rejected() {
 
 #[test]
 fn a_folder_cannot_be_granted_twice_under_two_spellings() {
-    // On a case-folding volume `/Media/Shows` and `/media/shows` are one folder, so
-    // granting both would import one tree twice under two labels and show every file
-    // twice. This is the Windows behaviour, and it is the default on macOS too —
-    // which is why the case-sensitive branch below is the unusual one, not this.
     let dir = TempDir::new().expect("temp dir");
     let parent = dir.path().join("Media");
     let shows = parent.join("Shows");
@@ -75,16 +69,12 @@ fn a_folder_cannot_be_granted_twice_under_two_spellings() {
         .with_path_semantics(PathSemantics::CaseInsensitive);
     library.add_source(&shows, None).expect("first grant");
 
-    // The same folder, spelled differently. `canonicalize` does not fold case, so a
-    // case-sensitive comparison would accept this as a new source.
     let respelled = parent.join("shows");
     if respelled.exists() {
         let error = library.add_source(&respelled, None).unwrap_err();
         assert_eq!(error.code(), "duplicate_source");
     }
 
-    // And a genuinely nested folder is still refused: folding must not break the
-    // existing containment check.
     let nested = shows.join("Season 1");
     fs::create_dir_all(&nested).unwrap();
     assert_eq!(
@@ -96,10 +86,6 @@ fn a_folder_cannot_be_granted_twice_under_two_spellings() {
 
 #[test]
 fn a_case_sensitive_volume_treats_two_spellings_as_two_folders() {
-    // The other half of the same decision, and the half that could not previously be
-    // run at all on a Mac: the case-sensitive branch is chosen by volume, not by
-    // operating system, so the semantics are injectable and both branches are tested
-    // from one host.
     let dir = TempDir::new().expect("temp dir");
     let media = dir.path().join("Media");
     let shows = media.join("Shows");
@@ -110,22 +96,11 @@ fn a_case_sensitive_volume_treats_two_spellings_as_two_folders() {
         .with_path_semantics(PathSemantics::CaseSensitive);
     library.add_source(&shows, None).expect("first grant");
 
-    // Whether two differently-cased folders can be granted at all is decided by the
-    // volume, not by this library's semantics: on a case-folding volume `SHOWS`
-    // resolves to `Shows` and the second grant is the same folder. Asking the file
-    // system which volume this is keeps the test truthful instead of asserting
-    // behaviour that only a case-sensitive volume can show.
     let other = media.join("SHOWS");
     let volume_folds_case =
         other.exists() && std::fs::canonicalize(&other).ok() == std::fs::canonicalize(&shows).ok();
 
     if volume_folds_case {
-        // This volume folds case, so the case-sensitive branch cannot be reached
-        // through the file system here, and the test says so rather than asserting
-        // behaviour only a case-sensitive volume can show. What *is* checked is the
-        // part that does not need one: `add_source` canonicalises before keying, and
-        // on a folding volume both spellings canonicalise to the same real name, so
-        // the grant is refused by containment rather than by case.
         let resolved = std::fs::canonicalize(&other).expect("the volume resolves both spellings");
         assert_eq!(
             resolved,
@@ -145,7 +120,6 @@ fn a_case_sensitive_volume_treats_two_spellings_as_two_folders() {
         assert_eq!(library.sources().unwrap().len(), 2);
     }
 
-    // Containment is still refused, because that comparison does not depend on case.
     let nested = shows.join("Season 1");
     fs::create_dir_all(&nested).unwrap();
     assert_eq!(
@@ -156,8 +130,6 @@ fn a_case_sensitive_volume_treats_two_spellings_as_two_folders() {
 
 #[test]
 fn the_default_semantics_follow_the_volume_this_library_is_on() {
-    // A guess, but a checked one: the default must agree with what the platform's
-    // usual file system does, and the two branches must be the only two options.
     let expected = if cfg!(any(windows, target_vendor = "apple")) {
         PathSemantics::CaseInsensitive
     } else {
@@ -177,11 +149,6 @@ fn the_default_semantics_follow_the_volume_this_library_is_on() {
 
 #[test]
 fn a_windows_canonical_path_matches_the_folder_it_came_from() {
-    // `std::fs::canonicalize` answers with a *verbatim* path on Windows, so a scan
-    // there compares `\\?\D:\Media` against the stored `D:\Media`. Comparing those
-    // literally refused every healthy Windows source as a replaced symbolic link.
-    // The style is a value, so the rule is checkable from here — which is the only
-    // place it can currently be checked at all.
     let library = Library::open_in_memory()
         .unwrap()
         .with_path_style(PathStyle::Windows);
@@ -198,7 +165,6 @@ fn a_windows_canonical_path_matches_the_folder_it_came_from() {
         );
     }
 
-    // The guard it feeds still has to refuse a folder that really is elsewhere.
     assert_ne!(
         library.path_key(std::path::Path::new(r"\\?\E:\Other")),
         library.path_key(std::path::Path::new(r"D:\Media")),
@@ -281,7 +247,7 @@ fn replaced_file_keeps_its_progress_on_the_old_edition() {
 
     let after = library.item(&file, Some(&profile.id)).unwrap().unwrap();
     assert_ne!(before.edition_id, after.edition_id);
-    // The new cut must not inherit the old cut's resume point.
+
     assert_eq!(after.position_ms, 0);
 }
 
@@ -384,7 +350,7 @@ fn search_escapes_like_wildcards() {
         text: "%".into(),
         ..LibraryQuery::page(50)
     };
-    // A bare `%` is a literal character here, so only the filename containing it matches.
+
     assert_eq!(library.count(&wildcard).unwrap(), 1);
 }
 
@@ -421,14 +387,14 @@ fn progress_is_monotonic_and_seek_aware() {
     };
 
     assert!(library.checkpoint(report(1, 0, 10_000)).unwrap());
-    // A late, older event must not rewind the playhead.
+
     assert!(!library.checkpoint(report(0, 0, 1_000)).unwrap());
     let item = library.item(&file, Some(&profile.id)).unwrap().unwrap();
     assert_eq!(item.position_ms, 10_000);
 
     let seek = library.begin_seek(&session).unwrap();
     assert_eq!(seek, 1);
-    // Progress reported against the pre-seek generation is ignored.
+
     assert!(!library.checkpoint(report(2, 0, 20_000)).unwrap());
     assert!(library.checkpoint(report(3, seek, 60_000)).unwrap());
 
@@ -446,7 +412,7 @@ fn progress_is_monotonic_and_seek_aware() {
     );
     let finished = library.item(&file, Some(&profile.id)).unwrap().unwrap();
     assert!(finished.watched);
-    // The session closed at the end, so further callbacks are rejected.
+
     assert!(!library.checkpoint(report(5, seek, 50_000)).unwrap());
 }
 
@@ -581,10 +547,6 @@ fn explicit_watch_decisions_clear_resume_and_rewatch_clears_watched() {
 
 #[test]
 fn one_viewers_progress_never_appears_under_another() {
-    // Per-profile state is independent by design — there is no cross-device or
-    // cross-viewer sync requirement — so the risk is not that two profiles disagree
-    // but that they silently share a row. Every per-viewer table is checked here
-    // against a second profile that has done nothing.
     let (_dir, library, source) = fixture();
     let file = ingest(&library, &source, "Film.2020.mkv");
     let mine = library.profiles().unwrap().remove(0);
@@ -604,11 +566,10 @@ fn one_viewers_progress_never_appears_under_another() {
         })
         .unwrap();
     library.end_session(&session).unwrap();
-    // Lists are keyed by work, progress by edition: both are per viewer.
+
     library.set_favorite(&mine.id, &work, true).unwrap();
     library.set_watchlisted(&mine.id, &work, true).unwrap();
 
-    // The same file, read as each viewer.
     let as_mine = library.item(&file, Some(&mine.id)).unwrap().unwrap();
     let as_guest = library.item(&file, Some(&guest.id)).unwrap().unwrap();
     assert_eq!(as_mine.position_ms, 5_000);
@@ -619,7 +580,6 @@ fn one_viewers_progress_never_appears_under_another() {
         "a list entry leaked across profiles"
     );
 
-    // Continue Watching and the list filters are per profile too.
     assert_eq!(library.continue_watching(&mine.id, 10).unwrap().len(), 1);
     assert_eq!(library.continue_watching(&guest.id, 10).unwrap().len(), 0);
     let favorites = LibraryQuery {
@@ -629,8 +589,6 @@ fn one_viewers_progress_never_appears_under_another() {
     };
     assert_eq!(library.count(&favorites).unwrap(), 0);
 
-    // Hiding a resume on one profile must not hide it on the other, and marking a
-    // file watched for the guest must not finish it for the owner.
     library.hide_continue(&mine.id, &edition).unwrap();
     assert_eq!(library.continue_watching(&mine.id, 10).unwrap().len(), 0);
     assert_eq!(library.continue_watching(&guest.id, 10).unwrap().len(), 0);
@@ -705,7 +663,6 @@ fn removing_a_source_keeps_history_but_hides_rows() {
     assert!(library.sources().unwrap().is_empty());
     assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 0);
 
-    // Re-adding the same root resurrects the same source identity and progress.
     let again = library.add_source(_dir.path(), None).unwrap();
     assert_eq!(again.id, source.id);
     assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 1);
@@ -739,7 +696,7 @@ fn next_episode_requires_a_consecutive_file() {
             expected_root: Some(&source.root_path),
         })
         .unwrap();
-    // E02 has no E03, so autoplay must stop instead of skipping the gap.
+
     assert!(library.next_episode(&two, None).unwrap().is_none());
     assert!(library.next_episode(&gap, None).unwrap().is_none());
 }
@@ -790,7 +747,6 @@ fn a_future_schema_is_refused_without_resetting_data() {
     let error = Library::open(&path).unwrap_err();
     assert_eq!(error.code(), "future_database");
 
-    // The file is still a valid library for the version that wrote it.
     let connection = rusqlite::Connection::open(&path).unwrap();
     let tables: i64 = connection
         .query_row(

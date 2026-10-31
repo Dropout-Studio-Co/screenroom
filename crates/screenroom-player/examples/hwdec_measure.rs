@@ -1,8 +1,3 @@
-//! Measures one real media file with one copy-back policy.
-//!
-//! Example output is written only to Screenroom's local development evidence
-//! directory. The media path is opened by libmpv and never modified.
-
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -236,14 +231,12 @@ fn mean_max_u64(values: &[u64]) -> (f64, u64) {
     (mean, values.iter().copied().max().unwrap_or(0))
 }
 
-/// Where frames and logs go: `SCREENROOM_EVIDENCE_DIR`, or a folder in the temp dir.
 fn evidence_dir() -> std::path::PathBuf {
     std::env::var_os("SCREENROOM_EVIDENCE_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir().join("screenroom-hwdec"))
 }
 
-/// Homebrew's copy of a tool when present, so a launch without a shell `PATH` finds it.
 fn homebrew_or_path(name: &str) -> std::path::PathBuf {
     let homebrew = Path::new("/opt/homebrew/bin").join(name);
     if homebrew.is_file() {

@@ -67,8 +67,7 @@ test('Movies keeps files the name rule could not read, and TV Shows keeps episod
 })
 
 test('Home shows the whole library when nothing is in progress', () => {
-  // The defect this replaces: the scan catalogued 1,200 files and Home drew no cards,
-  // because Home only ever showed resume points and nothing had been played.
+
   const library = Array.from({ length: 1200 }, (_value, index) =>
     item({ id: `i${index}`, workId: `w${index}`, title: `Film ${String(index)}` }),
   )
@@ -132,8 +131,7 @@ test('search matches the title and the filename', () => {
 })
 
 test('an empty screen names the situation it is actually in', () => {
-  // A first run, an unreadable folder, and a search with no hits are three different
-  // situations with three different remedies.
+
   const firstRun = emptyState({
     sourceCount: 0,
     catalogCount: 0,

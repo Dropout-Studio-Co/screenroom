@@ -1,25 +1,9 @@
-/**
- * The playback runtime: one decoder, one session, one checkpoint clock.
- *
- * This lives outside the screen on purpose. The screen's job is to draw and to turn key
- * presses into calls; the job of remembering which session is live, how many
- * checkpoints have gone out and when the last one was written is *not* a drawing
- * concern, and putting it in component state would make every position report a
- * reactive write — on a TV, that is a frame budget spent on a number nobody is looking
- * at until the overlay is up.
- *
- * Everything mutable here is per-playback and cleared by `end()`, so the app can never
- * hold a decoder it has lost track of.
- */
-
 import type { PlaybackSnapshot } from '../core/contract.ts'
 import { library } from './runtime.ts'
 import { startPlayback, type PlaybackEvents, type PlaybackSession } from '../platform/playback.ts'
 
-/** How often a position is persisted while playing, in milliseconds. */
 export const CHECKPOINT_MS = 5_000
 
-/** The three-part identity the store's guard accepts progress from. */
 const GENERATION = 1
 
 let session: PlaybackSession | null = null
@@ -31,7 +15,6 @@ let lastCheckpointMs = 0
 let positionMs = 0
 let durationMs = 0
 
-/** What the screen needs in order to draw. */
 export interface PlaybackView {
   readonly positionMs: number
   readonly durationMs: number
@@ -39,13 +22,11 @@ export interface PlaybackView {
   readonly running: boolean
 }
 
-/** What a session may be given besides the file itself. */
 export interface BeginOptions {
-  /** An absolute location for a subtitle file beside the video, or `null`. */
+
   readonly subtitleFile?: string | null
 }
 
-/** Opens a file. Returns false when a playback was already in progress and was ended. */
 export function begin(
   item: { readonly id: string; readonly workId: string },
   uri: string,
@@ -64,8 +45,7 @@ export function begin(
   positionMs = startMs
   durationMs = 0
   lastCheckpointMs = startMs
-  // Registering the session is what makes its progress valid: a snapshot carrying any
-  // other session id has nowhere to land.
+
   library().beginSession(sessionId, item.id)
   session = startPlayback(uri, startMs, {
     onReady: events.onReady,
@@ -80,21 +60,17 @@ export function begin(
     onEnded: events.onEnded,
     onError: events.onError,
     onBuffering: events.onBuffering,
-    // Two optional callbacks, forwarded only when the screen asked for them: the port's
-    // types are exact, so passing an absent handler explicitly would be a type error
-    // and a lie about which events this session reports.
+
     ...(events.onSubtitleFile === undefined ? {} : { onSubtitleFile: events.onSubtitleFile }),
     ...(events.onSubtitleText === undefined ? {} : { onSubtitleText: events.onSubtitleText }),
   }, options)
   return !restarted
 }
 
-/** True when a decoder is open. */
 export function running(): boolean {
   return session !== null
 }
 
-/** What the screen should draw. */
 export function view(): PlaybackView {
   return {
     positionMs,
@@ -104,7 +80,6 @@ export function view(): PlaybackView {
   }
 }
 
-/** Pauses, if playing, and checkpoints immediately. */
 export function pause(): void {
   if (session === null) {
     return
@@ -115,47 +90,38 @@ export function pause(): void {
   }
 }
 
-/** Resumes, if paused. */
 export function resume(): void {
   session?.play()
 }
 
-/** Seeks by an absolute amount. */
 export function seekTo(milliseconds: number): void {
   session?.seekTo(milliseconds)
 }
 
-/** Seeks relative to the current position, by the platform's own jump. */
 export function jump(deltaMilliseconds: number): void {
   session?.jump(deltaMilliseconds)
 }
 
-/** The tracks the decoder offers, for the track menu. */
 export function tracks() {
   return session?.tracks() ?? []
 }
 
-/** Switches an audio or text track. False means the decoder refused. */
 export function selectTrack(type: string, index: number): boolean {
   return session?.selectTrack(type, index) ?? false
 }
 
-/** Hides or shows subtitles without changing the selected track. */
 export function setSubtitlesSilent(silent: boolean): boolean {
   return session?.setSubtitlesSilent(silent) ?? false
 }
 
-/** True when the decoder is rendering text silently. */
 export function subtitlesSilent(): boolean {
   return session?.subtitlesSilent() ?? false
 }
 
-/** The duration the decoder reported, or 0 before it is ready. */
 export function decoderDurationMs(): number {
   return session?.durationMs() ?? 0
 }
 
-/** Writes a checkpoint when enough time has passed since the last one. */
 export function checkpointIfDue(): void {
   if (Math.abs(positionMs - lastCheckpointMs) < CHECKPOINT_MS) {
     return
@@ -163,14 +129,6 @@ export function checkpointIfDue(): void {
   checkpoint(false)
 }
 
-/**
- * Persists the current position.
- *
- * The snapshot carries the session the app handed out, the load generation and a
- * strictly increasing sequence, which is exactly what `core/progress.ts` needs in order
- * to refuse a late callback from a session that has already ended or a load that has
- * already been replaced.
- */
 export function checkpoint(ended: boolean): void {
   if (sessionId === '' || itemId === '') {
     return
@@ -189,13 +147,6 @@ export function checkpoint(ended: boolean): void {
   lastCheckpointMs = positionMs
 }
 
-/**
- * Saves the final position and closes the decoder.
- *
- * Order matters: the session is deregistered *before* the decoder is torn down, so a
- * callback that fires during teardown is refused rather than written on top of the
- * final position.
- */
 export function end(): void {
   if (session === null) {
     return

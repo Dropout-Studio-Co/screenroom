@@ -1,44 +1,13 @@
 #!/usr/bin/env bash
-# Checks that dismissing the window stores the viewing and closes its session —
-# for both the close box and ⌘Q.
-#
-#   scripts/verify-quit.sh                  # both dismissals
-#   scripts/verify-quit.sh cmd-q            # one of them
-#   SCREENROOM_MEDIA=/path/to/media scripts/verify-quit.sh
-#
-# Why this is a script and not a sentence in a document: ⌘Q on macOS is a menu bar
-# command, not an event the application receives, so "it saves the position" is a
-# claim about how the platform's menu was wired, and the only way to keep believing
-# it is to dismiss a real window with a real key press and read what the library
-# holds afterwards.
-#
-# A run is only meaningful if playback is actually happening. That is confirmed
-# through the database rather than assumed from the keystrokes, and a keystroke
-# that failed to land is retried — driving a window that sits on another Space is
-# unreliable, and a green result produced by nothing playing would be a lie.
-#
-# **This takes over the desktop while it runs**, because it dismisses a real
-# visible window with a real key press, so it needs `SCREENROOM_ALLOW_FOREGROUND=1`.
-# When you only want to know that the menu bar's Quit is wired correctly, use
-# `scripts/check-quit-routing.sh` instead: it launches with a hidden window and
-# never touches focus, Spaces or the keyboard.
-#
-# Requires Accessibility and Screen Recording permission for the invoking terminal,
-# the same as the two helpers this uses.
-#
-# This is an application test on this Mac. It is not a device test on any other
-# platform, and it says nothing about Windows or a TV.
+
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-# shellcheck source=scripts/foreground-guard.sh
 source "$root/scripts/foreground-guard.sh"
 screenroom_require_foreground "dismissing a visible Screenroom window"
 
-# The two helpers this uses are gated the same way, and they have to be allowed
-# through for the run to mean anything.
 export SCREENROOM_ALLOW_FOREGROUND=1
 
 process="screenroom-desktop"
@@ -79,9 +48,6 @@ rm -rf "$work"
 mkdir -p "$work"
 cargo run -q -p screenroom-core --example prepare_library -- "$database" "$media" >/dev/null || exit 1
 
-# The window server, and the accessibility API with it, hides a window that lives
-# on another Space. Raising it through the capture helper is what brings it back,
-# so the helper (which raises and then captures) is retried until it finds a window.
 await_window() {
   local attempt
   for attempt in $(seq 1 10); do
@@ -93,8 +59,6 @@ await_window() {
   return 1
 }
 
-# Drives the library to a playing file, and only returns once the database agrees
-# that a session is open.
 start_playing() {
   local attempt
   for attempt in $(seq 1 8); do
@@ -144,7 +108,6 @@ APPLESCRIPT
   esac
 }
 
-# One dismissal, from a clean library, against a confirmed live viewing.
 check() {
   local how="$1" status=0
   rm -f "$database"

@@ -20,7 +20,6 @@ import {
   NEVER_SCANNED,
 } from '../src/core/scan.ts'
 
-/** A deterministic id generator, so a plan can be compared between calls. */
 function counter(): (prefix: string) => string {
   let n = 0
   return (prefix: string) => {
@@ -29,7 +28,6 @@ function counter(): (prefix: string) => string {
   }
 }
 
-/** One stored item, with the fields a test does not care about filled in. */
 function item(overrides: Partial<LibraryItem> & { relativePath: string }): LibraryItem {
   return {
     id: 'item-1',
@@ -56,16 +54,14 @@ test('an entry is classified by what it is, not by what it looks like', () => {
   assert.equal(classifyEntry('.Trashes', true), 'hidden_directory')
   assert.equal(classifyEntry('Film.mkv', false), 'media')
   assert.equal(classifyEntry('Film.MKV', false), 'media')
-  // A hidden file with a media extension is catalogued, exactly as the desktop does:
-  // the two clients are supposed to show the same library.
+
   assert.equal(classifyEntry('.hidden.mkv', false), 'media')
   assert.equal(classifyEntry('.DS_Store', false), 'ignored')
   assert.equal(classifyEntry('cover.jpg', false), 'ignored')
 })
 
 test('a half-copied file is reported, not silently skipped', () => {
-  // `Film.mkv.part` has the extension `part`, so an extension test alone would ignore
-  // it — and the owner would never learn that a download is stuck.
+
   assert.equal(classifyEntry('Film.mkv.part', false), 'downloading')
   assert.equal(classifyEntry('Film.mkv.crdownload', false), 'downloading')
   assert.equal(classifyEntry('Film.MKV.ARIA2', false), 'downloading')
@@ -81,8 +77,7 @@ test('the walk is bounded in both directions', () => {
 })
 
 test('a listed entry is joined on whether it is a name or a path', () => {
-  // The Tizen WebIDL says `names`, the guide beside it says paths. Both are accepted,
-  // and neither can produce a doubled directory component.
+
   assert.equal(joinEntry('removable1/Movies', 'Film.mkv'), 'removable1/Movies/Film.mkv')
   assert.equal(joinEntry('removable1/Movies', 'removable1/Movies/Film.mkv'), 'removable1/Movies/Film.mkv')
   assert.equal(joinEntry('removable1', 'Movies'), 'removable1/Movies')
@@ -121,8 +116,7 @@ test('a rescan keeps every id it gave before, so progress stays attached', () =>
 })
 
 test('a new episode joins the work its siblings are already in', () => {
-  // One generator across both scans, the way the app runs it: a restarted generator
-  // would be free to hand out an id that is already in the library.
+
   const ids = counter()
   const first = planCatalog({
     sourceId: 'source-a',
@@ -181,8 +175,7 @@ test('a complete walk withdraws availability and keeps the position', () => {
 })
 
 test('an incomplete walk withdraws nothing at all', () => {
-  // This is the rule that keeps a bounded or interrupted scan from making the library
-  // look empty. Rows keep the availability they had.
+
   const before = [item({ id: 'item-9', relativePath: 'Gone.mkv', positionMs: 300_000 })]
   const plan = planCatalog({
     sourceId: 'source-a',
@@ -257,8 +250,7 @@ test('planning one source cannot touch another source', () => {
     newId: counter(),
   })
   assert.equal(plan.items.some((entry) => entry.sourceId === 'source-b'), false)
-  // The replaced library holds the new scan, the other drive's row untouched, and the
-  // scanned drive's own row that the walk did not see — unavailable, never dropped.
+
   const stored = item({ id: 'item-a', relativePath: 'Old.mkv', sourceId: 'source-a' })
   const all = replaceSourceItems([stored, other], 'source-a', plan.items)
   assert.equal(all.length, 3)
@@ -275,7 +267,7 @@ test('a disconnected drive keeps its rows and becomes unavailable', () => {
   const updated = withSourceAvailability(items, 'source-a', false)
   assert.equal(updated.find((entry) => entry.id === 'item-a')?.available, false)
   assert.equal(updated.find((entry) => entry.id === 'item-b')?.available, true)
-  // And back again, without anything having been lost in between.
+
   const restored = withSourceAvailability(updated, 'source-a', true)
   assert.equal(restored.find((entry) => entry.id === 'item-a')?.available, true)
 })
@@ -296,12 +288,12 @@ test('sources are reconciled with what the TV reports, and never removed', () =>
   )
   assert.equal(reconciled.length, 3)
   assert.equal(reconciled.find((source) => source.label === 'removable1')?.state, 'available')
-  // Gone from the platform's list: disconnected, with the row still there.
+
   assert.equal(reconciled.find((source) => source.label === 'removable2')?.state, 'missing')
   assert.equal(reconciled.find((source) => source.label === 'removable3')?.state, 'available')
-  // A drive the platform lists as present but not mounted is not a source yet.
+
   assert.equal(reconciled.some((source) => source.label === 'removable4'), false)
-  // Nothing is ever removed by reconciliation.
+
   assert.equal(reconciled.some((source) => source.label === 'removable2'), true)
 })
 
@@ -371,8 +363,6 @@ test('a stored scan report is read back, and junk is refused rather than believe
   }
   assert.deepEqual(decodeScanReport(report), report)
 
-  // A report is evidence. One that cannot be read says "nothing has been scanned"
-  // rather than showing a file count nobody can account for.
   assert.deepEqual(decodeScanReport(null), NEVER_SCANNED)
   assert.deepEqual(decodeScanReport('lots'), NEVER_SCANNED)
   assert.deepEqual(decodeScanReport([]), NEVER_SCANNED)

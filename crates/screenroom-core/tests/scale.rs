@@ -1,34 +1,16 @@
-//! Browsing and search at a library size a real collection reaches.
-//!
-//! The bounds here are deliberately loose — an order of magnitude above the
-//! measured debug figures — because this is not a micro-benchmark. What it
-//! catches is the class of mistake that makes a large library unusable: a query
-//! that loads every row and pages in memory, an unbounded `OFFSET` that walks the
-//! table, a search that scans per row, or a count that runs once per result. Those
-//! failures miss a loose bound by seconds, not by percent.
-//!
-//! `cargo run -p screenroom-core --example library_bench` prints the actual
-//! numbers, including a release build's, which is what belongs in the ledger.
-
 use std::time::{Duration, Instant};
 
 use screenroom_core::{Ingest, Library, LibraryQuery, Sort, parse_filename};
 use tempfile::TempDir;
 
-/// Entries in the benchmark library: a large personal collection.
 const ITEMS: usize = 10_000;
 
-/// Page size used by the desktop grid.
 const PAGE: i64 = 24;
 
-/// Ceiling for one paged query or count, generous enough for a debug build on a
-/// loaded machine and still far below a full scan of ten thousand rows.
 const QUERY_BUDGET: Duration = Duration::from_millis(1_500);
 
-/// Ceiling for the whole ingest of ten thousand entries.
 const INGEST_BUDGET: Duration = Duration::from_secs(60);
 
-/// Builds a library of `ITEMS` entries with distinct titles and years.
 fn large_library(directory: &TempDir) -> Library {
     let library = Library::open_in_memory().expect("library");
     let source = library.add_source(directory.path(), None).expect("source");
@@ -51,7 +33,6 @@ fn large_library(directory: &TempDir) -> Library {
     library
 }
 
-/// Runs one query and fails with the measurement if it exceeded the budget.
 fn within_budget(label: &str, budget: Duration, work: impl FnOnce() -> i64) -> Duration {
     let start = Instant::now();
     let rows = work();
@@ -75,7 +56,6 @@ fn a_ten_thousand_item_library_pages_searches_and_counts_within_budget() {
     );
     println!("ingest {ITEMS} entries: {ingest:?}");
 
-    // Every page is bounded: the query asks for one page and gets one page.
     let first_page = LibraryQuery {
         sort: Sort::Title,
         ..LibraryQuery::page(PAGE)
@@ -89,8 +69,6 @@ fn a_ten_thousand_item_library_pages_searches_and_counts_within_budget() {
     });
     println!("first page: {first:?}");
 
-    // The last page is the worst case for `OFFSET`: the database has to walk
-    // past every earlier row to reach it.
     let last_page = LibraryQuery {
         offset: ITEMS as i64 - PAGE,
         sort: Sort::Title,
@@ -114,7 +92,6 @@ fn a_ten_thousand_item_library_pages_searches_and_counts_within_budget() {
         println!("{sort:?}: {elapsed:?}");
     }
 
-    // A literal search must find its match and stay bounded.
     let needle = format!("{:05}", ITEMS - 1);
     let search = LibraryQuery {
         text: needle.clone(),
@@ -131,8 +108,6 @@ fn a_ten_thousand_item_library_pages_searches_and_counts_within_budget() {
     });
     println!("literal search: {search_elapsed:?}");
 
-    // A search that matches nothing must still be bounded and must report zero
-    // rather than falling back to an unfiltered page.
     let miss = LibraryQuery {
         text: "no-such-title-in-this-library".to_string(),
         ..LibraryQuery::page(PAGE)
@@ -158,8 +133,6 @@ fn a_page_never_returns_more_than_it_was_asked_for() {
     let directory = TempDir::new().expect("temp dir");
     let library = large_library(&directory);
 
-    // A page larger than the contract allows is refused outright rather than
-    // silently truncated, so a client cannot think it received everything.
     let huge = LibraryQuery {
         limit: 100_000,
         ..LibraryQuery::page(1)
@@ -167,9 +140,6 @@ fn a_page_never_returns_more_than_it_was_asked_for() {
     let error = library.items(&huge).unwrap_err();
     assert_eq!(error.code(), "invalid_page");
 
-    // Paging walks the whole library without repeating or skipping an entry. The
-    // walk uses the largest page the contract allows so the test spends its time
-    // on the invariant rather than on four hundred round trips.
     const WALK_PAGE: i64 = 500;
     let mut seen = std::collections::HashSet::new();
     let mut offset = 0;

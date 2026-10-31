@@ -1,19 +1,3 @@
-//! Measures one library at a chosen size, and prints what it measured.
-//!
-//! ```text
-//! cargo run --release -p screenroom-core --example library_bench
-//! cargo run --release -p screenroom-core --example library_bench -- 50000
-//! ```
-//!
-//! This exists so the numbers in `docs/IMPLEMENTATION_STATUS.md` are reproducible
-//! from a command rather than remembered. It writes nothing outside a temporary
-//! directory, needs no media, and touches the network never.
-//!
-//! It reports the two things that decide whether a large library feels usable: how
-//! long the ingest takes, and how long a page, a search and a count take once it is
-//! built. A page and its count are timed separately because the Browse screen runs
-//! both on every keystroke in the search field.
-
 use std::time::{Duration, Instant};
 
 use screenroom_core::{Ingest, Library, LibraryQuery, Sort, parse_filename};
@@ -75,7 +59,7 @@ fn main() {
             ..LibraryQuery::page(24)
         },
     );
-    // The worst case for `OFFSET`: the database walks past every earlier row.
+
     measure(
         "last page",
         &LibraryQuery {
@@ -108,9 +92,7 @@ fn main() {
         },
     );
     measure("count everything", &LibraryQuery::page(24));
-    // What the desktop's Browse screen runs: one card per work, for a viewer,
-    // with the watched filter applied. Grouping is a window function, so it is
-    // timed on its own rather than assumed to cost what a flat page does.
+
     let viewer = library.profiles().expect("profiles").remove(0).id;
     for (label, offset) in [
         ("grouped first page", 0),
@@ -129,9 +111,6 @@ fn main() {
         );
     }
 
-    // The Browse and Home screens ask the catalogue for its facets before they
-    // draw a single card, on the UI thread, so these are timed separately from
-    // paging: a slow facet is a window that does not open.
     let profile = library.profiles().expect("profiles").remove(0);
     let started = Instant::now();
     let genres = library.known_genres().expect("genres");

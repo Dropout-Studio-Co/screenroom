@@ -1,20 +1,3 @@
-/**
- * Media Sources: the drives, and the scan.
- *
- * This is the screen the owner needs when the library looks empty, so it is reachable
- * from the rail with the D-pad and says four things in plain words:
- *
- * * which storages the television reports, and which of them this app reads;
- * * how many files the library holds for each one, and when it was last scanned;
- * * what the last scan did, including the reason a drive would not list;
- * * whether the last write to storage was accepted — because a scan that found files
- *   and could not store them is a receipt the app must not hide.
- *
- * **Scan for media** is an ordinary row. Enter starts it, Enter again stops it at the
- * next folder boundary, and the count of folders and files updates while it runs so a
- * slow drive looks slow rather than broken.
- */
-
 import Blits from '@lightningjs/blits'
 
 import { clampIndex } from '../core/focus.ts'
@@ -39,13 +22,10 @@ import {
 
 const ROUTE = '/sources'
 
-/** Where the list starts, just right of the rail. */
 const CONTENT_LEFT = RAIL_WIDTH + Math.round(TOKENS.spacing.shellPad * 0.6)
 
-/** What Enter does on a row. */
 type Action = 'scan' | 'refresh'
 
-/** One drawn row. */
 interface Row {
   readonly key: string
   readonly label: string
@@ -58,7 +38,6 @@ interface Row {
   readonly visible: boolean
 }
 
-/** One row before it is placed. */
 interface Entry {
   readonly key: string
   readonly label: string
@@ -66,7 +45,6 @@ interface Entry {
   readonly action?: Action
 }
 
-/** Whole milliseconds as a short "how long ago", never as an invented date. */
 function sinceMs(timestampMs: number, nowMs: number): string {
   if (timestampMs <= 0) {
     return 'never'
@@ -166,7 +144,7 @@ export default Blits.Component('Sources', {
       zone: 'content' as NavZone,
       railIndex: 0,
       busy: false,
-      /** The progress timer, so leaving the screen cannot leave a timer running. */
+
       pollTimer: null as ReturnType<typeof setTimeout> | null,
       subtitle: '',
       footer: '',
@@ -206,7 +184,7 @@ export default Blits.Component('Sources', {
       this.stopPolling()
     },
   },
-  /** Arrows and OK only. */
+
   input: {
     up() {
       this.press('up')
@@ -237,7 +215,7 @@ export default Blits.Component('Sources', {
       this.footY = layout.footY
       this.visibleRows = layout.visibleRows
     },
-    /** The entries this screen reports, in the order they matter. */
+
     entries(): Entry[] {
       const store = library().state()
       const nowMs = Date.now()
@@ -308,7 +286,7 @@ export default Blits.Component('Sources', {
       })
       return entries
     },
-    /** Reads the store again and rebuilds the list. */
+
     reload(): void {
       const entries = this.entries()
       const layout = this.layout
@@ -318,7 +296,7 @@ export default Blits.Component('Sources', {
         Math.max(0, this.scroll),
       )
       this.focusIndex = Math.max(0, clampIndex(this.focusIndex, entries.length))
-      // Keep the cursor inside the window after the list changes length.
+
       if (this.zone === 'content') {
         if (this.focusIndex < this.scroll) {
           this.scroll = this.focusIndex
@@ -357,12 +335,11 @@ export default Blits.Component('Sources', {
         { railCount: RAIL_ENTRIES.length, contentCount: entries.length, columns: 1 },
       )
     },
-    /** One press, across the two zones. */
+
     press(direction: 'left' | 'right' | 'up' | 'down'): void {
       const entries = this.entries()
       const current = { zone: this.zone, rail: this.railIndex, content: this.focusIndex }
-      // The list is one column, so `left` from it must go to the rail rather than doing
-      // nothing: that is the only way back to the menu from a full-width row.
+
       const next = moveNav(current, direction, {
         railCount: RAIL_ENTRIES.length,
         contentCount: entries.length,
@@ -387,7 +364,7 @@ export default Blits.Component('Sources', {
       }
       this.reload()
     },
-    /** OK on the rail navigates; OK on a row runs its action. */
+
     async enter(): Promise<void> {
       if (this.zone === 'rail') {
         const entry = RAIL_ENTRIES[this.railIndex]
@@ -398,8 +375,7 @@ export default Blits.Component('Sources', {
           this.$router.to(entry.route)
           return
         }
-        // OK on Media Sources while it is open hands the cursor to the list rather
-        // than doing nothing.
+
         this.zone = 'content'
         this.focusIndex = Math.max(0, this.focusIndex)
         this.reload()
@@ -423,12 +399,12 @@ export default Blits.Component('Sources', {
         return
       }
     },
-    /** Asks the television what drives it has, without walking them. */
+
     async refresh(): Promise<void> {
       await refreshMediaRoots()
       this.reload()
     },
-    /** Walks the drives, showing the running totals while it does. */
+
     async runScan(): Promise<void> {
       this.busy = true
       this.reload()
@@ -439,7 +415,7 @@ export default Blits.Component('Sources', {
       this.reload()
       this.footer = describeScan(report)
     },
-    /** Refreshes the folder and file counts while a walk is running. */
+
     startPolling(): void {
       this.stopPolling()
       const tick = (): void => {

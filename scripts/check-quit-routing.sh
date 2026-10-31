@@ -1,17 +1,5 @@
 #!/usr/bin/env bash
-# Checks that the menu bar's Quit is re-pointed at the window's close action.
-#
-#   scripts/check-quit-routing.sh
-#
-# This is the check to reach for. It launches the real application — because the
-# menu bar this changes only exists inside one — with a **hidden** window, reads the
-# outcome, and exits. Nothing is shown, nothing is activated, no key is sent and no
-# Space moves, so it is safe to run while using the machine.
-#
-# It answers one question: was the Quit command re-pointed. It cannot answer
-# whether a *dismissal* stores the viewing, because that needs a real window and a
-# real dismissal; `scripts/verify-quit.sh` does that, and says out loud that it
-# takes over the desktop.
+
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -33,16 +21,10 @@ binary="target/debug/screenroom-desktop"
 echo "==> building"
 cargo build -q -p screenroom-desktop || exit 1
 
-# The application opens a library on start. An in-memory one would do, but the
-# launch takes the same path the installed app does when the file exists, and a
-# scratch file keeps this from touching the library a person is actually using.
 SCREENROOM_LIBRARY="$library" SCREENROOM_QUIT_CHECK="$report" \
   "$binary" >"$work/app.log" 2>&1 &
 app=$!
 
-# The window is hidden, so the only thing that can hang this is the application
-# failing to start at all. Waiting on the file rather than sleeping means a fast
-# answer is used immediately.
 for _ in $(seq 1 40); do
   [ -s "$report" ] && break
   sleep 0.25

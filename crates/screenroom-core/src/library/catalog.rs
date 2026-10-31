@@ -1,9 +1,3 @@
-//! Catalog projection and scan ingestion.
-//!
-//! A scan is incremental: an unchanged file keeps its identity, a replaced file
-//! at the same path gets a *new edition* so the old cut keeps its own progress,
-//! and an ambiguous filename becomes an unlinked work instead of a wrong match.
-
 use std::path::{Component, Path, PathBuf};
 
 use rusqlite::types::Value;
@@ -14,7 +8,6 @@ use crate::domain::{LibraryItem, MediaKind};
 use crate::error::{CoreError, Result};
 use crate::filename::{ParsedName, parse_filename};
 
-/// Every column a [`LibraryItem`] needs, with the viewer's progress and lists.
 const SELECT: &str = "SELECT f.id, f.source_id, f.edition_id, f.relative_path, f.filename,
     f.available, f.added_ms, w.id work_id, w.title, w.kind, w.year, w.overview, w.genres,
     w.manual_match, e.duration_ms, f.season_number, f.episode_number,
@@ -33,32 +26,29 @@ const SELECT: &str = "SELECT f.id, f.source_id, f.edition_id, f.relative_path, f
     LEFT JOIN progress pr ON pr.edition_id = e.id AND pr.profile_id = ?
     LEFT JOIN watchlist wl ON wl.work_id = w.id AND wl.profile_id = ?";
 
-/// Facts the scanner established about one file.
 #[derive(Debug, Clone)]
 pub struct Ingest<'a> {
-    /// Owning source.
     pub source_id: &'a str,
-    /// Path relative to the source root.
+
     pub relative_path: &'a str,
-    /// Bounded content fingerprint.
+
     pub fingerprint: &'a str,
-    /// Size in bytes.
+
     pub size: i64,
-    /// Modification time in Unix milliseconds.
+
     pub modified_ms: i64,
-    /// Identifier of the scan run that found this file.
+
     pub scan_id: &'a str,
-    /// Filename interpretation; re-derived from the name when absent.
+
     pub parsed: Option<&'a ParsedName>,
-    /// Root the scan started from, used to reject a source that moved mid-scan.
+
     pub expected_root: Option<&'a str>,
 }
 
 impl Library {
-    /// Returns one page of the library.
     pub fn items(&self, query: &LibraryQuery) -> Result<Vec<LibraryItem>> {
         let (where_sql, filters) = self.where_clause(query)?;
-        // The projection's two profile placeholders are bound before the filters.
+
         let mut values = profile_params(query);
         values.extend(filters);
         let selection = if query.group_by_work {
@@ -86,7 +76,6 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// Counts rows matching a query, for pager totals.
     pub fn count(&self, query: &LibraryQuery) -> Result<i64> {
         let (where_sql, filters) = self.where_clause(query)?;
         let aggregate = if query.group_by_work {
@@ -102,7 +91,6 @@ impl Library {
         Ok(statement.query_row(params_from_iter(values), |row| row.get(0))?)
     }
 
-    /// Reads one entry by media file identifier.
     pub fn item(&self, file_id: &str, profile_id: Option<&str>) -> Result<Option<LibraryItem>> {
         let connection = self.connection();
         let mut statement = connection.prepare(&format!("{SELECT} WHERE f.id = ?"))?;
@@ -113,7 +101,6 @@ impl Library {
         }
     }
 
-    /// Home-screen resume rows for one profile, excluding hidden and finished work.
     pub fn continue_watching(&self, profile_id: &str, limit: i64) -> Result<Vec<LibraryItem>> {
         let limit = limit.clamp(1, 500);
         let connection = self.connection();
@@ -125,7 +112,6 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// Season numbers that actually contain files for a work.
     pub fn seasons_for_work(&self, work_id: &str) -> Result<Vec<i64>> {
         let connection = self.connection();
         let mut statement = connection.prepare(
@@ -138,7 +124,6 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// Distinct genre labels in the library, capped at 1,000 for a bounded picker.
     pub fn known_genres(&self) -> Result<Vec<String>> {
         let connection = self.connection();
         let mut statement = connection.prepare(
@@ -174,10 +159,6 @@ impl Library {
         Ok(sorted_labels(labels))
     }
 
-    /// Next verified episode after `file_id`, or `None` rather than a guess.
-    ///
-    /// A gap stops autoplay. A season rollover needs a verified episode count
-    /// that matches the finished episode, so a missing episode is never skipped.
     pub fn next_episode(
         &self,
         file_id: &str,
@@ -193,7 +174,6 @@ impl Library {
             return Ok(None);
         };
 
-        // Same season, next episode, and exactly one candidate.
         let following = {
             let connection = self.connection();
             let mut statement = connection.prepare(&format!(
@@ -222,8 +202,6 @@ impl Library {
             return Ok(None);
         }
 
-        // A season rollover needs verified ordering that matches the episode we
-        // just finished, so a missing episode is never silently skipped.
         let (closed_season, has_next_season) = {
             let connection = self.connection();
             let closed: bool = connection.query_row(
@@ -265,7 +243,6 @@ impl Library {
         })
     }
 
-    /// Records one scanned file and returns its media file identifier.
     pub fn ingest_file(&self, ingest: Ingest<'_>) -> Result<String> {
         safe_relative(ingest.relative_path)?;
         let filename = Path::new(ingest.relative_path)
@@ -345,7 +322,7 @@ impl Library {
                 tx.commit()?;
                 return Ok(id);
             }
-            // The bytes at this path changed: a different cut keeps its own progress.
+
             let work_id: String = tx.query_row(
                 "SELECT work_id FROM editions WHERE id = ?1",
                 [&edition_id],
@@ -373,8 +350,6 @@ impl Library {
             return Ok(id);
         }
 
-        // A renamed file with identical sampled bytes keeps its identity, but only
-        // for small files and only when the previous locator is really gone.
         let mut candidates = tx.prepare(
             "SELECT id, modified_ms, relative_path FROM files
              WHERE source_id = ?1 AND fingerprint = ?2 AND size = ?3 LIMIT 2",
@@ -553,10 +528,6 @@ impl Library {
         Ok(file_id)
     }
 
-    /// Completes a scan, clearing availability for unseen or confirmed-missing files.
-    ///
-    /// Partial scans only stat unseen locators while the source root resolves;
-    /// bounded and cancelled scans never hide files they could not reach.
     pub fn finish_scan(
         &self,
         source_id: &str,
@@ -625,17 +596,13 @@ impl Library {
                 })
                 .map(|(id, _)| id)
                 .collect();
-            // A drive pulled during the loop makes every later file "not found".
-            // Only a root that still resolves afterwards makes those answers true.
+
             if std::fs::canonicalize(root).is_ok() {
                 let root_listed = std::fs::read_dir(root).is_ok();
                 for id in missing {
                     tx.execute("UPDATE files SET available = 0 WHERE id = ?1", [id])?;
                 }
-                // The drive is back even if one file keeps failing; leaving the
-                // source unavailable would hide it from autoplay and suggestions.
-                // A root that resolves but cannot be listed (privacy denial, a
-                // failing disk) is not back.
+
                 if root_listed {
                     tx.execute(
                         "UPDATE sources SET state = 'available' WHERE id = ?1 AND state != 'removed'",
@@ -648,7 +615,6 @@ impl Library {
         Ok(())
     }
 
-    /// Builds the shared `WHERE` fragment and its leading arguments.
     fn where_clause(&self, query: &LibraryQuery) -> Result<(String, Vec<Value>)> {
         let mut clauses = vec!["s.state != 'removed'".to_string()];
         let mut values = Vec::new();
@@ -757,7 +723,6 @@ fn metadata_enabled(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<bool> {
     Ok(value.as_deref() == Some("true"))
 }
 
-/// A work is protected when the user corrected its match by hand.
 fn work_is_protected(tx: &rusqlite::Transaction<'_>, work_id: &str) -> rusqlite::Result<bool> {
     let protected: i64 = tx.query_row(
         "SELECT manual_match FROM works WHERE id = ?1",
@@ -767,7 +732,6 @@ fn work_is_protected(tx: &rusqlite::Transaction<'_>, work_id: &str) -> rusqlite:
     Ok(protected == 1)
 }
 
-/// Rejects locators that could escape the authorized root.
 fn safe_relative(relative: &str) -> Result<()> {
     let path = Path::new(relative);
     if relative.is_empty() || relative.contains('\0') || path.is_absolute() {

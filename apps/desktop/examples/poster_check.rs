@@ -1,10 +1,3 @@
-//! Runs the application's own poster path over a library's missing posters.
-//!
-//! `cargo run --release -p screenroom-desktop --example poster_check -- LIB.DB [COUNT]`
-//!
-//! Writes posters and durations into `LIB.DB`, so give it a copy. Reads the media
-//! only; prints no titles or paths, just what each attempt produced.
-
 use std::sync::Arc;
 use std::time::Instant;
 

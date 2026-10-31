@@ -1,12 +1,3 @@
-//! Media facts read from the files themselves, before anyone presses play.
-//!
-//! A scan reads names and sizes, never containers, so every edition starts with a
-//! duration of `0`. Until something fills it in, the catalogue cannot show a
-//! runtime or a progress bar for an unwatched film, and a segment cannot be marked.
-//! A client that can probe containers (the desktop runs ffprobe) reports the
-//! duration here; the player's own report on first play still wins, because it is
-//! only written where the stored value is still unknown.
-
 use std::path::{Component, Path, PathBuf};
 
 use rusqlite::params;
@@ -15,20 +6,13 @@ use super::Library;
 use super::playback::MAX_DURATION_MS;
 use crate::error::Result;
 
-/// One file whose container has not been probed yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnprobedFile {
-    /// File to probe.
     pub file_id: String,
-    /// Absolute location under its granted root.
+
     pub path: PathBuf,
 }
 
-/// `root` joined with a stored relative path, or `None` when that path could
-/// leave the root (`..`, an absolute path, a drive prefix) or is empty.
-///
-/// A scan never stores such a path, but a restored or hand-edited library could,
-/// and these paths go straight to ffprobe and ffmpeg.
 pub(crate) fn under_root(root: &str, relative: &str) -> Option<PathBuf> {
     let relative = Path::new(relative);
     let mut parts = relative.components().peekable();
@@ -39,11 +23,6 @@ pub(crate) fn under_root(root: &str, relative: &str) -> Option<PathBuf> {
 }
 
 impl Library {
-    /// Available files whose edition has no known duration, in a stable order.
-    ///
-    /// Keyset-paged on the file id: `after` is the last id of the previous page,
-    /// so a file whose probe fails is passed over instead of returning on every
-    /// page and stalling the walk.
     pub fn unprobed_files(&self, after: Option<&str>, limit: i64) -> Result<Vec<UnprobedFile>> {
         let connection = self.connection();
         let mut statement = connection.prepare(
@@ -62,8 +41,7 @@ impl Library {
                 let file_id: String = row.get(0)?;
                 Ok(under_root(&root, &relative).map(|path| UnprobedFile { file_id, path }))
             })?;
-        // shortcut: a page made only of escaping paths reads as the end of the
-        // walk; only a tampered library can hold one, and the next launch resumes.
+
         Ok(rows
             .collect::<rusqlite::Result<Vec<_>>>()?
             .into_iter()
@@ -71,10 +49,6 @@ impl Library {
             .collect())
     }
 
-    /// Records a probed duration for the file's edition, if it is still unknown.
-    ///
-    /// Returns whether anything was written. An impossible value is refused rather
-    /// than clamped, and a duration the player already reported is never replaced.
     pub fn record_duration(&self, file_id: &str, duration_ms: i64) -> Result<bool> {
         if duration_ms <= 0 || duration_ms > MAX_DURATION_MS {
             return Ok(false);
@@ -139,13 +113,13 @@ mod tests {
         assert!(!library.record_duration(first, -5).unwrap());
         assert!(!library.record_duration(first, i64::MAX).unwrap());
         assert!(library.record_duration(first, 5_400_000).unwrap());
-        // Known now, so a second report (or a different probe) cannot overwrite it.
+
         assert!(!library.record_duration(first, 1_000).unwrap());
 
         let left = library.unprobed_files(None, 10).unwrap();
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].file_id, unprobed[1].file_id);
-        // Keyset paging passes a file over once its id is behind the cursor.
+
         assert!(
             library
                 .unprobed_files(Some(&unprobed[1].file_id), 10)

@@ -1,19 +1,5 @@
 #!/usr/bin/env bash
-# A gate for the few checks that need a visible window on this desktop.
-#
-# Why this exists: `cargo test --workspace` and the headless checks never show a
-# window. The two scripts that do — driving a window with synthetic keys, and
-# activating it to capture it — take over the Mac while they run: they activate
-# Screenroom, can switch Spaces, and send keyboard events to whatever is focused.
-# That is unusable during ordinary work on the same machine, so it is opt-in
-# rather than something a script does because it was called.
-#
-# Source this, then call `screenroom_require_foreground "<what this does>"`.
-#
-#   SCREENROOM_ALLOW_FOREGROUND=1 scripts/drive-app.sh library
-#
-# Nothing here is a security boundary. It is a courtesy to the person using the
-# machine, and the default answer is no.
+
 set -uo pipefail
 
 screenroom_require_foreground() {

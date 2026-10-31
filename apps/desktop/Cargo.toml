@@ -10,25 +10,18 @@ repository.workspace = true
 [dependencies]
 screenroom-core = { path = "../../crates/screenroom-core" }
 screenroom-player = { path = "../../crates/screenroom-player" }
-# `image` is what lets a retained poster be drawn: the bytes come from the local
-# library, so no network or extra service is involved.
+
 iced = { version = "0.14", features = ["wgpu", "image"] }
-# Must match the wgpu version iced 0.14 renders with; verify with `cargo tree -i wgpu`.
+
 wgpu = "27"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# The native folder picker (NSOpenPanel). A media root has to be chosen the way
-# the platform chooses one — typing an absolute path is a developer affordance,
-# not a first-run flow. Kept to macOS because that is the only platform this
-# build targets today; `src/picker.rs` reports the typed-path fallback elsewhere.
+
 rfd = "0.15"
-# Used only by `src/quit.rs`, to re-point the application menu's Quit item at the
-# window's close action. Already in the lock file through iced's own macOS
-# backend, so this resolves to a version that is built anyway rather than adding
-# a crate to the graph.
+
 objc2 = "0.6"
 
 [dev-dependencies]
 tempfile.workspace = true
-# Only the design-system token exporter uses JSON; the app itself never parses it.
+
 serde_json.workspace = true

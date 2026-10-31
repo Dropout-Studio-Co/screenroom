@@ -1,22 +1,3 @@
-/**
- * Browse: one destination's library, as a scrollable grid.
- *
- * The same component draws Movies and TV Shows, because the only thing that differs is
- * which rows it selects; a second screen would be a second copy of this focus code and
- * a second place for the two lists to disagree.
- *
- * Paging is gone, on purpose. A page was a whole number of rows and the remote's
- * rewind/forward keys turned it — which meant the library could only be moved through
- * with two keys most remotes do not label, and a thousand files needed a hundred
- * presses the viewer could not predict. The grid is now a window over the whole list:
- * Down is always the next row, the band slides under the cursor, and only ten cards
- * exist at a time. Rewind and forward still turn a page for anyone who knows them, but
- * nothing needs them.
- *
- * The rail sits beside the grid and is a real focus zone: Left from the first column
- * goes to it, Right comes back to the card the viewer left.
- */
-
 import Blits from '@lightningjs/blits'
 
 import { COLUMNS, emptyState, itemsFor, ROWS, type KindFilter } from '../core/browse.ts'
@@ -35,10 +16,8 @@ import Rail from '../components/Rail.ts'
 import { hex, TOKENS } from '../design/tokens.ts'
 import { items, nav, onTv, scanInProgress, sources } from '../app/runtime.ts'
 
-/** The grid starts just right of the rail. */
 const CONTENT_LEFT = RAIL_WIDTH + Math.round(TOKENS.spacing.shellPad * 0.6)
 
-/** The route this screen remembers its cursor under, per destination. */
 function routeFor(kind: KindFilter): string {
   switch (kind) {
     case 'all':
@@ -50,7 +29,6 @@ function routeFor(kind: KindFilter): string {
   }
 }
 
-/** A destination's heading, and what its empty screen should say. */
 function headingFor(kind: KindFilter): string {
   switch (kind) {
     case 'all':
@@ -62,7 +40,6 @@ function headingFor(kind: KindFilter): string {
   }
 }
 
-/** The prop, narrowed: an unknown value shows everything rather than nothing. */
 function narrowKind(value: unknown): KindFilter {
   return value === 'movies' || value === 'series' ? value : 'all'
 }
@@ -70,7 +47,7 @@ function narrowKind(value: unknown): KindFilter {
 export default Blits.Component('Browse', {
   components: { Rail },
   props: {
-    /** Which rows this destination shows. Set by the route, not by the viewer. */
+
     kind: { default: 'all' },
   },
   template: `
@@ -184,9 +161,7 @@ export default Blits.Component('Browse', {
       bodySize: Math.round(TOKENS.type.body),
       captionSize: Math.round(TOKENS.type.caption),
       subY: Math.round(TOKENS.spacing.shellPad + TOKENS.type.title * 1.4),
-      // The grid's numbers, copied out of `computed.grid` by `applyLayout` before the
-      // first paint. A template resolves `$name` against state only, so a value that
-      // lives on a computed object is `undefined` here and its node is never drawn.
+
       artHeight: 0,
       fieldX: 0,
       titleY: 0,
@@ -204,7 +179,7 @@ export default Blits.Component('Browse', {
       emptyTitle: '',
       emptyDetail: '',
       cards: [] as ReturnType<typeof buildCards>,
-      /** The absolute index of the first drawn card. */
+
       listFirst: 0,
       count: 0,
       zone: 'content' as NavZone,
@@ -213,11 +188,11 @@ export default Blits.Component('Browse', {
     }
   },
   computed: {
-    /** The destination this screen was opened for. */
+
     destination(): KindFilter {
       return narrowKind(this.kind)
     },
-    /** The route this screen belongs to, which is also its focus-memory key. */
+
     route(): string {
       return routeFor(this.destination)
     },
@@ -242,7 +217,7 @@ export default Blits.Component('Browse', {
       this.reload()
     },
   },
-  /** The remote keys. See the note in `Home.ts` for why this block has to exist. */
+
   input: {
     left() {
       this.press('left')
@@ -267,7 +242,7 @@ export default Blits.Component('Browse', {
     },
   },
   methods: {
-    /** Copies the derived geometry into state, where the template can see it. */
+
     applyLayout(): void {
       const grid = this.grid
       this.artHeight = grid.artHeight
@@ -282,11 +257,11 @@ export default Blits.Component('Browse', {
       this.emptyWidth = APP_WIDTH - CONTENT_LEFT - Math.round(TOKENS.spacing.shellPad)
       this.footY = 1080 - Math.round(TOKENS.spacing.shellPad + TOKENS.type.body * 2.4)
     },
-    /** The rows this destination shows, in display order. */
+
     visible(): ReturnType<typeof itemsFor> {
       return itemsFor(items(), this.destination)
     },
-    /** The cursor's bounds, which depend on this destination's row count. */
+
     bounds(): { railCount: number; contentCount: number; columns: number } {
       return {
         railCount: RAIL_ENTRIES.length,
@@ -294,7 +269,7 @@ export default Blits.Component('Browse', {
         columns: COLUMNS,
       }
     },
-    /** Reads the store, restores the cursor, and rebuilds the grid. */
+
     reload(): void {
       this.heading = headingFor(this.destination)
       const position = restoreNav(nav(), this.route, this.bounds(), 'content')
@@ -317,9 +292,7 @@ export default Blits.Component('Browse', {
         this.emptyTitle = situation.title
         this.emptyDetail = situation.detail
       } else if (own === 0) {
-        // The library has files, but none of this destination's kind. Saying which kind
-        // is missing, and where the others are, is the difference between an empty
-        // screen and a dead end.
+
         this.emptyTitle =
           this.destination === 'series' ? 'No TV shows yet.' : 'No films yet.'
         this.emptyDetail =
@@ -335,7 +308,7 @@ export default Blits.Component('Browse', {
         ? 'OK opens · ◄ ► ▲ ▼ move · Left on the first card opens the menu'
         : 'Browser preview — nothing here proves TV playback'
     },
-    /** Rebuilds the visible window. Only ten cards exist, whatever the library holds. */
+
     repaint(): void {
       const rows = this.visible()
       const total = rows.length
@@ -346,8 +319,7 @@ export default Blits.Component('Browse', {
       this.listFirst = window.first
       this.cards = buildCards(
         rows.slice(window.first, window.first + window.count),
-        // The rail's cursor is the only highlight while it holds the cursor; see the
-        // same note in `Home.ts`.
+
         this.zone === 'content' ? this.contentIndex : -1,
         this.grid,
         TOKENS,
@@ -366,7 +338,7 @@ export default Blits.Component('Browse', {
         this.bounds(),
       )
     },
-    /** One D-pad press, by the rules `core/nav.ts` tests. */
+
     press(direction: 'left' | 'right' | 'up' | 'down'): void {
       const current: NavPosition = {
         zone: this.zone,
@@ -386,13 +358,7 @@ export default Blits.Component('Browse', {
       this.contentIndex = next.content
       this.repaint()
     },
-    /**
-     * Turns a page with the rewind and forward keys.
-     *
-     * Nothing needs these: Down already walks the whole list. They are kept because a
-     * viewer who knows them should not lose them, and because a page of rows is a much
-     * faster way down a long drive.
-     */
+
     jump(direction: number): void {
       if (this.zone !== 'content' || this.count === 0) {
         return
@@ -405,7 +371,7 @@ export default Blits.Component('Browse', {
       this.contentIndex = next
       this.repaint()
     },
-    /** OK on the rail opens a destination; OK on a card opens the file. */
+
     enter(): void {
       if (this.zone === 'rail') {
         const entry = RAIL_ENTRIES[this.railIndex]
@@ -416,8 +382,7 @@ export default Blits.Component('Browse', {
           this.$router.to(entry.route)
           return
         }
-        // OK on the destination already open is not a dead key: it hands the cursor to
-        // the grid, which is the only thing that row could usefully do from here.
+
         if (this.count > 0) {
           this.zone = 'content'
           this.contentIndex = Math.max(0, this.contentIndex)

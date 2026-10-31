@@ -1,39 +1,15 @@
 #!/usr/bin/env bash
-# Sends keys to a running Screenroom window and captures evidence.
-#
-# **This drives a visible window and takes over the desktop while it runs.** It is
-# gated on `SCREENROOM_ALLOW_FOREGROUND=1`; see `scripts/foreground-guard.sh` and
-# `docs/TEST_PLAN.md`. Reach for the headless checks first.
-#
-# macOS delivers synthetic keys only when the target window is raised inside the
-# same AppleScript block, so every helper does raise+nudge+key in one call.
-#
-#   scripts/drive-app.sh home          # ⌘1
-#   scripts/drive-app.sh library       # ⌘2
-#   scripts/drive-app.sh settings      # ⌘3
-#   scripts/drive-app.sh enter|space|left|right|escape
-#   scripts/drive-app.sh close|quit    # ⌘W closes the window, ⌘Q terminates
-#   scripts/drive-app.sh ⌘r            # any "⌘<char>"
-#   scripts/drive-app.sh capture NAME  # raise, wait, screenshot to .artifacts/evidence/NAME
-#
-# Requires Accessibility + Screen Recording grants for the invoking terminal.
+
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# shellcheck source=scripts/foreground-guard.sh
+
 source "$root/scripts/foreground-guard.sh"
 screenroom_require_foreground "driving the Screenroom window"
 
 process="${SCREENROOM_PROCESS:-screenroom-desktop}"
 action="${1:?usage: drive-app.sh <key|capture> [name]}"
 
-# macOS occasionally reports "window 1 ... Invalid index" while the previous
-# raise is still settling, so every action is retried before it is called failed.
-# Activating the process is what actually delivers the key, and it is also what
-# brings a window back from another Space. `AXRaise` is the icing — but it throws
-# while the window is on a Space the accessibility API cannot see, and that used
-# to abort the whole block before the key was sent, so it is best-effort for the
-# same reason the capture helper treats it that way.
 raise_block() {
   local script
   script=$(cat <<APPLESCRIPT

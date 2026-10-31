@@ -29,8 +29,7 @@ test('a parent-directory segment is refused however it is spelled', () => {
 })
 
 test('a Windows drive prefix is refused even though this device is not Windows', () => {
-  // The library can have been built on the Windows desktop and carried across, and a
-  // stored string is not allowed to reach another drive just because it says so.
+
   for (const locator of ['C:/Media/Film.mkv', 'D:Film.mkv', 'c:\\Film.mkv']) {
     const verdict = checkLocator(locator)
     assert.equal(verdict.safe, false, `${locator} must be refused`)
@@ -52,24 +51,21 @@ test('a doubled separator is a spelling difference, not an escape', () => {
 
 test('joining keeps the file inside the granted root', () => {
   assert.equal(resolveLocator('/USB/Media', 'Shows/Film.mkv'), '/USB/Media/Shows/Film.mkv')
-  // A trailing separator on the root is tolerated.
+
   assert.equal(resolveLocator('/USB/Media/', 'Film.mkv'), '/USB/Media/Film.mkv')
-  // And an unsafe locator produces nothing to open, rather than an unvalidated path.
+
   assert.equal(resolveLocator('/USB/Media', '../Film.mkv'), null)
   assert.equal(resolveLocator('/USB/Media', '/etc/passwd'), null)
-  // A relative multi-segment root would resolve against the app's own storage, which is
-  // not where media lives.
+
   assert.equal(resolveLocator('USB/Media', 'Film.mkv'), null)
 })
 
 test('a drive the TV reports by label is a usable root', () => {
-  // Samsung's filesystem reference states that a storage's `label` is used as the
-  // *location*, and names `removable_…` as the location for external storages. So the
-  // TV's own spelling has to be accepted as a root, or no USB file could ever open.
+
   assert.equal(resolveLocator('removable1', 'Movies/Film.mkv'), 'removable1/Movies/Film.mkv')
   assert.equal(resolveLocator('removable_sda1/', 'Film.mkv'), 'removable_sda1/Film.mkv')
   assert.equal(resolveLocator('videos', 'Film.mkv'), 'videos/Film.mkv')
-  // The escape rules are unchanged by which root was used.
+
   assert.equal(resolveLocator('removable1', '../Film.mkv'), null)
   assert.equal(resolveLocator('removable1', 'Movies/../../Film.mkv'), null)
 })

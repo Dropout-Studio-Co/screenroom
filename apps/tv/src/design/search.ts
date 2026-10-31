@@ -1,22 +1,10 @@
-/**
- * Where the search keyboard's keys sit, and what a result row looks like.
- *
- * The keyboard is six columns wide because six keys at this type scale fill the left
- * third of a 1080p surface without shrinking a letter below the legible floor. The
- * results sit beside it, as a list rather than a grid: a search is read title by title,
- * and a list shows eight matches where a card grid would show four.
- */
-
 import { SEARCH_KEYS } from '../core/search.ts'
 import { hex, TOKENS, type Tokens } from './tokens.ts'
 
-/** Keys across the keyboard. */
 export const SEARCH_COLUMNS = 6
 
-/** Result rows drawn at once. */
 export const SEARCH_RESULT_ROWS = 8
 
-/** One drawn key. */
 export interface KeyCell {
   readonly id: string
   readonly label: string
@@ -29,7 +17,6 @@ export interface KeyCell {
   readonly focused: boolean
 }
 
-/** The keyboard's own measurements. */
 export interface KeyGeometry {
   readonly columns: number
   readonly rows: number
@@ -40,7 +27,6 @@ export interface KeyGeometry {
   readonly panelHeight: number
 }
 
-/** The keyboard's geometry, derived from the token scale. */
 export function keyGeometry(tokens: Tokens = TOKENS): KeyGeometry {
   const columns = SEARCH_COLUMNS
   const rows = Math.ceil(SEARCH_KEYS.length / columns)
@@ -58,18 +44,10 @@ export function keyGeometry(tokens: Tokens = TOKENS): KeyGeometry {
   }
 }
 
-/** The result list's row height, in pixels. */
 export function resultRowHeight(tokens: Tokens = TOKENS): number {
   return Math.round(tokens.type.body * 2.5)
 }
 
-/**
- * The keys, placed from a panel origin, with the cursor's own key inverted.
- *
- * The last row is short (Space, ⌫, Clear), and it is still laid out from the left in
- * the same six-column rhythm so the arrow keys never land somewhere the eye did not
- * expect.
- */
 export function keyCells(
   focusIndex: number,
   originX: number,

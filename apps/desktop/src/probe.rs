@@ -1,10 +1,3 @@
-//! Container facts read with ffprobe: duration, and whether a cover is embedded.
-//!
-//! A scan only reads names and sizes, so a fresh library knows no runtimes. This
-//! module asks ffprobe for the two facts the catalogue needs and nothing more.
-//! It reads a container's header — about 80 ms a file on a USB SSD — and never
-//! writes anywhere, so it is safe on a read-only drive.
-
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -14,26 +7,19 @@ use std::time::Duration;
 
 use screenroom_core::Library;
 
-/// Most bytes of ffprobe output accepted. A file with hundreds of streams still
-/// fits; anything larger is not a file this module should trust.
 const MAX_PROBE_BYTES: usize = 64 * 1024;
 
-/// Files asked of the library per page during a duration pass.
 const PASS_PAGE: i64 = 100;
 
-/// How often a finished batch is reported, so runtimes appear while the pass runs.
 const REPORT_EVERY: usize = 50;
 
-/// What one probe learned.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Facts {
-    /// Container duration in milliseconds; `0` when the container does not say.
     pub duration_ms: i64,
-    /// Stream index of an embedded cover image, if the file carries one.
+
     pub cover_stream: Option<u32>,
 }
 
-/// The command one probe runs. Arguments are separate values, never a shell line.
 pub fn command_for(path: &Path) -> Command {
     let mut command = Command::new(crate::artwork::tool("ffprobe"));
     command
@@ -50,17 +36,11 @@ pub fn command_for(path: &Path) -> Command {
     command
 }
 
-/// Probes one file under the same deadline and output cap as poster extraction.
 pub fn probe(path: &Path) -> Result<Facts, String> {
     let bytes = crate::artwork::capture(command_for(path), MAX_PROBE_BYTES, "Probing the file")?;
     Ok(parse(&String::from_utf8_lossy(&bytes)))
 }
 
-/// Reads ffprobe's `flat` output.
-///
-/// Lines look like `format.duration="6731.751000"` and
-/// `streams.stream.8.disposition.attached_pic=1`. Anything unexpected is
-/// ignored, so a malformed or hostile container can only produce "unknown".
 pub fn parse(output: &str) -> Facts {
     let mut facts = Facts::default();
     let mut video = Vec::new();
@@ -94,24 +74,15 @@ pub fn parse(output: &str) -> Facts {
             _ => {}
         }
     }
-    // The flat writer numbers streams by their own index, so the key's number is
-    // the stream to map. A cover must also be a video stream to be decodable.
+
     facts.cover_stream = covers.into_iter().find(|index| video.contains(index));
     facts
 }
 
-/// A running duration pass, reporting how many durations it has stored.
 pub struct DurationPass {
-    /// Counts reported as batches finish; the channel closes when the pass ends.
     pub reports: Receiver<usize>,
 }
 
-/// Walks every available file without a known duration and probes it.
-///
-/// Sequential, one ffprobe at a time, and it waits while `paused` is set — the
-/// app sets it while a file is playing, so a viewing never shares the drive with
-/// the pass. A file that fails is passed over (the walk is keyset-paged), and
-/// the next launch tries it again; nothing is ever written to the media.
 pub fn spawn_duration_pass(library: Arc<Library>, paused: Arc<AtomicBool>) -> DurationPass {
     let (sender, reports) = channel();
     std::thread::spawn(move || {
@@ -181,7 +152,7 @@ mod tests {
             parse("format.duration=\"-3\"\nformat.duration=inf\n"),
             Facts::default()
         );
-        // An attached_pic flag on a non-video stream is not a decodable cover.
+
         let audio_flag = "streams.stream.2.codec_type=\"audio\"\n\
             streams.stream.2.disposition.attached_pic=1\n";
         assert_eq!(parse(audio_flag).cover_stream, None);

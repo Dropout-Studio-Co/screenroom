@@ -1,9 +1,3 @@
-//! Real playback through the public player API.
-//!
-//! These tests need libmpv and FFmpeg on the host. When libmpv is absent they
-//! print the reason and return instead of pretending to pass; the receipt only
-//! counts where there is a player to exercise.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -14,7 +8,6 @@ use screenroom_player::{
 };
 use tempfile::TempDir;
 
-/// Builds a two-second clip with a moving pattern and a tone.
 fn clip(directory: &TempDir) -> PathBuf {
     let path = directory.path().join("clip.mp4");
     let status = Command::new("ffmpeg")
@@ -46,7 +39,6 @@ fn clip(directory: &TempDir) -> PathBuf {
     path
 }
 
-/// Builds a codec that mpv's default `hwdec-codecs` whitelist leaves on software decode.
 fn software_only_clip(directory: &TempDir) -> Option<PathBuf> {
     let path = directory.path().join("software-only.mpg");
     let status = Command::new("ffmpeg")
@@ -70,7 +62,6 @@ fn software_only_clip(directory: &TempDir) -> Option<PathBuf> {
     status.success().then_some(path)
 }
 
-/// Starts a player, or explains why this host cannot run the test.
 fn player() -> Option<Player> {
     match Player::start() {
         Ok(player) => Some(player),
@@ -125,9 +116,7 @@ fn plays_a_real_file_and_presents_frames() {
     assert!(frame.is_well_formed(), "frame buffer is malformed");
     assert_eq!((frame.width, frame.height), (320, 240));
     assert!(!frame.is_blank(), "the presented frame was empty");
-    // testsrc2 is colourized, so at least one pixel must carry colour. Only the
-    // colour channels are checked: the frame's alpha byte is documented as
-    // undefined, and the presenter is what forces opaque output.
+
     let coloured = (0..frame.height)
         .step_by(17)
         .flat_map(|y| (0..frame.width).step_by(17).map(move |x| (x, y)))
@@ -275,8 +264,6 @@ fn a_seek_sent_before_the_file_loads_runs_once_it_has_and_is_confirmed() {
     let path = clip(&directory);
     let Some(player) = player() else { return };
 
-    // The app can scrub while a slow drive is still opening the file. A dropped,
-    // never-confirmed serial blocked every checkpoint for the rest of the viewing.
     let load_id = player.load_at(&path, None);
     let early = player.seek(1.4);
     let sought = wait_for(&player, Duration::from_secs(20), |snapshot| {
@@ -328,8 +315,7 @@ fn resume_position_is_honoured_when_loading() {
     let Some(player) = player() else { return };
 
     let load_id = player.load_at(&path, Some(1.2));
-    // Sampled continuously, because the defect was transient: a ready snapshot at
-    // ~0 s before the resume landed, which the app would store over the real point.
+
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
     let resumed = loop {
         let snapshot = player.snapshot();
@@ -450,11 +436,6 @@ fn anamorphic_video_renders_at_its_display_aspect_without_letterbox_rows() {
     );
 }
 
-/// Builds a longer, full-resolution clip for the rate measurement.
-///
-/// The audio track is not decoration: the player runs with `video-sync=audio`,
-/// so a silent clip takes a different pacing path than real media and would
-/// misreport the bridge's rate.
 fn timing_clip(directory: &TempDir) -> PathBuf {
     let path = directory.path().join("timing.mp4");
     let status = Command::new("ffmpeg")
@@ -494,16 +475,6 @@ fn timing_clip(directory: &TempDir) -> PathBuf {
     path
 }
 
-/// Measures the frame rate of the software presentation bridge at 1080p.
-///
-/// This is the production path the desktop app draws from: libmpv's software
-/// renderer writes an RGBA buffer and publishes it with a new generation number.
-/// Counting those generations over a wall-clock interval is the rate the window
-/// can actually be fed. The measured figure is printed, because the desktop
-/// frame-rate gate needs a number rather than "it looked smooth".
-///
-/// The source runs at 30 fps; the floor asserted here is deliberately below that,
-/// so the test fails on a real collapse rather than on a busy machine.
 #[test]
 fn the_software_bridge_sustains_a_watchable_frame_rate() {
     let directory = TempDir::new().expect("temp dir");
@@ -514,9 +485,6 @@ fn the_software_bridge_sustains_a_watchable_frame_rate() {
         snapshot.frame.is_some() && snapshot.position > 0.3
     });
 
-    // Sampled at two points rather than polled: the generation number is
-    // monotonic per published frame, so the difference is exact and the
-    // measurement itself cannot become the bottleneck.
     let first = started
         .frame
         .as_ref()
@@ -534,8 +502,7 @@ fn the_software_bridge_sustains_a_watchable_frame_rate() {
         .unwrap_or(first)
         .saturating_sub(first);
     let rate = presented as f64 / elapsed.max(0.001);
-    // How far the playhead moved over the same interval: below real time means
-    // the media is waiting on this pipeline, not that frames were dropped.
+
     let advance = (ended.position - started.position) / elapsed.max(0.001);
     println!(
         "software bridge: {presented} frames in {elapsed:.2} s = {rate:.1} fps at 1920x1080 \
@@ -547,10 +514,6 @@ fn the_software_bridge_sustains_a_watchable_frame_rate() {
     );
 }
 
-/// Builds a clip whose only audio is a silent track.
-///
-/// Used as the control for the audio-clock measurement: the property that proves
-/// audio is flowing must be *absent* here, not merely zero.
 fn silent_clip(directory: &TempDir) -> PathBuf {
     let path = directory.path().join("silent.mp4");
     let status = Command::new("ffmpeg")
@@ -573,9 +536,6 @@ fn silent_clip(directory: &TempDir) -> PathBuf {
             "yuv420p",
             "-c:a",
             "aac",
-            // Bounded by `-t` rather than `-shortest`: `anullsrc` never ends on
-            // its own, and relying on `-shortest` to stop it makes this fixture
-            // depend on the same flag that hangs when subtitles are present.
             "-t",
             "2",
         ])
@@ -586,10 +546,6 @@ fn silent_clip(directory: &TempDir) -> PathBuf {
     path
 }
 
-/// Builds a clip with one picture, two audio tracks and two subtitle tracks.
-///
-/// This is what track selection has to be proven against: a single-track file
-/// cannot distinguish "selected" from "the only one there is".
 fn multi_track_clip(directory: &TempDir) -> PathBuf {
     let english = directory.path().join("eng.srt");
     let french = directory.path().join("fra.srt");
@@ -647,8 +603,6 @@ fn multi_track_clip(directory: &TempDir) -> PathBuf {
             "language=eng",
             "-metadata:s:s:1",
             "language=fra",
-            // Deliberately no `-shortest`: with subtitle streams present it never
-            // returns, and every input here already ends on its own.
         ])
         .arg(&path)
         .status()
@@ -660,11 +614,6 @@ fn multi_track_clip(directory: &TempDir) -> PathBuf {
     path
 }
 
-/// Confirms with FFmpeg that the fixture's audio is *not* silence.
-///
-/// Done with an independent tool on purpose: libmpv reporting "an audio track is
-/// present" says nothing about whether that track carries sound, and the audio
-/// measurement below is only meaningful if the source is audible.
 fn assert_source_audio_is_audible(path: &Path) {
     let output = Command::new("ffmpeg")
         .args(["-nostdin", "-hide_banner", "-i"])
@@ -686,10 +635,6 @@ fn assert_source_audio_is_audible(path: &Path) {
     );
 }
 
-/// Builds a longer clip for the audio measurement.
-///
-/// Deliberately small in pixels: the audio clock has nothing to do with resolution,
-/// and encoding a 1080p fixture for every run would slow the suite for no evidence.
 fn audio_clip(directory: &TempDir) -> PathBuf {
     let path = directory.path().join("audio.mp4");
     let status = Command::new("ffmpeg")
@@ -728,33 +673,6 @@ fn audio_clip(directory: &TempDir) -> PathBuf {
     path
 }
 
-/// Measures whether audio is really being consumed, and whether it stays in sync.
-///
-/// "Audio output is confirmed" is not proven by a CoreAudio client existing, so two
-/// separate things are measured, each with the instrument that actually measures it:
-///
-/// * **Consumption** — `audio-pts`, the audio output's clock, sampled as a series.
-///   libmpv advances it as the device plays samples, so a stalled output freezes it.
-///   A steady-state rate near 1.0x is the difference between "an output was
-///   configured" and "samples are reaching the speakers in real time".
-/// * **Sync** — libmpv's own `avsync` and `total-avsync-change`. These are the
-///   player's measurements, so the sync claim rests on the player's instrument
-///   rather than on a comparison this test invents.
-///
-/// **Do not read the gap between `audio-pts` and `time-pos` as A/V sync.** It looks
-/// like one and it is not: measured here, that gap grows toward a quarter of a second
-/// while libmpv reports `avsync` at 0.0 ms and a 12 ms total adjustment. `audio-pts`
-/// carries the output buffer's position against the video's presented position, so it
-/// drifts for reasons that have nothing to do with what a viewer hears. The gap is
-/// printed as an observation and deliberately not asserted on.
-///
-/// Also do not measure consumption from two samples taken just after start-up: that
-/// reported 0.79x with a 1.1 s gap in an earlier version of this test, purely because
-/// the output was still priming. The clock is quantised, so a series is required.
-///
-/// What this still does NOT prove is that a human heard anything, nor that the
-/// quarter-second offset above is inaudible for lip sync. No automated check here can
-/// answer that, and the ledger records both as unverified rather than folding them in.
 #[test]
 fn audio_is_consumed_in_real_time_without_drifting() {
     let directory = TempDir::new().expect("temp dir");
@@ -821,9 +739,6 @@ fn audio_is_consumed_in_real_time_without_drifting() {
     let late_gap_ms = (last.2 - last.1) * 1000.0;
     let drift_ms = late_gap_ms - early_gap_ms;
 
-    // Both clocks are also measured against the wall clock, because "the audio clock
-    // is behind the playhead" is ambiguous until it is known which of the two is
-    // actually at real time.
     println!(
         "audio: {} distinct clock changes; OLS {rate:.4}x, max residual {:.1} ms, \
          max observation gap {max_gap:.3}s; clock advanced {audio_advanced:.2}s against \
@@ -849,8 +764,6 @@ fn audio_is_consumed_in_real_time_without_drifting() {
         "exactly one audio track should be in use"
     );
 
-    // libmpv's own sync figures. These are the player's measurements, not an
-    // inference from two clocks, so they are what the sync claim rests on.
     let avsync_ms = final_snapshot.avsync.map(|value| value * 1000.0);
     let total_ms = final_snapshot
         .total_avsync_change
@@ -873,8 +786,6 @@ fn audio_is_consumed_in_real_time_without_drifting() {
         "libmpv adjusted sync by {total_ms:?} ms over one short file"
     );
 
-    // Distinct clock observations are fitted against the wall clock so callback
-    // scheduling jitter does not turn a quantized property into a false rate failure.
     assert!(
         (rate - 1.0).abs() < 0.05,
         "the audio output consumed samples at {rate:.3}x wall-clock rate, which is not playback"
@@ -887,14 +798,12 @@ fn audio_is_consumed_in_real_time_without_drifting() {
         max_residual < 0.150,
         "audio clock residual was {max_residual:.3}s"
     );
-    // Observed, not asserted: see the doc comment for why this gap is not sync.
+
     println!(
         "audio output buffer sits {late_gap_ms:+.1} ms from the video playhead (moved \
          {drift_ms:+.1} ms across the window; not an A/V sync figure)"
     );
 
-    // Control: a silent track is still an audio track, and must still be consumed.
-    // This keeps the measurement above from being satisfied by "no audio at all".
     let silent = silent_clip(&directory);
     player.load(&silent);
     let silent_state = wait_for(&player, Duration::from_secs(20), |snapshot| {
@@ -939,8 +848,6 @@ fn tracks_are_enumerated_and_can_be_switched() {
     assert_eq!(audio.len(), 2, "expected two audio tracks: {audio:#?}");
     assert_eq!(subtitles.len(), 2, "expected two subtitle tracks");
 
-    // The language tags come from the container, so reading them at all proves the
-    // string property path works; their values prove it read the right ones.
     let mut languages: Vec<String> = audio
         .iter()
         .filter_map(|track| track.language.clone())
@@ -959,7 +866,6 @@ fn tracks_are_enumerated_and_can_be_switched() {
         "exactly one audio track should be selected at load"
     );
 
-    // Switch audio: the snapshot must show libmpv's state, not the request.
     let wanted = audio
         .iter()
         .find(|track| track.language.as_deref() == Some("jpn"))
@@ -982,7 +888,6 @@ fn tracks_are_enumerated_and_can_be_switched() {
         "switching must leave exactly one audio track selected"
     );
 
-    // Subtitles can be switched on and genuinely turned off.
     let subtitle_id = subtitles[0].id;
     player.select_track(TrackKind::Subtitle, subtitle_id);
     wait_for(&player, Duration::from_secs(10), |snapshot| {
@@ -1020,10 +925,7 @@ fn subtitle_style_reaches_libmpv_and_survives_a_file_change() {
     let styled = wait_for(&player, Duration::from_secs(10), |snapshot| {
         snapshot.subtitle_scale.is_some() && snapshot.subtitle_position.is_some()
     });
-    // Not `assert_eq!(snapshot.subtitle_scale, 1.75)`: these are libmpv's numbers,
-    // read back from the properties, so the test asserts the player really holds the
-    // requested style rather than that a request was queued. libmpv rounds the
-    // scale internally, so the tolerance is on the value, not on the direction.
+
     let scale = styled.subtitle_scale.expect("a scale");
     assert!(
         (scale - 1.75).abs() < 0.01,
@@ -1035,9 +937,6 @@ fn subtitle_style_reaches_libmpv_and_survives_a_file_change() {
         "libmpv holds sub-pos {position}, not the requested 88"
     );
 
-    // A style is a video-output property, so the next viewing inherits it: that is
-    // the whole point of storing it, and it must survive the file change rather
-    // than being cleared with the tracks.
     player.load(&path);
     let reloaded = wait_for(&player, Duration::from_secs(30), |snapshot| {
         snapshot.loaded
@@ -1059,15 +958,11 @@ fn an_impossible_subtitle_style_is_clamped_rather_than_passed_on() {
     player.load(&path);
     wait_for(&player, Duration::from_secs(30), |snapshot| snapshot.loaded);
 
-    // A subtitle of no size, or one placed off the picture, reads as a broken player
-    // rather than a bad setting, so both ends are held inside what libmpv accepts.
     player.set_subtitle_style(-5.0, 9_000.0);
     let clamped = wait_for(&player, Duration::from_secs(10), |snapshot| {
         snapshot.subtitle_scale.is_some()
     });
-    // Compared with a tolerance, not for equality: libmpv holds `sub-scale` as a
-    // single-precision value, so 0.1 comes back as 0.10000000149011612. That is also
-    // why the interface shows a whole percentage rather than the read-back number.
+
     let scale = clamped.subtitle_scale.expect("a clamped scale");
     assert!(
         (scale - SUB_SCALE_RANGE.0).abs() < 1e-6,
@@ -1081,8 +976,6 @@ fn an_impossible_subtitle_style_is_clamped_rather_than_passed_on() {
         SUB_POSITION_RANGE.1
     );
 
-    // A non-finite value cannot be clamped into anything sensible, so it is skipped
-    // and the last good value stands instead of the player reporting itself broken.
     player.set_subtitle_style(f64::NAN, f64::INFINITY);
     let after = wait_for(&player, Duration::from_secs(3), |snapshot| {
         snapshot.subtitle_scale == clamped.subtitle_scale
@@ -1114,8 +1007,7 @@ fn a_missing_file_is_reported_honestly() {
 #[test]
 fn a_malformed_media_file_is_reported_rather_than_shown_as_empty() {
     let directory = TempDir::new().expect("temp dir");
-    // A file that claims to be Matroska and is not: the case a truncated download
-    // or a partly-copied file produces.
+
     let path = directory.path().join("broken.mkv");
     std::fs::write(&path, b"\x1aE\xdf\xa3this is not actually matroska").expect("write");
     let Some(player) = player() else { return };
@@ -1138,7 +1030,7 @@ fn a_malformed_media_file_is_reported_rather_than_shown_as_empty() {
 #[test]
 fn a_long_session_keeps_one_frame_and_advances_monotonically() {
     let directory = TempDir::new().expect("temp dir");
-    // Long enough that a leak of decoded frames or a drifting clock would show.
+
     let path = thirty_second_clip(&directory);
     let Some(player) = player() else { return };
     player.load(&path);
@@ -1146,8 +1038,6 @@ fn a_long_session_keeps_one_frame_and_advances_monotonically() {
         snapshot.position > 1.0
     });
 
-    // Sample across the run: the snapshot holds exactly one frame at a time, and
-    // the playhead only ever moves forward without a seek.
     let mut last = 0.0_f64;
     let mut samples = 0;
     let deadline = Instant::now() + Duration::from_secs(12);
@@ -1170,7 +1060,6 @@ fn a_long_session_keeps_one_frame_and_advances_monotonically() {
     assert!(last > 1.0, "the playhead advanced: {last}");
 }
 
-/// Builds a thirty-second clip, for observing a session rather than its start.
 fn thirty_second_clip(directory: &TempDir) -> PathBuf {
     let path = directory.path().join("long.mp4");
     let status = Command::new("ffmpeg")
@@ -1205,9 +1094,6 @@ fn thirty_second_clip(directory: &TempDir) -> PathBuf {
 
 #[test]
 fn volume_and_mute_are_read_back_from_the_player() {
-    // The interface must show what the player holds, not what it last asked for:
-    // a slider that echoes its own request can sit at 50% while the output is
-    // silent, and nothing on screen would say so.
     let Some(player) = player() else {
         return;
     };
@@ -1231,7 +1117,6 @@ fn volume_and_mute_are_read_back_from_the_player() {
         snapshot.muted == Some(false)
     });
 
-    // Out-of-range requests are clamped by the handle rather than passed on.
     player.set_volume(500.0);
     let snapshot = wait_for(&player, Duration::from_secs(5), |snapshot| {
         snapshot.volume.is_some_and(|volume| volume <= 100.0)

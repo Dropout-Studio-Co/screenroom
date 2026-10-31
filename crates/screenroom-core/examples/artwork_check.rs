@@ -1,26 +1,3 @@
-//! Audits the artwork actually stored in a real library.
-//!
-//! ```bash
-//! cargo run --release -p screenroom-core --example artwork_check -- <library.db> [fresh]
-//! ```
-//!
-//! Two questions this answers that a unit test cannot:
-//!
-//! 1. Are the posters in this library real images? Every stored byte string is
-//!    written to a temporary file and handed to `ffprobe`, which must report a
-//!    JPEG of the width and height the row claims. A row whose bytes are a frame,
-//!    a PNG or a truncated blob fails here.
-//! 2. Can the rest of the catalogue get one? Every remaining work must offer a
-//!    candidate that points at a file that exists and is readable, or the artwork
-//!    queue would spin on works that can never be drawn.
-//!
-//! `fresh` extracts and stores a poster for the first few candidates with FFmpeg,
-//! for works the app has not covered, and then re-checks those images the same
-//! way. It writes only inside a temporary directory and never touches the library
-//! it did not come from.
-//!
-//! Exit code 0 when every check passed, 1 otherwise.
-
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -51,9 +28,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         library.missing_artwork_count()?
     );
 
-    // --- every stored poster must be a real JPEG ----------------------------
-    // Read them through `artworks_for`, which is the call the desktop grid makes,
-    // so this audits the bytes the UI would actually draw and not a private path.
     let mut checked = 0_usize;
     let mut decoded = 0_usize;
     let mut total_bytes = 0_u64;
@@ -102,7 +76,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  first failure on \"{title}\": {reason}");
     }
 
-    // --- every remaining work must have somewhere to get one ----------------
     let mut candidates = library.artwork_candidates(200)?;
     let mut missing_path = 0_usize;
     let mut zero_duration = 0_usize;
@@ -115,8 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             zero_duration += 1;
         }
     }
-    // Ask again with the works the page did not cover, so the check is over the
-    // whole catalogue and not just the first 200 titles.
+
     let remaining = library.missing_artwork_count()?;
     if missing_path > 0 {
         failures += 1;
@@ -126,7 +98,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         candidates.len()
     );
 
-    // --- a fresh extraction, for works the app has not reached --------------
     if fresh {
         let target = &mut candidates;
         target.truncate(6);
@@ -143,9 +114,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         height,
                         60_000,
                     )?;
-                    // Read it back and decode it again: a stored poster that the
-                    // reader cannot decode is the failure this whole file exists
-                    // to catch.
+
                     let readback = library.artwork(&candidate.work_id)?;
                     let check = match readback {
                         Some(artwork) => inspect(&artwork, &directory, &mut 0),
@@ -189,7 +158,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-/// Confirms a stored poster really is a JPEG of the size the row claims.
 fn inspect(
     artwork: &screenroom_core::Artwork,
     directory: &TempDir,
@@ -211,25 +179,18 @@ fn inspect(
     Ok(())
 }
 
-/// Why a poster could not be extracted.
 enum Sampling {
-    /// The file itself cannot be decoded. Not a pipeline fault: a truncated or
-    /// corrupt file is a fact about the media, and the app records it as a failed
-    /// work and stops asking.
     UnreadableMedia(String),
-    /// The extractor or the encoder failed on a file that probes fine.
+
     Broken(String),
 }
 
-/// Samples one frame and encodes it as a 400-pixel-wide JPEG.
 fn extract(
     candidate: &screenroom_core::ArtworkCandidate,
     directory: &TempDir,
 ) -> Result<(Vec<u8>, i64, i64), Sampling> {
     let output = directory.path().join(format!("{}.jpg", candidate.work_id));
-    // A position inside the file regardless of duration: 60 s for anything long
-    // enough, 2 s otherwise. `-ss` before `-i` seeks, so this reads a few hundred
-    // kilobytes instead of the whole film.
+
     let at = if candidate.duration_ms > 120_000 || candidate.duration_ms == 0 {
         "60"
     } else {
@@ -252,8 +213,6 @@ fn extract(
         .status()
         .map_err(|error| Sampling::Broken(error.to_string()))?;
     if !status.success() {
-        // Whether this is the media's fault or the pipeline's is answered by
-        // asking ffprobe the same question the app's own probe asks.
         return Err(if readable(&candidate.path) {
             Sampling::Broken("ffmpeg refused a file ffprobe can read".into())
         } else {
@@ -265,7 +224,6 @@ fn extract(
     Ok((bytes, width, height))
 }
 
-/// True when ffprobe can identify the file's streams.
 fn readable(path: &std::path::Path) -> bool {
     Command::new("ffprobe")
         .args([
@@ -282,7 +240,6 @@ fn readable(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Reads a JPEG's real dimensions with `ffprobe`.
 fn probe(path: &std::path::Path) -> Result<(i64, i64), String> {
     let output = Command::new("ffprobe")
         .args([

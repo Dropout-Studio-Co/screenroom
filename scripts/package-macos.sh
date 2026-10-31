@@ -1,33 +1,5 @@
 #!/usr/bin/env bash
-# Builds a locally installable Screenroom.app for macOS.
-#
-#   scripts/package-macos.sh                 # -> dist/Screenroom.app
-#   scripts/package-macos.sh /Applications   # install into a folder afterwards
-#
-# What this produces and what it deliberately does not:
-#
-# * The bundle carries its own copy of libmpv in `Contents/Frameworks`. The app
-#   looks there after the system paths (see `packaged_candidates` in
-#   `crates/screenroom-player`), so the bundle does not depend on where libmpv
-#   itself is linked — but see the next point: libmpv's own dependencies still do.
-# * libmpv's *own* dependencies — FFmpeg, libass, libplacebo and the rest — are
-#   resolved by their absolute install names, which on this host point into
-#   `/opt/homebrew/opt`. So this bundle runs on a machine with the same Homebrew
-#   mpv installed. Making it run anywhere would mean vendoring FFmpeg, which is a
-#   separate licensing decision (FFmpeg's build options decide which codecs may be
-#   redistributed) and is not implied by a personal install. The script checks the
-#   dependency situation and reports it rather than hiding it.
-# * Posters and runtimes come from Homebrew's `ffmpeg` and `ffprobe`, found by
-#   absolute path because an app opened from the Dock has no Homebrew `PATH`.
-#   Their absence is reported here; the app then shows title-only cards.
-# * An ad-hoc signature over the whole bundle, no Developer ID and no
-#   notarization: this is the approved personal installation path. Ad-hoc signing
-#   seals the bundled libmpv with the binary so `codesign --verify` can prove the
-#   bundle is intact. Gatekeeper still asks once on first launch, and macOS asks
-#   for removable-volume access again after each rebuild, because an ad-hoc
-#   identity changes with every build.
-#
-# Nothing here needs Xcode beyond the command line tools already used to build.
+
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -55,13 +27,9 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Framewor
 cp "$binary" "$app/Contents/MacOS/$process"
 chmod +x "$app/Contents/MacOS/$process"
 
-# The icon is optional: a missing one is not a packaging failure, it just leaves
-# the bundle with the default application icon.
 if [ -f "$root/assets/Screenroom.icns" ]; then
   cp "$root/assets/Screenroom.icns" "$app/Contents/Resources/Screenroom.icns"
 fi
-
-# ---------------------------------------------------------------- libmpv
 
 libmpv=""
 for candidate in \
@@ -80,12 +48,10 @@ if [ -z "$libmpv" ]; then
   echo "!! no libmpv found, so the app will report playback as unavailable." >&2
   echo "   Install it with: brew install mpv" >&2
 else
-  # `cp -L` follows the Homebrew symlink, so the bundle holds a real file and
-  # does not break when the linked version is upgraded in place.
+
   cp -L "$libmpv" "$app/Contents/Frameworks/libmpv.2.dylib"
   echo "==> bundled $libmpv"
-  # `readlink -f` is not available on BSD userland, so the symlink is resolved
-  # with `cd`/`pwd -P` on its directory instead.
+
   resolved="$(cd "$(dirname "$libmpv")" && pwd -P)/$(basename "$libmpv")"
   echo "    libmpv dependencies that must be present on this machine:"
   otool -L "$resolved" 2>/dev/null \
@@ -103,8 +69,6 @@ else
     exit 1
   fi
 fi
-
-# ---------------------------------------------------------------- Info.plist
 
 version="$(grep -m1 '^version' "$root/Cargo.toml" | sed -E 's/.*"(.*)".*/\1/')"
 version="${version:-0.1.0}"
@@ -133,12 +97,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# An unsigned bundle still launches, but macOS quarantines anything downloaded.
-# Clearing the attribute here is correct for a bundle built on this machine and
-# has no effect on a copy that arrives with a quarantine flag already set.
 xattr -cr "$app" 2>/dev/null || true
-
-# ---------------------------------------------------------------- tools
 
 for tool in ffmpeg ffprobe; do
   found=""
@@ -152,9 +111,6 @@ for tool in ffmpeg ffprobe; do
   fi
 done
 
-# ---------------------------------------------------------------- signing
-
-# Inside out: the dylib first, then the bundle that seals it.
 if [ -f "$app/Contents/Frameworks/libmpv.2.dylib" ]; then
   codesign --force --sign - "$app/Contents/Frameworks/libmpv.2.dylib"
 fi

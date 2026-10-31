@@ -1,33 +1,6 @@
-//! The libmpv → wgpu presentation bridge.
-//!
-//! libmpv can only target OpenGL, Direct3D 11 or a CPU buffer, while iced draws
-//! through wgpu. This module implements the **portable software bridge**: a
-//! decoded RGBA frame is uploaded into a wgpu texture inside iced's shader
-//! `Primitive::prepare` and drawn letterboxed by a small WGSL shader.
-//!
-//! Cost and consequences:
-//!
-//! * one full-frame upload per displayed frame (unavoidable without a
-//!   platform-specific zero-copy import),
-//! * the texture is recreated only when the frame size changes,
-//! * an identical frame generation is not re-uploaded,
-//! * letterbox bars are drawn by the shader, so the source aspect ratio is
-//!   preserved without stretching (PRD Q03). [`fit_factors`] returns the fraction
-//!   of each axis the video occupies and [`source_uv`] turns that into the source
-//!   coordinate, returning `None` for the bar pixels; the WGSL fragment stage does
-//!   exactly the same arithmetic, which is why it can be tested without a GPU.
-//!
-//! The OpenGL (macOS) and D3D11 (Windows) zero-copy paths slot in behind
-//! [`FrameSource`] without touching the widget or the shader.
-
 use iced::widget::shader::{self, Primitive, Program};
 use iced::{Rectangle, mouse};
 
-/// Aspect-correct fit factors for one frame inside a target rectangle.
-///
-/// Each value is the fraction of that axis the video occupies: `1.0` fills the
-/// axis, a smaller value means bars on the other axis. The factors are *not*
-/// multipliers for the source UV — see [`source_uv`].
 pub fn fit_factors(source_width: u32, source_height: u32, target: Rectangle) -> (f32, f32) {
     if source_width == 0 || source_height == 0 || target.width <= 0.0 || target.height <= 0.0 {
         return (1.0, 1.0);
@@ -35,22 +8,12 @@ pub fn fit_factors(source_width: u32, source_height: u32, target: Rectangle) -> 
     let source_aspect = source_width as f32 / source_height as f32;
     let target_aspect = target.width / target.height;
     if source_aspect > target_aspect {
-        // Wider than the window: full width, letterbox top and bottom.
         (1.0, target_aspect / source_aspect)
     } else {
-        // Taller than the window: full height, pillarbox left and right.
         (source_aspect / target_aspect, 1.0)
     }
 }
 
-/// The source texture coordinate for a target coordinate, or `None` where the
-/// target is outside the video and the shader must draw a black bar.
-///
-/// This mirrors `SHADER`'s fragment stage exactly. The division matters: with
-/// the factor as a multiplier the mapped UV stays inside `0..1` for every target
-/// pixel, so no bar is ever produced and the picture is stretched to fill the
-/// widget. Unit tests exercise this function because the shader itself cannot be
-/// run without a GPU.
 pub fn source_uv(target: (f32, f32), fit: (f32, f32)) -> Option<(f32, f32)> {
     if fit.0 <= 0.0 || fit.1 <= 0.0 {
         return None;
@@ -60,17 +23,14 @@ pub fn source_uv(target: (f32, f32), fit: (f32, f32)) -> Option<(f32, f32)> {
     ((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v)).then_some((u, v))
 }
 
-/// Frames come from the player crate so both sides share one definition.
 pub use screenroom_player::Frame;
 
-/// A widget that draws the current video frame, or nothing when there is none.
 #[derive(Debug, Clone, Default)]
 pub struct VideoSurface {
     frame: Option<Frame>,
 }
 
 impl VideoSurface {
-    /// Builds a surface showing `frame`.
     pub fn new(frame: Option<Frame>) -> Self {
         Self { frame }
     }
@@ -199,7 +159,6 @@ impl Primitive for VideoPrimitive {
     }
 }
 
-/// GPU state shared by every video frame primitive.
 pub struct VideoPipeline {
     render_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
@@ -317,14 +276,10 @@ impl shader::Pipeline for VideoPipeline {
         }
     }
 
-    fn trim(&mut self) {
-        // Keeping the last texture avoids churn while paused or stepping frames.
-    }
+    fn trim(&mut self) {}
 }
 
-/// Writes four `f32` values as bytes without pulling in `bytemuck`.
 fn bytemuck_f32(values: &[f32; 4]) -> &[u8] {
-    // Safety: `f32` has no invalid bit patterns and the slice is plain data.
     unsafe {
         std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), std::mem::size_of_val(values))
     }
@@ -430,15 +385,13 @@ mod tests {
 
     #[test]
     fn a_wider_widget_pillarboxes_instead_of_stretching() {
-        // A 16:9 frame in a ~2.9:1 area must keep its height and gain side bars.
         let fit = fit_factors(1920, 1080, bounds(1240.0, 425.0));
         assert_eq!(fit.1, 1.0, "height is the filled axis");
         assert!(fit.0 < 1.0, "width must be reduced for side bars");
 
-        // The left and right edges of the widget are bars, not picture.
         assert!(source_uv((0.0, 0.5), fit).is_none());
         assert!(source_uv((1.0, 0.5), fit).is_none());
-        // The video occupies exactly `fit.0` of the width, centred.
+
         let margin = (1.0 - fit.0) / 2.0;
         assert!(source_uv((margin, 0.5), fit).is_some());
         assert!(source_uv((1.0 - margin, 0.5), fit).is_some());

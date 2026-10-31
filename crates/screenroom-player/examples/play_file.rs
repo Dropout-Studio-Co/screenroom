@@ -1,31 +1,3 @@
-//! Plays real media files offscreen and reports what the player actually did.
-//!
-//! ```bash
-//! cargo run --release -p screenroom-player --example play_file -- "/path/to/file.mkv"
-//! cargo run --release -p screenroom-player --example play_file -- file1.mkv file2.mp4 --seconds 4
-//! ```
-//!
-//! This is the real-media counterpart to `render_bench`, which synthesises its own
-//! fixture: it takes files you point it at, opens each one through the same worker
-//! the window uses, and prints evidence rather than reassurance.
-//!
-//! For every file it reports:
-//!
-//! * **open** — time from `load` to the first non-blank decoded frame, or the
-//!   player's own failure code and message when it could not open.
-//! * **tracks** — every stream libmpv reported, including external subtitle files
-//!   it picked up itself, with the selected and external flags.
-//! * **audio** — how far the audio device clock advanced while playing. A file that
-//!   merely initialised an output does not advance it.
-//! * **delivery** — distinct frames per second and the worst gap between them.
-//! * **seek** — round trip from the command to the playhead arriving.
-//! * **subtitles** — what `sub-scale`/`sub-pos` read back after being set.
-//!
-//! What it does **not** claim: no window is opened, no GPU surface is used and
-//! nothing is heard. A pass here means the file decodes, has an audio clock and
-//! accepts track/subtitle commands — not that the window presented it or that the
-//! sound was right. Those stay with the owner in `docs/TEST_PLAN.md`.
-
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -47,9 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => 6.0,
     };
-    // Optional: write the first delivered frame as a PNG so the picture itself can
-    // be inspected — aspect handling, black bars and subtitle burn-in are not
-    // visible in the numbers. Written outside the media root, like every artefact.
+
     let dump_dir = match arguments
         .iter()
         .position(|argument| argument == "--dump-frame")
@@ -81,12 +51,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for path in arguments {
         println!();
         println!("=== {path}");
-        // One worker per file: the lifecycle is then the one the window uses —
-        // start, load, play, stop — with nothing carried between files.
+
         let player = Player::start()?;
-        // Muted on purpose: this runs on the owner's machine in the background,
-        // and the audio clock still advances while muted — which is the evidence
-        // that matters. Nothing is claimed about what the sound was like.
+
         player.set_muted(true);
         run_one(&player, Path::new(&path), seconds, dump_dir.as_deref());
         player.stop();
@@ -94,11 +61,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// The height of the black bars at the top and bottom of a frame.
-///
-/// libmpv scales a video into the render target without stretching it, so an
-/// anamorphic or scope picture arrives letterboxed. Measuring the bars is the
-/// only way to tell that from a picture the renderer stretched to fill.
 fn black_bars(frame: &Frame) -> (u32, u32) {
     let row_is_black = |y: u32| {
         (0..12).all(|index| {
@@ -119,8 +81,6 @@ fn black_bars(frame: &Frame) -> (u32, u32) {
     (top, bottom)
 }
 
-/// Writes the current frame as a PNG through FFmpeg, for looking at rather than
-/// reasoning about.
 fn dump_frame(
     player: &Player,
     path: &Path,
@@ -166,9 +126,7 @@ fn dump_frame(
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    // libmpv's `rgb0` target documents the alpha byte as undefined, and it comes
-    // back as zero: a PNG written straight from it is transparent and looks blank.
-    // Force opacity, the same way the presenter does, so the file shows the picture.
+
     let mut rgba = frame.rgba.as_ref().clone();
     for alpha in rgba.iter_mut().skip(3).step_by(4) {
         *alpha = 255;
@@ -249,9 +207,6 @@ fn run_one(player: &Player, path: &Path, seconds: f64, dump_dir: Option<&Path>) 
         );
     }
 
-    // Audio is proved by the output device's own clock, not by a track existing.
-    // The clock is absent until the output starts, so wait for it rather than
-    // reading it once and calling a quiet start an audio-less file.
     let has_audio_track = snapshot
         .tracks
         .iter()
@@ -314,7 +269,6 @@ fn run_one(player: &Player, path: &Path, seconds: f64, dump_dir: Option<&Path>) 
         snapshot.avsync, snapshot.mistimed_frames
     );
 
-    // Seek round trip: issue it, wait for the playhead to arrive near the target.
     let duration = snapshot.duration;
     if duration > 10.0 {
         let target = duration * 0.5;
@@ -339,7 +293,6 @@ fn run_one(player: &Player, path: &Path, seconds: f64, dump_dir: Option<&Path>) 
         }
     }
 
-    // Subtitle style: what the player read back, not what was asked for.
     player.set_subtitle_style(1.25, 88.0);
     std::thread::sleep(Duration::from_millis(200));
     let snapshot = player.snapshot();
@@ -348,7 +301,6 @@ fn run_one(player: &Player, path: &Path, seconds: f64, dump_dir: Option<&Path>) 
         snapshot.subtitle_scale, snapshot.subtitle_position
     );
 
-    // Track switching: pick the last audio track and confirm the player agrees.
     let audio: Vec<_> = snapshot
         .tracks
         .iter()

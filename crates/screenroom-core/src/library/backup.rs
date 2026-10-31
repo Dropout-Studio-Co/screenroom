@@ -1,23 +1,3 @@
-//! Backup and restore of the whole library.
-//!
-//! The library is one SQLite database, so a backup is a consistent copy of that
-//! database rather than an export that could drift from it. `VACUUM INTO` does the
-//! copy: it is the only supported way to get a coherent snapshot of a live
-//! connection, and it produces an ordinary readable database with no journal to
-//! replay.
-//!
-//! Restoring has to be safe in both directions, which shapes every decision here:
-//!
-//! * a backup is always a copy *to a different file* than the live library, so a
-//!   mistaken destination cannot truncate the user's history,
-//! * the file is validated (integrity, schema range, format version) before
-//!   anything is replaced, so an unrelated `.db` is refused rather than half-read,
-//! * the current library is copied aside first, so a restore the user regrets is
-//!   itself recoverable,
-//! * the replacement happens in one transaction through `ATTACH`, so an
-//!   interrupted restore leaves the previous library intact instead of a mixture
-//!   of the two.
-
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
@@ -28,11 +8,6 @@ use crate::{BACKUP_FORMAT_VERSION, SCHEMA_VERSION};
 
 use super::{Library, new_id, now_ms};
 
-/// The library's tables, in an order that satisfies the foreign keys on insert.
-///
-/// Delete order is the reverse, so children go before parents. Both orders exist
-/// because the restore cannot rely on `ON DELETE CASCADE` alone: a table whose
-/// parent is emptied first would lose its own rows before they were read.
 const TABLES: &[&str] = &[
     "sources",
     "works",
@@ -53,30 +28,26 @@ const TABLES: &[&str] = &[
     "settings",
 ];
 
-/// Setting key holding the backup format version inside a backup file.
 const FORMAT_KEY: &str = "backupFormatVersion";
 
-/// Setting key holding the creation time inside a backup file.
 const CREATED_KEY: &str = "backupCreatedMs";
 
-/// What a backup file contains, read without changing anything.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackupInfo {
-    /// Path the information was read from.
     pub path: String,
-    /// Versioned backup format, from [`crate::BACKUP_FORMAT_VERSION`].
+
     pub format_version: i64,
-    /// Library schema version the backup was written with.
+
     pub schema_version: i64,
-    /// When the backup was written, in Unix milliseconds, when recorded.
+
     pub created_ms: Option<i64>,
-    /// Authorized folders in the backup.
+
     pub sources: i64,
-    /// Works in the backup.
+
     pub works: i64,
-    /// Playable files in the backup.
+
     pub files: i64,
-    /// Viewer profiles in the backup.
+
     pub profiles: i64,
 }
 
@@ -95,37 +66,25 @@ impl std::fmt::Display for BackupInfo {
     }
 }
 
-/// The outcome of writing a backup.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackupReport {
-    /// The file that was written.
     pub path: String,
-    /// Bytes written.
+
     pub bytes: u64,
-    /// Contents of the file, as read back and validated.
+
     pub info: BackupInfo,
 }
 
-/// The outcome of restoring a backup.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RestoreReport {
-    /// The backup that was applied.
     pub restored_from: String,
-    /// The safety copy of the previous library, when one was written.
-    ///
-    /// `None` for an in-memory library, which has nothing on disk to preserve.
+
     pub previous_saved_to: Option<String>,
-    /// What the library holds now.
+
     pub info: BackupInfo,
 }
 
 impl Library {
-    /// Writes a consistent copy of the whole library to `path`.
-    ///
-    /// The copy is made to a temporary file in the destination directory and
-    /// renamed into place only once it is complete and stamped, so an interrupted
-    /// backup never leaves a truncated file where a valid one used to be, and a
-    /// failure never leaves a half-written file at the destination at all.
     pub fn backup_to(&self, path: impl AsRef<Path>) -> Result<BackupReport> {
         let destination = absolute(path.as_ref(), "backup")?;
         if let Some(live) = &self.path
@@ -142,11 +101,8 @@ impl Library {
         }
         let staging = staging_path(&destination)?;
 
-        // A leftover staging file would make SQLite refuse to write; it is ours
-        // and is not the user's data, so removing it is safe.
         let _ = std::fs::remove_file(&staging);
 
-        // Scoped so the connection borrow ends before the file is moved.
         let outcome = (|| -> Result<()> {
             let connection = self.connection();
             connection.execute("VACUUM INTO ?1", [staging.to_string_lossy().to_string()])?;
@@ -172,17 +128,10 @@ impl Library {
         })
     }
 
-    /// Validates a backup file without changing anything.
     pub fn inspect_backup(path: impl AsRef<Path>) -> Result<BackupInfo> {
         inspect(path.as_ref())
     }
 
-    /// Replaces this library's contents with a validated backup.
-    ///
-    /// The previous library is copied aside first, so this is reversible. Nothing
-    /// is read from the backup until it has passed validation, and nothing is
-    /// written until the copy is in place — the whole replacement is one
-    /// transaction, so a failure at any point leaves the library as it was.
     pub fn restore_from(&self, path: impl AsRef<Path>) -> Result<RestoreReport> {
         let source = path.as_ref();
         if let Some(live) = &self.path
@@ -205,15 +154,13 @@ impl Library {
         };
 
         let mut connection = self.connection();
-        // SQLite refuses `DETACH` inside a transaction, so the attachment is
-        // opened and closed around the copy rather than inside it.
+
         connection.execute(
             "ATTACH DATABASE ?1 AS backup",
             [source.to_string_lossy().to_string()],
         )?;
         let outcome = replace_contents(&mut connection);
-        // Best-effort detach: a failure to detach must not hide the copy's own
-        // error, and the attachment dies with the connection regardless.
+
         let _ = connection.execute_batch("DETACH DATABASE backup;");
         outcome?;
         drop(connection);
@@ -225,27 +172,18 @@ impl Library {
         })
     }
 
-    /// Where this library lives on disk, if it is not an in-memory one.
     pub fn path(&self) -> Option<PathBuf> {
         self.path.clone()
     }
 }
 
-/// Empties every table and refills it from the `backup` attachment.
-///
-/// One transaction, with foreign keys deferred to the commit: the constraints are
-/// then checked against the library as a whole instead of at each intermediate
-/// step, which is the only way a partial refill could pass at all. If anything
-/// fails the transaction rolls back and the previous library is untouched.
 fn replace_contents(connection: &mut Connection) -> Result<()> {
     let tx = connection.transaction()?;
     tx.execute_batch("PRAGMA defer_foreign_keys = ON;")?;
     for table in TABLES.iter().rev() {
         tx.execute(&format!("DELETE FROM main.{table}"), [])?;
     }
-    // A backup written before a table existed simply has no rows for it, and a
-    // restore must not fail over artwork it never had. The tables the file does
-    // hold are read, and the rest keep the empty state the delete above left.
+
     let present: std::collections::HashSet<String> = {
         let mut statement =
             tx.prepare("SELECT name FROM backup.sqlite_master WHERE type = 'table'")?;
@@ -261,15 +199,13 @@ fn replace_contents(connection: &mut Connection) -> Result<()> {
             [],
         )?;
     }
-    // The stamp describes the backup file, not this library. Copying it across
-    // would leave the live database claiming to be a backup of itself.
+
     tx.execute("DELETE FROM main.settings WHERE key = ?1", [FORMAT_KEY])?;
     tx.execute("DELETE FROM main.settings WHERE key = ?1", [CREATED_KEY])?;
     tx.commit()?;
     Ok(())
 }
 
-/// Stamps a freshly written backup with its format and creation time.
 fn stamp(path: &Path) -> Result<()> {
     let connection = Connection::open(path)?;
     connection.execute_batch(&format!(
@@ -282,7 +218,6 @@ fn stamp(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Reads and validates a backup file.
 fn inspect(path: &Path) -> Result<BackupInfo> {
     if !path.is_absolute() {
         return Err(CoreError::library(
@@ -297,17 +232,12 @@ fn inspect(path: &Path) -> Result<BackupInfo> {
         ));
     }
 
-    // Read-only, so validation can never modify the file it is checking.
     let connection = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(|_| unreadable())?;
 
-    // SQLite opens an arbitrary file lazily, so a file that is not a database at
-    // all is only discovered at the first read. Both cases are the same problem
-    // for the user — this file cannot be restored from — so both report the same
-    // recoverable code rather than leaking a raw database error.
     let integrity: String = connection
         .query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0))
         .map_err(|_| unreadable())?;
@@ -357,12 +287,10 @@ fn inspect(path: &Path) -> Result<BackupInfo> {
     })
 }
 
-/// The one refusal for a file that cannot be read as a Screenroom backup.
 fn unreadable() -> CoreError {
     CoreError::library("backup_unreadable", "That file is not a Screenroom backup.")
 }
 
-/// Reads one setting from an arbitrary connection.
 fn setting(connection: &Connection, key: &str) -> Option<String> {
     connection
         .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
@@ -373,9 +301,7 @@ fn setting(connection: &Connection, key: &str) -> Option<String> {
         .flatten()
 }
 
-/// Counts rows in a table.
 fn count(connection: &Connection, table: &str) -> Result<i64> {
-    // `table` is one of the fixed names in `TABLES`, never user input.
     Ok(
         connection.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
             row.get(0)
@@ -383,7 +309,6 @@ fn count(connection: &Connection, table: &str) -> Result<i64> {
     )
 }
 
-/// Requires an absolute path, because a backup's location must be unambiguous.
 fn absolute(path: &Path, what: &'static str) -> Result<PathBuf> {
     if !path.is_absolute() {
         return Err(CoreError::library(
@@ -400,10 +325,6 @@ fn absolute(path: &Path, what: &'static str) -> Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
-/// A unique staging path beside the destination, on the same filesystem.
-///
-/// Same directory so the final move is a rename rather than a copy, which is what
-/// makes the replacement atomic.
 fn staging_path(destination: &Path) -> Result<PathBuf> {
     let parent = destination.parent().ok_or_else(|| {
         CoreError::library("invalid_backup_path", "Choose an absolute backup path.")
@@ -415,7 +336,6 @@ fn staging_path(destination: &Path) -> Result<PathBuf> {
     Ok(parent.join(format!(".{name}.{}.partial", new_id())))
 }
 
-/// The path a pre-restore safety copy is written to.
 fn safety_path(library: &Path) -> PathBuf {
     let name = library
         .file_name()
@@ -424,11 +344,6 @@ fn safety_path(library: &Path) -> PathBuf {
     library.with_file_name(format!("{name}.{}.before-restore", new_id()))
 }
 
-/// True when both paths name the same file on disk.
-///
-/// Compared after canonicalisation, so `./library.db` and `/tmp/library.db` are
-/// recognised as the same file; the fallback covers a path that does not exist
-/// yet, where canonicalisation cannot help.
 fn same_file(left: &Path, right: &Path) -> bool {
     match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
         (Ok(left), Ok(right)) => left == right,

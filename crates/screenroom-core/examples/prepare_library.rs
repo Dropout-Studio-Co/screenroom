@@ -1,18 +1,3 @@
-//! Prepares a Screenroom library for development and verification.
-//!
-//! The desktop app has no "add a folder" screen yet (M3), so this example is how
-//! a developer — or an automated check — grants a media root, runs the real
-//! scanner and prints what the library now holds. It uses only the public core
-//! API and never modifies anything under the media root.
-//!
-//! ```bash
-//! cargo run -p screenroom-core --example prepare_library -- \
-//!     "$HOME/Library/Application Support/Screenroom/library.db" ./media [label]
-//! ```
-//!
-//! Re-running is safe: an existing source with the same canonical root is
-//! reused and rescanned instead of being added twice.
-
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -43,9 +28,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("database: {}", database);
     println!("source:   {} ({})", source.label, source.root_path);
 
-    // A just-written fixture is younger than the production settle window, so the
-    // window is disabled here on purpose: this is a development tool, and a file
-    // it refuses to import would look like a scanner bug.
     let scanner = LibraryScanner::new(&library).with_limits(250_000, 64, Duration::ZERO);
     let token = ScanToken::new();
     let summary = scanner.scan(&source.id, &token, |_| {})?;
@@ -99,7 +81,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Reuses the source for `root` when it already exists, otherwise grants it.
 fn ensure_source(
     library: &Library,
     root: &Path,

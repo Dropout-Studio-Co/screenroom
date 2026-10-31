@@ -18,5 +18,5 @@ rusqlite.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-# Tests build a forward-version database to prove the fail-closed migration path.
+
 rusqlite.workspace = true

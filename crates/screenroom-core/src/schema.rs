@@ -1,11 +1,3 @@
-//! SQLite physical schema.
-//!
-//! The DDL and the `user_version` value intentionally match the library layout
-//! the Flutter candidate wrote, so a library already on a device can be opened
-//! and migrated forward instead of being reset. Index and constraint names are
-//! part of that compatibility surface: do not reorder or rename them casually.
-
-/// Statements executed when creating a fresh library.
 pub const CREATE: &[&str] = &[
     "CREATE TABLE sources(id TEXT PRIMARY KEY,label TEXT NOT NULL,root_path TEXT NOT NULL DEFAULT '',
       state TEXT NOT NULL DEFAULT 'disconnected',last_scan_ms INTEGER)",
@@ -80,30 +72,15 @@ pub const CREATE: &[&str] = &[
       mime TEXT NOT NULL DEFAULT 'image/jpeg',width INTEGER NOT NULL CHECK(width>0),
       height INTEGER NOT NULL CHECK(height>0),sampled_at_ms INTEGER NOT NULL CHECK(sampled_at_ms>=0),
       created_ms INTEGER NOT NULL,bytes BLOB NOT NULL)",
-    // The join columns below. Without them every work-to-file join is a scan of
-    // the child table: `known_genres` runs on each Browse refresh, and on ten
-    // thousand entries it took 44.2 s against 13.7 ms with these indexes
-    // (`docs/IMPLEMENTATION_STATUS.md`, "The catalogue facet stall").
+
     "CREATE INDEX IF NOT EXISTS editions_work ON editions(work_id)",
     "CREATE INDEX IF NOT EXISTS files_edition ON files(edition_id)",
     "CREATE INDEX IF NOT EXISTS file_episodes_episode ON file_episodes(episode_id)",
     "CREATE INDEX IF NOT EXISTS markers_edition ON markers(edition_id,kind)",
 ];
 
-/// Statements that take a schema 2 library to schema 3.
-///
-/// Additive only: the artwork table is new, and no existing table or index is
-/// rewritten, so a library written before posters were retained keeps every row
-/// and simply gains the new table. Fresh libraries get the same statement from
-/// [`CREATE`], which is why it is spelled once here.
 pub const MIGRATE_2_TO_3: &[&str] = &[CREATE[CREATE.len() - 5]];
 
-/// Statements that take a schema 3 library to schema 4.
-///
-/// Indexes only: nothing is rewritten and no row moves, so this is safe on a
-/// library that is already open in another build. They are spelled with
-/// `IF NOT EXISTS` so a batch that is somehow applied twice — a schema 2 library
-/// takes the 2→3 and 3→4 steps together — cannot fail on its own leftovers.
 pub const MIGRATE_3_TO_4: &[&str] = &[
     CREATE[CREATE.len() - 4],
     CREATE[CREATE.len() - 3],

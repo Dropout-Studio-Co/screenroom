@@ -1,22 +1,5 @@
 #!/usr/bin/env bash
-# Captures the Screenroom desktop window to a PNG on macOS.
-#
-# The capture is addressed by window number, never by a screen rectangle: a
-# rectangle records whatever is on top of it, which on a multi-display desktop can
-# be a different application entirely. Raising the window first is best-effort, so
-# an occluded window still resolves; if it stays occluded the capture may show the
-# occluding window, which is why callers look at what they captured.
-#
-#   scripts/capture-window.sh .artifacts/evidence/player.png
-#   SCREENROOM_PROCESS=other scripts/capture-window.sh out.png
-#
-# The capture itself is passive — it reads one window's own pixels and takes no
-# focus. The *raise* below does activate the application, so it only happens when
-# `SCREENROOM_ALLOW_FOREGROUND=1` is set; without it the helper still captures,
-# and simply cannot reach a window that is sitting on another Space.
-#
-# The helper is compiled once into target/devtools (Git-ignored) and reused.
-# Requires Screen Recording permission for the invoking terminal.
+
 set -euo pipefail
 
 out="${1:?usage: capture-window.sh <output.png>}"
@@ -30,9 +13,6 @@ if [ ! -x "$binary" ] || [ "$source_file" -nt "$binary" ]; then
   xcrun swiftc -O -swift-version 5 -o "$binary" "$source_file" >/dev/null
 fi
 
-# Best-effort raise, and only with permission: a failure here is not fatal, because
-# the capture is by window number. It only makes the captured content current and
-# un-occluded, and it is the one part of this helper that can move the desktop.
 if [ "${SCREENROOM_ALLOW_FOREGROUND:-0}" = "1" ]; then
   osascript >/dev/null 2>&1 <<APPLESCRIPT || true
 tell application "System Events"
@@ -57,7 +37,5 @@ if [ -z "$window_number" ]; then
   exit 1
 fi
 
-# `-l <number>` captures that window's own pixels, so no other application can
-# appear in an evidence file even if the window moves or the region overlaps one.
 screencapture -x -o -l"$window_number" "$out"
 printf 'captured window %s of %s -> %s\n' "$window_number" "$process" "$out"

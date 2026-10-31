@@ -1,13 +1,3 @@
-//! Poster extraction: one frame from a file the library already holds.
-//!
-//! Three rules shape this module. Artwork is **local** — the only source is media
-//! on this machine, so nothing here can leave a library undrawable offline. It is
-//! **bounded** — one frame per work, a wall-clock deadline per run, a hard cap on
-//! the bytes accepted, and a small queue, so a corrupt file cannot stall the
-//! application. And it is **off the UI thread** — ffmpeg is a child process, and
-//! the frame it returns is handed back through a channel the update loop polls,
-//! exactly like the scanner.
-
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -17,43 +7,27 @@ use std::time::{Duration, Instant};
 
 use screenroom_core::{ArtworkCandidate, Library};
 
-/// Widest poster kept, in pixels. Cards are a few hundred points wide at most.
 const POSTER_WIDTH: u32 = 400;
 
-/// Most bytes one extraction may return.
 const MAX_POSTER_BYTES: usize = 768 * 1024;
 
-/// How long one ffmpeg run gets before it is killed.
-///
-/// A damaged container can make a demuxer spin; the deadline converts that from a
-/// hung application into a work whose artwork is simply missing.
 const EXTRACT_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Extractions queued at once. Bounded so a library of thousands cannot queue
-/// thousands of child processes, and so the queue's cost is known up front.
 const QUEUE_DEPTH: usize = 16;
 
-/// A frame ready to be stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Poster {
-    /// Encoded JPEG bytes.
     pub bytes: Vec<u8>,
-    /// Pixel width of the stored image.
+
     pub width: i64,
-    /// Pixel height of the stored image.
+
     pub height: i64,
-    /// Position in the file the frame was taken from.
+
     pub sampled_at_ms: i64,
-    /// Whether this is the file's own embedded cover rather than a film frame.
+
     pub cover: bool,
 }
 
-/// Where in a file to look for a representative frame.
-///
-/// Ten percent in is past a title card and before the establishing shots that
-/// often open on black. A file whose length is not known yet is sampled two
-/// minutes in, which is where a film is playing in almost every case, and a short
-/// clip is sampled at its midpoint so it is not sampled past its own end.
 pub fn sample_position_ms(duration_ms: i64) -> i64 {
     if duration_ms <= 0 {
         return 120_000;
@@ -61,13 +35,6 @@ pub fn sample_position_ms(duration_ms: i64) -> i64 {
     (duration_ms / 10).clamp(1_000, 900_000)
 }
 
-/// Where a media tool is run from.
-///
-/// An application opened from the Dock or Finder inherits launchd's `PATH`
-/// (`/usr/bin:/bin:/usr/sbin:/sbin`), which holds no ffmpeg, so a bare name
-/// worked from a terminal and failed in the installed bundle. `PATH` is still
-/// searched first; Homebrew's two prefixes are the fallback. Only absolute
-/// directories are considered, so the working directory can never supply a tool.
 pub fn tool(name: &str) -> PathBuf {
     tool_in(name, &std::env::var_os("PATH").unwrap_or_default())
 }
@@ -84,12 +51,6 @@ fn tool_in(name: &str, path: &std::ffi::OsStr) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(name))
 }
 
-/// The command one extraction runs.
-///
-/// Arguments are passed as separate values, never through a shell, so a filename
-/// containing spaces, quotes or `;` is just a filename. `-nostdin` stops ffmpeg
-/// from consuming the application's input, and the frame is written to stdout so
-/// no temporary file has to be created or cleaned up.
 pub fn command_for(path: &Path, at_ms: i64) -> Command {
     let mut command = Command::new(tool("ffmpeg"));
     command
@@ -117,11 +78,6 @@ pub fn command_for(path: &Path, at_ms: i64) -> Command {
     command
 }
 
-/// The command that reads a file's embedded cover image.
-///
-/// `stream` is the absolute stream index ffprobe reported with the
-/// `attached_pic` disposition. The image is scaled like a sampled frame, so a
-/// cover is stored under the same size and byte limits as any other poster.
 pub fn cover_command_for(path: &Path, stream: u32) -> Command {
     let mut command = Command::new(tool("ffmpeg"));
     command
@@ -147,7 +103,6 @@ pub fn cover_command_for(path: &Path, stream: u32) -> Command {
     command
 }
 
-/// Reads a file's embedded cover image as a poster.
 pub fn extract_cover(path: &Path, stream: u32) -> Result<Poster, String> {
     let bytes = capture(
         cover_command_for(path, stream),
@@ -165,12 +120,6 @@ pub fn extract_cover(path: &Path, stream: u32) -> Result<Poster, String> {
     })
 }
 
-/// The best poster a file can give: its own cover image, else a sampled frame.
-///
-/// The container is probed first. A probed duration is stored, so the runtime
-/// appears on the card before the first play and the frame is sampled at a real
-/// ten percent instead of a two-minute guess. A cover that fails to decode falls
-/// back to a frame rather than leaving the work without a poster.
 pub fn best_poster(library: &Library, candidate: &ArtworkCandidate) -> Result<Poster, String> {
     let mut duration_ms = candidate.duration_ms;
     let mut cover = None;
@@ -191,11 +140,6 @@ pub fn best_poster(library: &Library, candidate: &ArtworkCandidate) -> Result<Po
     extract_poster(&candidate.path, sample_position_ms(duration_ms))
 }
 
-/// Extracts one frame, falling back to the start of the file.
-///
-/// The fallback matters for a file whose stored duration is wrong: a seek past
-/// the end produces no frame at all, and the opening of the film is still a
-/// truthful picture of what the file contains.
 pub fn extract_poster(path: &Path, at_ms: i64) -> Result<Poster, String> {
     let mut last_reason = String::new();
     for attempt in [at_ms, 0] {
@@ -218,7 +162,6 @@ pub fn extract_poster(path: &Path, at_ms: i64) -> Result<Poster, String> {
     Err(last_reason)
 }
 
-/// Runs one ffmpeg invocation under a deadline.
 fn run(path: &Path, at_ms: i64) -> Result<Vec<u8>, String> {
     capture(
         command_for(path, at_ms),
@@ -227,19 +170,12 @@ fn run(path: &Path, at_ms: i64) -> Result<Vec<u8>, String> {
     )
 }
 
-/// Runs a media tool under a deadline, returning at most `cap` bytes of stdout.
-///
-/// Shared by the frame extractor and the container probe: both read untrusted
-/// files, so both get the same wall clock, the same output cap and the same
-/// guarantee that a stalled child is killed and reaped rather than left behind.
 pub(crate) fn capture(mut command: Command, cap: usize, what: &str) -> Result<Vec<u8>, String> {
     let program = command.get_program().to_string_lossy().to_string();
     let mut child = command
         .spawn()
         .map_err(|error| format!("{program} could not be started: {error}"))?;
 
-    // The reader is its own thread so a full pipe buffer can never deadlock the
-    // deadline, and it stops reading at the cap rather than at end of file.
     let stdout = child.stdout.take();
     let reader = std::thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -283,26 +219,19 @@ pub(crate) fn capture(mut command: Command, cap: usize, what: &str) -> Result<Ve
     }
 }
 
-/// Width and height of a JPEG, read from its start-of-frame header.
-///
-/// Only what is needed to record the size is parsed; the image itself is decoded
-/// by the widget that draws it, so a full decoder here would be a second, unused
-/// one.
 pub fn jpeg_dimensions(bytes: &[u8]) -> Option<(i64, i64)> {
     if !bytes.starts_with(&[0xFF, 0xD8]) {
         return None;
     }
     let mut index = 2;
-    // Five bytes of header plus two of dimensions are read from the frame marker,
-    // so a segment starting at the last possible position must still fit.
+
     while index + 8 < bytes.len() {
         if bytes[index] != 0xFF {
             index += 1;
             continue;
         }
         let marker = bytes[index + 1];
-        // Start of frame markers carry the dimensions; C4, C8 and CC are not
-        // frames despite sitting in the same range.
+
         if (0xC0..=0xCF).contains(&marker) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
             let height = u16::from_be_bytes([bytes[index + 5], bytes[index + 6]]) as i64;
             let width = u16::from_be_bytes([bytes[index + 7], bytes[index + 8]]) as i64;
@@ -317,40 +246,23 @@ pub fn jpeg_dimensions(bytes: &[u8]) -> Option<(i64, i64)> {
     None
 }
 
-/// Something the extraction worker reports back to the update loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArtworkEvent {
-    /// Artwork was extracted and stored.
-    Stored {
-        /// Work the image belongs to.
-        work_id: String,
-    },
-    /// Artwork could not be produced; the card keeps its title-only face.
-    Failed {
-        /// Work the image was meant for.
-        work_id: String,
-        /// Why, in words a viewer could act on.
-        reason: String,
-    },
+    Stored { work_id: String },
+
+    Failed { work_id: String, reason: String },
 }
 
-/// One queued extraction.
 struct Job {
     candidate: ArtworkCandidate,
 }
 
-/// The background poster extractor.
-///
-/// Dropping it closes the request channel, which ends the worker thread once the
-/// extraction in flight returns, so quitting during extraction cannot leave a
-/// thread writing into a closed database.
 pub struct Extractor {
     requests: SyncSender<Job>,
     events: Receiver<ArtworkEvent>,
 }
 
 impl Extractor {
-    /// Starts a worker that stores what it extracts into `library`.
     pub fn spawn(library: Arc<Library>) -> Self {
         let (requests, queue) = sync_channel::<Job>(QUEUE_DEPTH);
         let (sender, events) = channel::<ArtworkEvent>();
@@ -388,11 +300,6 @@ impl Extractor {
         Self { requests, events }
     }
 
-    /// Queues one extraction, reporting whether it was accepted.
-    ///
-    /// A full queue is not an error: the work is simply offered again the next
-    /// time its screen is drawn, which spreads a large library's extraction over
-    /// several visits instead of one long pause.
     pub fn request(&self, candidate: ArtworkCandidate) -> bool {
         match self.requests.try_send(Job { candidate }) {
             Ok(()) => true,
@@ -400,7 +307,6 @@ impl Extractor {
         }
     }
 
-    /// Collects everything the worker has reported since the last poll.
     pub fn poll(&self) -> Vec<ArtworkEvent> {
         self.events.try_iter().collect()
     }
@@ -413,7 +319,7 @@ mod tests {
     #[test]
     fn a_sample_position_is_inside_the_file_and_never_at_its_start() {
         assert_eq!(sample_position_ms(0), 120_000);
-        // A one-second clip is sampled at its midpoint rather than past its end.
+
         assert_eq!(sample_position_ms(1_000), 1_000);
         assert_eq!(sample_position_ms(600_000), 60_000);
         assert_eq!(sample_position_ms(10_800_000), 900_000);
@@ -431,13 +337,12 @@ mod tests {
         assert!(args.contains(&"65.000".to_string()));
         assert!(args.contains(&"1".to_string()));
         assert_eq!(args.last().map(String::as_str), Some("pipe:1"));
-        // No shell is involved, so the semicolon in the name stays a character.
+
         assert!(command.get_program().to_string_lossy().ends_with("ffmpeg"));
     }
 
     #[test]
     fn a_tool_is_found_outside_a_minimal_launch_path() {
-        // The PATH a Dock launch gets; Homebrew's ffmpeg is never in it.
         let launchd = std::ffi::OsStr::new("/usr/bin:/bin:/usr/sbin:/sbin");
         let homebrew = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
             .into_iter()
@@ -448,7 +353,7 @@ mod tests {
             Some(expected) => assert_eq!(found, expected),
             None => assert_eq!(found, PathBuf::from("ffmpeg")),
         }
-        // A tool on PATH wins over the Homebrew fallback, in PATH order.
+
         let directory = tempfile::TempDir::new().expect("temp dir");
         let planted = directory.path().join("ffmpeg");
         std::fs::write(&planted, b"").expect("planted tool");

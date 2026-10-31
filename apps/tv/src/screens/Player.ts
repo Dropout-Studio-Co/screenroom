@@ -1,27 +1,3 @@
-/**
- * Player: one file, on the TV's own decoder.
- *
- * The screen draws and translates key presses; everything about *which* decoder is open
- * and when a position is worth writing lives in `app/player.ts`. That split is what
- * keeps this file about layout instead of about session bookkeeping.
- *
- * Four behaviours are worth knowing before reading on:
- *
- * * the overlay is hidden until the first key press, so playback never begins behind a
- *   caption nobody asked for;
- * * **Up or Down opens the track menu** — audio tracks, the subtitle switch and the
- *   subtitle tracks, in one flat list, which is the same flat index the grids use;
- * * the preferences stored on this device are applied when a file becomes ready, and a
- *   choice made in the menu is remembered for the next file;
- * * a finished episode offers the next one only when the catalogue holds exactly one
- *   candidate one number up. A gap is never skipped, because skipping is how somebody
- *   watches the second half of a story without knowing they missed the first.
- *
- * Leaving always tears the decoder down in the platform's order — the runtime does that
- * in `end()`, and it is called from `destroy` so it happens however the user leaves,
- * including by pressing Back on the remote.
- */
-
 import Blits from '@lightningjs/blits'
 
 import { formatPosition, progressFraction } from '../core/browse.ts'
@@ -40,27 +16,16 @@ import { items, library, saveSettings, settings } from '../app/runtime.ts'
 import * as player from '../app/player.ts'
 import { pathExists, fileUri } from '../platform/media-roots.ts'
 
-/** How far the arrow keys seek, in milliseconds. */
 const SEEK_STEP_MS = 10_000
 
-/** How far the rewind and fast-forward keys jump, in milliseconds. */
 const JUMP_MS = 60_000
 
-/** How long the overlay stays up after the last key press. */
 const OVERLAY_MS = 4_000
 
-/** How far the scrim darkens the film while the overlay is up. */
 const SCRIM_ALPHA = 0.55
 
-/**
- * How far it darkens when the message must stay.
- *
- * A failure is not an overlay that fades: if the file will not play, the sentence saying
- * so has to remain until the owner leaves the screen.
- */
 const SCRIM_ALPHA_STUCK = 0.8
 
-/** One row of the drawn menu. */
 interface MenuRow extends PlayerMenuRow {
   readonly y: number
   readonly fill: string
@@ -70,14 +35,6 @@ interface MenuRow extends PlayerMenuRow {
   readonly detailY: number
 }
 
-/**
- * The subtitle file sitting beside a video, or `null`.
- *
- * Only the four extensions Samsung's own player parses are looked for
- * (`core/tracks.ts`), the stem comes from the catalogued name rather than from a guess,
- * and the result is the platform location of the first file that actually exists. A
- * missing sidecar is not an error: most files do not have one.
- */
 function findSidecar(absolute: string, relativePath: string): string | null {
   const stem = subtitleStem(relativePath)
   if (stem === null) {
@@ -94,7 +51,6 @@ function findSidecar(absolute: string, relativePath: string): string | null {
   return null
 }
 
-/** The last component of a location, for a "subtitles from …" line. */
 function fileName(location: string): string {
   const slash = location.lastIndexOf('/')
   return slash < 0 ? location : location.slice(slash + 1)
@@ -103,7 +59,7 @@ function fileName(location: string): string {
 export default Blits.Component('Player', {
   props: {
     id: { required: true },
-    /** True when the user asked to start over, which clears the saved position. */
+
     fromStart: { default: false },
   },
   template: `
@@ -263,17 +219,17 @@ export default Blits.Component('Player', {
       title: '',
       status: '',
       footer: '▲▼ controls · OK selects · ◄ ► ten seconds · Back stops',
-      /** Kept so the readout can fall back to the catalogued duration. */
+
       durationMs: 0,
       overlayAlpha: 0,
       scrimAlpha: 0,
       overlayTimer: null as ReturnType<typeof setTimeout> | null,
-      /** Software subtitle text, drawn by this app when the decoder hands it over. */
+
       subtitleLine: '',
       subtitleX: 160,
       subtitleY: 1080 - Math.round(TOKENS.spacing.shellPad + TOKENS.type.body * 16),
       subtitleWidth: 1600,
-      /** The track menu. */
+
       menuOpen: false,
       menuRows: [] as MenuRow[],
       menuIndex: 0,
@@ -288,19 +244,19 @@ export default Blits.Component('Player', {
       menuMarkX: 0,
       menuRowHeight: 0,
       menuLabelOffset: 0,
-      /** What the decoder currently has selected, as this screen last set it. */
+
       audioIndex: null as number | null,
       textIndex: null as number | null,
       silent: false,
-      /** The item being played, which is not the route's id once the next episode runs. */
+
       currentId: '',
-      /** The verified next episode, or empty. */
+
       nextId: '',
       nextLabel: '',
       finished: false,
-      /** True when nothing reached the decoder, so the menu offers no transport rows. */
+
       failed: false,
-      /** What happened to a subtitle file beside the video. */
+
       sidecarNote: '',
     }
   },
@@ -331,18 +287,11 @@ export default Blits.Component('Player', {
       this.open()
     },
     destroy() {
-      // However the user leaves — Back, a route change, the app closing — the decoder
-      // is closed and the final position is written.
+
       player.end()
     },
   },
-  /**
-   * The remote keys, as the engine names them.
-   *
-   * Back is handled here rather than left to the router, because a Back press must
-   * close the track menu before it leaves the file — a menu that swallowed the exit
-   * would be as wrong as an exit that lost the menu.
-   */
+
   input: {
     enter() {
       this.enter()
@@ -389,12 +338,12 @@ export default Blits.Component('Player', {
     },
   },
   methods: {
-    /** The item on screen, from the store rather than from the route. */
+
     currentItem(): LibraryItem | null {
       const id = this.currentId === '' ? routeString(this.id) : this.currentId
       return items().find((candidate) => candidate.id === id) ?? null
     },
-    /** The callbacks a session reports through. */
+
     events() {
       return {
         onReady: () => {
@@ -433,7 +382,7 @@ export default Blits.Component('Player', {
         },
       }
     },
-    /** Resolves the route's file and hands it to the decoder. */
+
     open() {
       const wantedId = routeString(this.id)
       const item = items().find((candidate) => candidate.id === wantedId)
@@ -445,13 +394,7 @@ export default Blits.Component('Player', {
       const startMs = routeBoolean(this.fromStart, false) ? 0 : item.positionMs
       this.start(item, startMs)
     },
-    /**
-     * Opens one item at a position.
-     *
-     * Used both by the route and by the next episode, so the two paths cannot drift
-     * apart: a next episode that skipped the path validation would be a way to open a
-     * file this app would otherwise refuse.
-     */
+
     start(item: LibraryItem, startMs: number) {
       this.title = item.title
       this.currentId = item.id
@@ -480,8 +423,7 @@ export default Blits.Component('Player', {
         )
         return
       }
-      // The stored path is relative and is never trusted as-is: `resolveLocator` refuses
-      // anything that would escape the granted root.
+
       const absolute = resolveLocator(source.rootPath, item.relativePath)
       if (absolute === null) {
         this.reportFailure("This file's stored path is not safe to open, so it was not opened.")
@@ -498,13 +440,7 @@ export default Blits.Component('Player', {
       player.begin(item, resolved.uri, startMs, this.events(), { subtitleFile: sidecar })
       this.repaint()
     },
-    /**
-     * Applies this device's preferences to the tracks the decoder just reported.
-     *
-     * Nothing is selected that the owner did not ask for: an empty preference leaves the
-     * decoder's own default in place, and a preference with no matching track selects
-     * nothing rather than falling back to the first track in the file.
-     */
+
     applyPreferences() {
       const prefs: DeviceSettings = settings()
       const choice = chooseTracks(player.tracks(), {
@@ -524,13 +460,12 @@ export default Blits.Component('Player', {
           return
         }
       }
-      // Subtitles off, or a preference with no track to satisfy it. The platform's own
-      // switch is the only way to express "off" that the decoder honours.
+
       if (player.setSubtitlesSilent(true)) {
         this.silent = true
       }
     },
-    /** Rebuilds the readable part of the overlay. */
+
     repaint() {
       const current = player.view()
       this.durationMs = current.durationMs > 0 ? current.durationMs : this.durationMs
@@ -546,7 +481,7 @@ export default Blits.Component('Player', {
     playingLabel(): string {
       return player.view().paused ? 'Paused.' : 'Playing.'
     },
-    /** Raises the overlay and arms its own timeout. */
+
     showOverlay() {
       this.overlayAlpha = 1
       this.scrimAlpha = SCRIM_ALPHA
@@ -559,13 +494,7 @@ export default Blits.Component('Player', {
         this.overlayTimer = null
       }, OVERLAY_MS)
     },
-    /**
-     * Says why nothing is playing, and keeps saying it.
-     *
-     * Every failure path on this screen goes through here, so a file that will not open
-     * is explained rather than leaving the owner looking at a black set. The message
-     * stays until they leave — there is nothing for them to press that would fix it.
-     */
+
     reportFailure(message: string) {
       if (this.overlayTimer !== null) {
         this.$clearTimeout(this.overlayTimer)
@@ -574,8 +503,7 @@ export default Blits.Component('Player', {
       this.status = message
       this.overlayAlpha = 1
       this.scrimAlpha = SCRIM_ALPHA_STUCK
-      // Nothing is running, so the track menu drops its transport rows: see
-      // `core/player-menu.ts`.
+
       this.failed = true
     },
     playPause() {
@@ -634,7 +562,7 @@ export default Blits.Component('Player', {
       }
       this.showOverlay()
     },
-    /** Up opens the menu, or moves inside it. */
+
     up() {
       if (this.menuOpen) {
         this.moveMenu(-1)
@@ -642,7 +570,7 @@ export default Blits.Component('Player', {
       }
       this.openMenu()
     },
-    /** Down opens the menu, or moves inside it. */
+
     down() {
       if (this.menuOpen) {
         this.moveMenu(1)
@@ -650,7 +578,7 @@ export default Blits.Component('Player', {
       }
       this.openMenu()
     },
-    /** Enter: a menu row, the next episode, or play/pause. */
+
     enter() {
       if (this.menuOpen) {
         this.chooseMenuRow()
@@ -662,17 +590,10 @@ export default Blits.Component('Player', {
       }
       this.playPause()
     },
-    /**
-     * Builds and shows the track menu.
-     *
-     * A file whose decoder reports no tracks gets no menu at all, rather than an empty
-     * panel: a control that opens onto nothing is a control that looks broken.
-     */
+
     openMenu() {
       const tracks: readonly TrackChoice[] = player.tracks()
-      // The menu always has rows now: the three controls and the way out exist for every
-      // file, whether or not the decoder reported a single track. A control that opens
-      // onto nothing was the old behaviour, and it looked like a broken key.
+
       const rows = buildPlayerMenu({
         tracks,
         state: {
@@ -686,8 +607,7 @@ export default Blits.Component('Player', {
         nextLabel: this.nextLabel,
       })
       const layout = this.layout
-      // The cursor is clamped *before* the rows are built, so a menu that shrank since
-      // last time cannot start with nothing highlighted.
+
       this.menuIndex = Math.min(this.menuIndex, rows.length - 1)
       this.menuTitle = this.title
       this.menuX = layout.menuX
@@ -715,12 +635,11 @@ export default Blits.Component('Player', {
       })
       this.menuHeight =
         layout.titleBlock + rows.length * layout.rowGap + Math.round(TOKENS.spacing.shellPad * 0.5)
-      // The menu is a key press, so it brings the overlay with it: the title above the
-      // panel is what tells the owner which file these tracks belong to.
+
       this.showOverlay()
       this.menuOpen = true
     },
-    /** Moves the menu cursor, clamped to the list. */
+
     moveMenu(delta: number) {
       if (this.menuRows.length === 0) {
         return
@@ -746,15 +665,7 @@ export default Blits.Component('Player', {
       this.menuOpen = false
       this.showOverlay()
     },
-    /**
-     * Applies the highlighted row.
-     *
-     * The three cases are the three things the menu can do, and each remembers what the
-     * owner chose: an audio language, a subtitle language (which also turns subtitles
-     * on), or subtitles off. The menu closes either way, and a refusal is *shown*
-     * rather than swallowed — a decoder that will not switch tracks is a fact about the
-     * file, not a key press to ignore.
-     */
+
     chooseMenuRow() {
       const row = this.menuRows[this.menuIndex]
       if (row === undefined) {
@@ -825,14 +736,7 @@ export default Blits.Component('Player', {
       this.closeMenu()
       this.status = `Subtitles: ${track.label}.`
     },
-    /**
-     * What happens when the file ends.
-     *
-     * The position is written as finished first, so the resume point is cleared before
-     * anything else can touch it. Then one verified next episode is offered — offered,
-     * not started: a television that jumps to the next file by itself is a television
-     * that decides for someone who may have got up.
-     */
+
     onEnded() {
       player.checkpoint(true)
       this.finished = true
@@ -856,7 +760,7 @@ export default Blits.Component('Player', {
       this.showOverlay()
       this.repaint()
     },
-    /** Opens the offered next episode from the beginning. */
+
     playNext() {
       const next = items().find((item) => item.id === this.nextId)
       if (next === undefined) {

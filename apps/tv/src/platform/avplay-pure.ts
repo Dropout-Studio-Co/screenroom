@@ -1,22 +1,5 @@
-/**
- * The two pieces of AVPlay handling that are arithmetic, kept away from the platform.
- *
- * Both of these are places where the published samples are wrong, which is exactly why
- * they are pure functions with tests rather than a few lines buried in a callback:
- *
- * 1. **`setDisplayRect` is in a fixed 1920×1080 space.** The TV scales it, whatever
- *    the app's own resolution is, so a rect computed in app pixels lands in the wrong
- *    place — or off-screen entirely — unless it is converted first.
- * 2. **`getTotalTrackInfo()` needs per-entry reading.** The guide's own sample reads
- *    `totalTrackInfo.type` where it means `totalTrackInfo[i].type`, so it inspects
- *    the array rather than the track, finds nothing, and reports an empty menu.
- *
- * Nothing here touches the platform, so both rules are verifiable on a laptop.
- */
-
 import type { TrackChoice } from '../core/tracks.ts'
 
-/** A rectangle in the app's own coordinate space. */
 export interface Rect {
   readonly x: number
   readonly y: number
@@ -24,27 +7,14 @@ export interface Rect {
   readonly height: number
 }
 
-/** The viewport AVPlay measures against: always 1920×1080, on every TV. */
 export const AVPLAY_SPACE_WIDTH = 1920
 export const AVPLAY_SPACE_HEIGHT = 1080
 
-/** The app's own drawing surface, as the host reports it. */
 export interface Viewport {
   readonly width: number
   readonly height: number
 }
 
-/**
- * Converts an app-space rectangle into AVPlay's 1920×1080 space.
- *
- * The conversion is uniform on both axes, because the app is authored at 1920×1080
- * and the host scales the whole surface: scaling x and y by different factors would
- * be right only if the app were letterboxed, which it is not.
- *
- * A degenerate viewport (zero or non-finite) falls back to the app's authored size,
- * so a measurement taken before layout cannot produce a rect of `NaN` or `Infinity`
- * and hand it to the decoder.
- */
 export function toDisplayRect(rect: Rect, viewport: Viewport): Rect {
   const usableWidth =
     Number.isFinite(viewport.width) && viewport.width > 0 ? viewport.width : AVPLAY_SPACE_WIDTH
@@ -64,25 +34,10 @@ export function toDisplayRect(rect: Rect, viewport: Viewport): Rect {
   }
 }
 
-// The track shape belongs to the domain, not to AVPlay: the menu, the preference rule
-// and the next-episode rule all speak it, and only this file knows how the decoder
-// spells it. Re-exported so callers that already reach for it here keep working.
 export type { TrackChoice } from '../core/tracks.ts'
 
-/** The track types this app offers a menu for. */
 export const SELECTABLE_TRACK_TYPES = ['AUDIO', 'TEXT'] as const
 
-/**
- * Reads `getTotalTrackInfo()` into the app's own shape.
- *
- * Entries are read one at a time, and an entry that is not a usable object with a
- * numeric index is skipped rather than crashing the menu — the array comes straight
- * from a decoder, and a malformed entry in it must not take the player down.
- *
- * `extra_info` is a JSON *string* and is documented as optional, so it is parsed
- * defensively: an unparseable string leaves the language unknown, which the label
- * then says honestly instead of inventing one.
- */
 export function readTracks(raw: unknown): TrackChoice[] {
   if (!Array.isArray(raw)) {
     return []
@@ -109,7 +64,6 @@ export function readTracks(raw: unknown): TrackChoice[] {
   return tracks
 }
 
-/** The language out of an `extra_info` string, or `null` when it cannot be read. */
 function readLanguage(extraInfo: unknown): string | null {
   if (typeof extraInfo !== 'string' || extraInfo.length === 0) {
     return null
@@ -130,5 +84,3 @@ function readLanguage(extraInfo: unknown): string | null {
   }
 }
 
-// Grouping and menu-building live in `core/tracks.ts`, where they are pure and tested
-// without a decoder. This file owns only the part that reads the platform's own shape.

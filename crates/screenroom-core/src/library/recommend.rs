@@ -1,31 +1,14 @@
-//! Local recommendations: suggestions the library can stand behind.
-//!
-//! Every suggestion names its reason, and the reason is something the library
-//! actually knows — the next episode after the one in progress, a title on the
-//! viewer's own watchlist, another work in a genre they have already started.
-//! There is no model, no network call and no invented "because you liked"
-//! elsewhere: a row either points at media on this machine or it is not offered.
-
 use std::collections::HashSet;
 
 use super::{Library, LibraryQuery, Sort};
 use crate::domain::{LibraryItem, MediaKind, Recommendation};
 use crate::error::Result;
 
-/// Most suggestions one call returns.
 pub const MAX_RECOMMENDATIONS: i64 = 60;
 
-/// How many in-progress works are inspected for their next episode.
 const IN_PROGRESS_SAMPLE: i64 = 10;
 
 impl Library {
-    /// Suggestions for one profile, best first, deduplicated by work.
-    ///
-    /// One work appears at most once: a series that has eight unwatched episodes
-    /// must not fill the shelf with eight rows. The order is the order of
-    /// usefulness — the next episode of something already started, then the
-    /// viewer's own watchlist, then more of a genre they are watching, then what
-    /// was added most recently.
     pub fn recommendations(&self, profile_id: &str, limit: i64) -> Result<Vec<Recommendation>> {
         let limit = limit.clamp(1, MAX_RECOMMENDATIONS) as usize;
         let mut out: Vec<Recommendation> = Vec::new();
@@ -34,11 +17,6 @@ impl Library {
 
         let in_progress = self.continue_watching(profile_id, IN_PROGRESS_SAMPLE)?;
 
-        // 1. The next episode of a series already being watched. This is the one
-        // suggestion that needs no guessing: the library knows the order. An
-        // episode that was just finished counts as "already being watched" — that
-        // is exactly when the next one is wanted — so the recently completed list
-        // is consulted too, after the ones still in progress.
         let mut starters = in_progress.clone();
         starters.extend(self.items(&LibraryQuery {
             profile_id: Some(profile_id.to_string()),
@@ -65,7 +43,6 @@ impl Library {
         }
         seen_works.extend(in_progress.iter().map(|item| item.work_id.clone()));
 
-        // 2. What the viewer themselves put aside for later.
         self.offer(
             &mut out,
             &mut seen_works,
@@ -83,9 +60,6 @@ impl Library {
             "On your watchlist",
         )?;
 
-        // 3. More of a genre already in progress. Only genres the library holds
-        // are considered, and only two of them, so one dominant genre cannot
-        // own the whole shelf.
         let mut genres: Vec<String> = Vec::new();
         for item in &in_progress {
             for genre in &item.genres {
@@ -113,7 +87,6 @@ impl Library {
             )?;
         }
 
-        // 4. Recently added, which is the honest fallback for a new library.
         self.offer(
             &mut out,
             &mut seen_works,
@@ -134,7 +107,6 @@ impl Library {
         Ok(out)
     }
 
-    /// Runs one query and appends results that name a work not yet offered.
     #[allow(clippy::too_many_arguments)]
     fn offer(
         &self,
@@ -151,7 +123,6 @@ impl Library {
     }
 }
 
-/// Appends one suggestion unless its work or file was already offered.
 fn push(
     out: &mut Vec<Recommendation>,
     seen_works: &mut HashSet<String>,
@@ -200,8 +171,6 @@ mod tests {
             .expect("ingest")
     }
 
-    /// Writes a genre onto a work, standing in for metadata the library would
-    /// otherwise have no way to know about a synthetic file.
     fn set_genres(library: &Library, work_id: &str, genres: &[&str]) {
         let json = format!(
             "[{}]",
@@ -238,8 +207,6 @@ mod tests {
             .expect("items")[0]
             .clone();
 
-        // Watched through the ordinary session path, so the suggestion is based
-        // on the same state the UI shows.
         let session = library.start_session(&profile, &first.id).expect("session");
         library
             .checkpoint(crate::Checkpoint {
@@ -257,7 +224,6 @@ mod tests {
         assert_eq!(suggestions[0].reason, "Next episode of Show");
         assert_eq!(suggestions[0].item.episode, Some(2));
 
-        // No work is offered twice, whatever the reason.
         let works: HashSet<&str> = suggestions
             .iter()
             .map(|suggestion| suggestion.item.work_id.as_str())

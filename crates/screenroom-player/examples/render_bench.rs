@@ -1,33 +1,3 @@
-//! Measures the decode → render → frame path, and how long a command takes.
-//!
-//! ```bash
-//! cargo run --release -p screenroom-player --example render_bench
-//! cargo run --release -p screenroom-player --example render_bench -- 1920x1080
-//! ```
-//!
-//! This exists because the interesting question — can this machine keep a 1080p
-//! file moving — was previously only answerable by opening a window and looking at
-//! it. The player renders through libmpv's render API into CPU memory, so the real
-//! pipeline runs with no window, no GPU surface and no display: this example is
-//! therefore part of the background-first tier, not a substitute for it.
-//!
-//! What it reports:
-//!
-//! * **time to first frame** — load to the first non-blank decoded frame.
-//! * **sustained delivery** — distinct frames per second over a sampling window,
-//!   and the worst gap between two of them. Frames are counted by libmpv's own
-//!   monotonic `generation`, so a repeated snapshot cannot inflate the rate.
-//! * **command latency** — the round trip from issuing a seek to the snapshot
-//!   reporting the new playhead, which is the player's half of input latency.
-//!
-//! What it deliberately does **not** claim: this is not an on-screen frame rate.
-//! The iced window, the wgpu upload and the compositor add cost this measurement
-//! cannot see, so a number here is a ceiling on what the display can reach, not a
-//! substitute for looking at the real window (see `docs/TEST_PLAN.md`).
-//!
-//! It synthesises its own fixture with FFmpeg, so it needs no user media and never
-//! touches anything outside a temporary directory.
-
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::process::Command;
@@ -67,7 +37,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let player = Player::start()?;
 
-    // --- time to first frame ------------------------------------------------
     let started = Instant::now();
     player.load(&path);
     let mut first_frame = None;
@@ -96,9 +65,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("time to first frame: {first_after_load:?}");
 
-    // --- sustained delivery -------------------------------------------------
-    // Sampled as fast as the handle allows. The generation counter means a
-    // repeated read is free of optimism: only a genuinely new frame counts.
     let sample_for = Duration::from_secs_f64((seconds - 1.0).max(3.0));
     let sampling_started = Instant::now();
     let mut seen: HashSet<u64> = HashSet::new();
@@ -147,15 +113,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("last avsync:         {avsync:+.4}s");
     }
 
-    // --- command latency ----------------------------------------------------
-    // The player's half of input latency: issue a seek, wait until the snapshot
-    // reports a playhead *at* the target. The interface's half lives in the window
-    // and is deliberately measured elsewhere.
-    //
-    // The condition has to be "arrived at the target", not "is past the target":
-    // the first attempt at this measured sub-microsecond times because a playhead
-    // already beyond the target satisfied a `>=` test before the seek took effect.
-    // A seek backwards from the current position cannot pass the check below early.
     println!();
     println!("command latency (seek, round trip to the playhead arriving):");
     for target in [2.0_f64, 5.0, 1.0] {
@@ -166,9 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut observed = None;
         while Instant::now() < deadline {
             let position = player.snapshot().position;
-            // Near the target, and genuinely moved there: the tolerance is half a
-            // second so an ordinary frame of drift does not fail the check, and
-            // `before` guards against the pre-seek playhead satisfying it.
+
             if (position - target).abs() < 0.5 && (before - position).abs() > 0.5 {
                 observed = Some(issued.elapsed());
                 break;
@@ -191,7 +146,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Parses `WIDTHxHEIGHT` into dimensions.
 fn parse_size(value: &str) -> Result<(u32, u32), Box<dyn std::error::Error>> {
     let (width, height) = value
         .split_once(['x', 'X'])
@@ -204,11 +158,6 @@ fn parse_size(value: &str) -> Result<(u32, u32), Box<dyn std::error::Error>> {
     Ok((width, height))
 }
 
-/// Builds a clip that exercises the software decode path at the requested size.
-///
-/// The content is a moving test pattern rather than a still frame: a still image
-/// would let the decoder skip work it would really do for a moving picture, which
-/// is exactly the cost this example is trying to measure.
 fn fixture(
     directory: &TempDir,
     width: u32,

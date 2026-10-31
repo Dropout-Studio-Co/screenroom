@@ -1,163 +1,117 @@
-//! The Dropout Design System adapter for iced.
-//!
-//! ## Why this shape
-//!
-//! The private Dropout Studio Design System is a Svelte component library with a
-//! DTCG token source. Its components cannot run in iced, so what transfers is its
-//! **semantic token layer and interaction rules**. This module is the single place
-//! in the desktop app that knows those semantics: widgets ask for a *role*
-//! (`Level::Panel`, `action_button(focused)`), never for a hex value.
-//!
-//! ## Privacy
-//!
-//! The token *values* are private and must never be committed:
-//!
-//! * `examples/export_ds_tokens.rs` reads the pinned `tokens.json` from the private
-//!   sibling checkout and writes `src/design/ds_pinned.rs` (Git-ignored).
-//! * `build.rs` sets `screenroom_ds_pinned` only when that file exists.
-//! * Without it — a fresh clone of the public repository — this module compiles
-//!   against [`NEUTRAL`], a deliberately unbranded placeholder palette that is
-//!   **not** the design system's look and must not be shipped as a final theme.
-//!
-//! [`provenance`] reports which of the two is in use so the app can say so plainly.
-
 use iced::border::Radius;
 use iced::widget::{button, container, text_input};
 use iced::{Background, Border, Color, Shadow, Theme};
 
-/// The design system defines its scale in `rem`; iced works in pixels.
 const ROOT_PX: f32 = 16.0;
 
-/// Builds a colour from sRGB components.
 pub const fn color(r: f32, g: f32, b: f32, a: f32) -> Color {
     Color { r, g, b, a }
 }
 
-/// Semantic surface and ink roles the app composes with.
-///
-/// Every field is a role, not a raw colour name, so a platform adapter can
-/// re-map the same role without a widget knowing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Palette {
-    /// The page ground. Black-first per the design system.
     pub background: Color,
-    /// First raised surface: rail cards, list rows.
+
     pub surface1: Color,
-    /// Second level: hover, inset panels.
+
     pub surface2: Color,
-    /// Third level: pressed, selected.
+
     pub surface3: Color,
-    /// Text on `background` and the surfaces.
+
     pub foreground: Color,
-    /// Secondary text that must still pass contrast on `background`.
+
     pub ink_muted: Color,
-    /// The one action accent.
+
     pub signal: Color,
-    /// Text on `signal`.
+
     pub signal_foreground: Color,
-    /// Fill used for focus, in place of any ring or outline.
+
     pub focus_surface: Color,
-    /// Text on `focus_surface`.
+
     pub focus_foreground: Color,
-    /// Destructive action fill.
+
     pub destructive: Color,
-    /// Text on `destructive`.
+
     pub destructive_foreground: Color,
-    /// Low-contrast hairline for separators between large regions.
+
     pub hair: Color,
-    /// Text for something unavailable.
+
     pub disabled_foreground: Color,
 }
 
-/// The design system's type scale, in pixels.
 #[derive(Debug, Clone, Copy)]
 pub struct TypeScale {
-    /// Smallest label.
     pub micro: f32,
-    /// Metadata under a title.
+
     pub caption: f32,
-    /// Control and field labels.
+
     pub label: f32,
-    /// Body copy.
+
     pub body: f32,
-    /// Slightly larger body.
+
     pub body_lg: f32,
-    /// Introductory paragraph.
+
     pub lead: f32,
-    /// Card and section heading.
+
     pub subtitle: f32,
-    /// Small screen title.
+
     pub title_sm: f32,
-    /// Screen title.
+
     pub title: f32,
-    /// Large screen title.
+
     pub title_lg: f32,
 }
 
-/// Corner radii, in pixels. `full` is a pill.
 #[derive(Debug, Clone, Copy)]
 pub struct RadiusScale {
-    /// Chips and small choices.
     pub small: f32,
-    /// Inputs and buttons.
+
     pub control: f32,
-    /// Cards and panels.
+
     pub surface: f32,
-    /// Overlays and dialogs.
+
     pub overlay: f32,
-    /// Pill.
+
     pub full: f32,
 }
 
-/// Minimum interactive heights, in pixels.
 #[derive(Debug, Clone, Copy)]
 pub struct ControlScale {
-    /// Compact control.
     pub sm: f32,
-    /// Default control.
+
     pub md: f32,
-    /// Prominent control.
+
     pub lg: f32,
 }
 
-/// Spacing roles. The design system names spacing by purpose, not by a numeric
-/// ramp, so the app reuses those roles instead of inventing new steps.
 #[derive(Debug, Clone, Copy)]
 pub struct Spacing {
-    /// Outer padding of a screen shell.
     pub shell_pad: f32,
-    /// Padding inside a content panel.
+
     pub content_pad: f32,
-    /// Gap between major sections.
+
     pub section: f32,
-    /// Horizontal padding inside a field or button.
+
     pub field_x: f32,
-    /// Vertical padding inside a field or button.
+
     pub field_y: f32,
 }
 
-/// The complete resolved token set.
 #[derive(Debug, Clone, Copy)]
 pub struct Tokens {
-    /// Colour roles.
     pub palette: Palette,
-    /// Type scale.
+
     pub type_scale: TypeScale,
-    /// Radii.
+
     pub radius: RadiusScale,
-    /// Control heights.
+
     pub control: ControlScale,
-    /// Spacing roles.
+
     pub spacing: Spacing,
-    /// Where these values came from; shown to the user, never guessed.
+
     pub provenance: &'static str,
 }
 
-/// Placeholder tokens used when the private design-system pin is absent.
-///
-/// These are plain neutral greys chosen to keep the app legible, **not** the
-/// design system's palette. A build that shows this provenance is not visually
-/// complete and must not be presented as a finished Screenroom theme.
 pub const NEUTRAL: Tokens = Tokens {
     palette: Palette {
         background: color(0.07, 0.07, 0.08, 1.0),
@@ -213,7 +167,6 @@ pub const NEUTRAL: Tokens = Tokens {
 #[path = "ds_pinned.rs"]
 mod pinned;
 
-/// The token set this build uses.
 pub fn tokens() -> &'static Tokens {
     #[cfg(screenroom_ds_pinned)]
     {
@@ -225,26 +178,22 @@ pub fn tokens() -> &'static Tokens {
     }
 }
 
-/// Where the active tokens came from, for an honest status line in the UI.
 pub fn provenance() -> &'static str {
     tokens().provenance
 }
 
-/// How raised a container is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
-    /// The page ground.
     Page,
-    /// A card or list row.
+
     Panel,
-    /// A pressed or selected card.
+
     Raised,
-    /// An overlay panel above the page.
+
     Overlay,
 }
 
 impl Level {
-    /// The role's rest fill.
     fn fill(self) -> Color {
         let palette = &tokens().palette;
         match self {
@@ -256,10 +205,6 @@ impl Level {
     }
 }
 
-/// A container style for `level`, or the focus fill when `focused`.
-///
-/// The design system forbids borders, outlines and rings on its own controls, so
-/// focus is a *fill* change and it lands immediately: no transition, no glow.
 pub fn container_style(level: Level, focused: bool) -> container::Style {
     let palette = &tokens().palette;
     container::Style {
@@ -279,19 +224,15 @@ pub fn container_style(level: Level, focused: bool) -> container::Style {
             radius: tokens().radius.surface.into(),
         },
         shadow: Shadow::default(),
-        // Keep card edges on device pixels; a half-pixel surface reads as a blurry
-        // edge on a 2x display.
+
         snap: true,
     }
 }
 
-/// A flat page container that fills its area.
 pub fn page_style() -> container::Style {
     container_style(Level::Page, false)
 }
 
-/// A card or row: rest fill, a stronger fill on hover, and the focus fill when
-/// the keyboard cursor is on it.
 pub fn tile_style(focused: bool) -> impl Fn(&Theme, button::Status) -> button::Style + 'static {
     move |_theme, status| {
         let palette = &tokens().palette;
@@ -316,7 +257,6 @@ pub fn tile_style(focused: bool) -> impl Fn(&Theme, button::Status) -> button::S
     }
 }
 
-/// The action button: the accent fill at rest, the focus fill when focused.
 pub fn action_style(focused: bool) -> impl Fn(&Theme, button::Status) -> button::Style + 'static {
     move |_theme, status| {
         let palette = &tokens().palette;
@@ -342,7 +282,6 @@ pub fn action_style(focused: bool) -> impl Fn(&Theme, button::Status) -> button:
     }
 }
 
-/// A low-emphasis button: surface fill, no border, focus fill when focused.
 pub fn quiet_style(focused: bool) -> impl Fn(&Theme, button::Status) -> button::Style + 'static {
     move |_theme, status| {
         let palette = &tokens().palette;
@@ -368,7 +307,6 @@ pub fn quiet_style(focused: bool) -> impl Fn(&Theme, button::Status) -> button::
     }
 }
 
-/// A destructive action: the danger role, focus fill when focused.
 pub fn danger_style(focused: bool) -> impl Fn(&Theme, button::Status) -> button::Style + 'static {
     move |_theme, status| {
         let palette = &tokens().palette;
@@ -391,7 +329,6 @@ pub fn danger_style(focused: bool) -> impl Fn(&Theme, button::Status) -> button:
     }
 }
 
-/// The search field: `surfaceInput` fill, no ring, focus fill on focus.
 pub fn input_style() -> impl Fn(&Theme, text_input::Status) -> text_input::Style + 'static {
     move |_theme, status| {
         let palette = &tokens().palette;
@@ -415,18 +352,14 @@ pub fn input_style() -> impl Fn(&Theme, text_input::Status) -> text_input::Style
     }
 }
 
-/// A 1px separator colour for large regions.
 pub fn hairline() -> Color {
     tokens().palette.hair
 }
 
-/// Rounds `value` to a radius, for ad-hoc containers.
 pub fn radius_surface() -> Radius {
     tokens().radius.surface.into()
 }
 
-/// An iced theme derived from the same roles, so built-in widgets (slider,
-/// checkbox, scrollbar) match the surfaces instead of fighting them.
 pub fn theme() -> Theme {
     let palette = &tokens().palette;
     Theme::custom(
@@ -437,8 +370,7 @@ pub fn theme() -> Theme {
             primary: palette.signal,
             success: palette.focus_surface,
             danger: palette.destructive,
-            // The design system defines no warning role; it uses `signal` for
-            // emphasis, so the same role stands in rather than inventing a hue.
+
             warning: palette.signal,
         },
     )
@@ -475,8 +407,6 @@ mod tests {
 
     #[test]
     fn focus_is_never_the_rest_fill() {
-        // The design system replaced rings with a fill change; a focus style that
-        // equals the rest style would leave the keyboard cursor invisible.
         let palette = &tokens().palette;
         assert_ne!(palette.focus_surface, palette.surface1);
         assert_ne!(palette.focus_foreground, palette.foreground);

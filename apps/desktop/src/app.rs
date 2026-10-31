@@ -1,18 +1,3 @@
-//! The desktop application: Home, Browse, Detail and the player.
-//!
-//! What this layer is responsible for, and what it is not:
-//!
-//! * the rules — paging bounds, literal search, progress ordering, session
-//!   generations — live in `screenroom-core`; this module decides *when* to ask,
-//! * it shows the frame the player published, and nothing it did not publish,
-//! * it reports playback failures with the player's own message instead of
-//!   leaving an empty black area,
-//! * it never invents media: an unavailable file is described as unavailable and
-//!   offered a recovery path.
-//!
-//! Visual roles come from [`crate::design`], which maps the private Dropout
-//! Design System's semantic tokens onto iced. No colour literal lives here.
-
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -40,86 +25,38 @@ use crate::playback::PlaybackTracker;
 use crate::probe::{DurationPass, spawn_duration_pass};
 use crate::video_surface::{Frame, VideoSurface};
 
-/// How often the player is polled for frames and position.
 const PLAYER_TICK: Duration = Duration::from_millis(16);
 
-/// How often status (scan progress) is polled when no player is open.
 const STATUS_TICK: Duration = Duration::from_millis(250);
 
-/// The window width assumed until a real resize event arrives.
-///
-/// Matches the initial `window_size` below, so the first frame lays out the same way
-/// the second one will.
 const INITIAL_WINDOW_WIDTH: f32 = 1280.0;
 
-/// Rows a page is built from, so a page stays bounded and the query cheap.
-///
-/// This is the *paging* unit and deliberately does not follow the window: a page is
-/// a fixed 24 items however wide the window is, which is what keeps the measured
-/// query budget (see `IMPLEMENTATION_STATUS.md`) valid. Only the visual column count
-/// adapts, and a page that does not fill its last row is padded rather than
-/// re-queried.
 const PAGE_ROWS: usize = 6;
 
-/// Items per page.
 const PAGE_SIZE: i64 = (DEFAULT_COLUMNS * PAGE_ROWS) as i64;
 
-/// Cards per row in an ordinary window.
-///
-/// The column count is derived from the width at runtime (see [`grid_columns`]);
-/// this is the reference point that keeps a 1280-wide window looking as it did when
-/// the count was a constant.
 const DEFAULT_COLUMNS: usize = 4;
 
-/// Continue Watching rail length.
 const RAIL: i64 = 8;
 
-/// How long a forward seek jumps.
 const SEEK_STEP: f64 = 10.0;
 
-/// Poster height on a card, in logical pixels.
-///
-/// Fixed rather than proportional so a title's text starts at the same height on
-/// every card in a row, and a poster with an unusual aspect is cropped rather
-/// than pushing its neighbours out of line.
 const CARD_POSTER_HEIGHT: f32 = 150.0;
 
-/// Poster size on the detail screen, in logical pixels.
 const DETAIL_POSTER: (f32, f32) = (210.0, 315.0);
 
-/// How many extra works are queued for artwork while a screen is idle.
-///
-/// A page's own works are always queued first; this fills the library in during
-/// the quiet moments instead of in one long burst after a scan.
 const ARTWORK_IDLE_BATCH: i64 = 4;
 
-/// Suggestions shown on Home.
 const SUGGESTIONS: i64 = 8;
 
-/// Update cycles in which a launch may try to point the menu bar's Quit at the
-/// window's close action.
-///
-/// AppKit builds the default menu bar after the application object exists, so the
-/// attempt made while starting can legitimately find no menu. A budget rather than
-/// one try: the attempt is cheap, it stops the moment it succeeds, and it gives up
-/// after a few seconds instead of every update forever.
 const QUIT_ROUTING_BUDGET: u8 = 40;
 
-/// Whether this launch should put a window on screen.
-///
-/// A hidden window still gives the process everything a check needs — the event
-/// loop, AppKit's menu bar, the database — without taking anything from whoever is
-/// using the machine. Only two things ask for one: a check launch, and
-/// `SCREENROOM_WINDOW=hidden`.
 fn hides_its_window() -> bool {
     crate::quit::check_requested()
         || std::env::var_os("SCREENROOM_WINDOW").is_some_and(|value| value == "hidden")
 }
 
-/// Starts the desktop application.
 pub fn run() -> iced::Result {
-    // Set through `window` rather than a dedicated builder method, and before
-    // `window_size`, which only replaces the size and keeps everything else.
     let window = iced::window::Settings {
         visible: !hides_its_window(),
         ..Default::default()
@@ -131,18 +68,10 @@ pub fn run() -> iced::Result {
         .subscription(App::subscription)
         .window(window)
         .window_size((1280.0, 800.0))
-        // Closing the window is not the same as the process ending: the app has to
-        // be given the chance to store the position it is at and close the viewing
-        // session before it goes away, which `exit_on_close_request` would skip.
         .exit_on_close_request(false)
         .run()
 }
 
-/// Where the library lives when `SCREENROOM_LIBRARY` is not set.
-///
-/// The app must persist progress without being told where to do it: a throwaway
-/// in-memory library would silently discard every checkpoint on quit, which is
-/// exactly the behaviour this milestone is meant to prove.
 pub fn default_library_path() -> Option<PathBuf> {
     let base = if cfg!(target_os = "windows") {
         std::env::var_os("APPDATA")
@@ -160,11 +89,6 @@ pub fn default_library_path() -> Option<PathBuf> {
     Some(base.join("Screenroom").join("library.db"))
 }
 
-/// Where a backup is written when the user has not chosen somewhere else.
-///
-/// The name is dated so a second backup cannot silently replace the first, and it
-/// sits in the same folder as the library: the library's directory is known to be
-/// writable, which a guessed Documents folder is not.
 pub fn default_backup_path() -> String {
     let Some(library) = default_library_path() else {
         return String::new();
@@ -179,29 +103,25 @@ pub fn default_backup_path() -> String {
         .to_string()
 }
 
-/// Which surface is on screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
-    /// Continue Watching and the library entry points.
     Home,
-    /// The paged, filterable library.
+
     Browse,
-    /// One work or episode, with its actions.
+
     Detail,
-    /// Video playback.
+
     Player,
-    /// Viewer, playback, folder and data settings.
+
     Settings,
 }
 
-/// The library kind filter offered in Browse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KindFilter {
-    /// Every kind.
     All,
-    /// Films only.
+
     Movies,
-    /// Series only.
+
     Series,
 }
 
@@ -212,7 +132,6 @@ impl std::fmt::Display for KindFilter {
 }
 
 impl KindFilter {
-    /// The label shown in the picker.
     fn label(self) -> &'static str {
         match self {
             Self::All => "All",
@@ -221,7 +140,6 @@ impl KindFilter {
         }
     }
 
-    /// The stored kind this filter selects, if any.
     fn kind(self) -> Option<String> {
         match self {
             Self::All => None,
@@ -231,21 +149,18 @@ impl KindFilter {
     }
 }
 
-/// The watched-state filter offered in Browse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WatchFilter {
-    /// Watched or not.
     Any,
-    /// Not yet finished by this profile.
+
     Unwatched,
-    /// Finished by this profile.
+
     Watched,
 }
 
 impl WatchFilter {
     const ALL: [Self; 3] = [Self::Any, Self::Unwatched, Self::Watched];
 
-    /// The stored state this filter selects, if any.
     fn watched(self) -> Option<bool> {
         match self {
             Self::Any => None,
@@ -265,19 +180,16 @@ impl std::fmt::Display for WatchFilter {
     }
 }
 
-/// The genre picker's entry for "no genre filter".
 const ANY_GENRE: &str = "Any genre";
 
-/// A sort choice with its menu label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortChoice {
-    /// Title A→Z.
     Title,
-    /// Newest additions first.
+
     Added,
-    /// Newest release year first.
+
     Year,
-    /// Most recently watched first.
+
     Progress,
 }
 
@@ -288,10 +200,8 @@ impl std::fmt::Display for SortChoice {
 }
 
 impl SortChoice {
-    /// Every choice, in menu order.
     const ALL: [Self; 4] = [Self::Title, Self::Added, Self::Year, Self::Progress];
 
-    /// The label shown in the picker.
     fn label(self) -> &'static str {
         match self {
             Self::Title => "Title",
@@ -301,7 +211,6 @@ impl SortChoice {
         }
     }
 
-    /// The core ordering this choice maps to.
     fn sort(self) -> Sort {
         match self {
             Self::Title => Sort::Title,
@@ -312,7 +221,6 @@ impl SortChoice {
     }
 }
 
-/// Browse screen state, including what is currently loaded.
 struct Browse {
     text: String,
     kind: KindFilter,
@@ -346,7 +254,6 @@ impl Browse {
         }
     }
 
-    /// The page count implied by the current total.
     fn page_count(&self) -> usize {
         if self.total <= 0 {
             1
@@ -355,10 +262,6 @@ impl Browse {
         }
     }
 
-    /// True when anything is narrowing the result set.
-    ///
-    /// Sort order is deliberately excluded: it reorders results but can never
-    /// remove one, so offering "change the filters" for a sort would be a dead end.
     fn narrowed(&self) -> bool {
         !self.text.trim().is_empty()
             || self.kind != KindFilter::All
@@ -370,56 +273,41 @@ impl Browse {
     }
 }
 
-/// Detail screen state for one file.
 struct Detail {
-    /// The file being shown.
     item: LibraryItem,
-    /// Sibling episodes of the same work, when it is a series.
+
     episodes: Vec<LibraryItem>,
-    /// Distinct season numbers of the work.
+
     seasons: Vec<i64>,
-    /// The screen and card the viewer came from, so Back returns to that card.
+
     origin: (Screen, usize),
 }
 
-/// The viewing session currently open, and the policy around it.
 struct Active {
     tracker: PlaybackTracker,
     file_id: String,
     title: String,
     resume_from_ms: i64,
-    /// Where Back should return to.
+
     origin: Screen,
-    /// The player load this viewing belongs to. A snapshot from any other load
-    /// is the previous file's, still in flight during autoplay or replay.
+
     load_id: u64,
-    /// The newest seek asked for; positions are stored only once it has landed.
+
     seek_serial: u64,
 }
 
-/// The next episode, waiting out its countdown after one finishes.
 struct UpNext {
     file_id: String,
     title: String,
     starts_at: std::time::Instant,
 }
 
-/// Shortest gap between two catalogue refreshes during one scan.
-///
-/// Long enough that a large folder cannot flood the database with reloads, short
-/// enough that a first run visibly fills in while the walk is still going.
 const SCAN_REFRESH_INTERVAL_MS: i64 = 500;
 
-/// How long a finished episode waits before the next one starts.
-///
-/// Long enough to read the title and reach Cancel, short enough not to feel like
-/// the app stopped. The PRD's proposed default, not a ratified number.
 const UP_NEXT_DELAY: Duration = Duration::from_secs(5);
 
-/// Progress reported by a background scan.
 #[derive(Debug)]
 enum ScanEvent {
-    /// Cumulative counters, plus whether the walk is finished.
     Progress {
         visited: u64,
         imported: u64,
@@ -427,55 +315,42 @@ enum ScanEvent {
         done: bool,
         complete: bool,
     },
-    /// The scan failed to start or aborted.
+
     Failed(String),
 }
 
-/// Application state.
 pub struct App {
     library: Arc<Library>,
-    /// Human-readable location of the open library, shown so the user can see
-    /// which database their progress is being written to.
+
     library_label: String,
     profile_id: String,
     capability: PlayerCapability,
 
     screen: Screen,
-    /// Keyboard cursor inside the current screen's item list.
+
     focus: usize,
 
     home: Vec<LibraryItem>,
-    /// Local suggestions with the reason each one was offered.
+
     suggestions: Vec<Recommendation>,
     browse: Browse,
     detail: Option<Detail>,
 
-    /// Retained posters, keyed by work. The bytes live in the library; this is
-    /// the decoded handle the image widget draws, and nothing is fetched.
     artwork: HashMap<String, image::Handle>,
-    /// Width divided by height of each retained poster.
-    ///
-    /// Kept because the Detail screen draws the poster at its own aspect ratio.
-    /// Extracted artwork is a frame from the film, which is usually wide, while a
-    /// hand-made poster is tall; a fixed 2:3 box crops one of them to a slice.
+
     artwork_aspect: HashMap<String, f32>,
-    /// Works already handed to the extractor, so one work is not queued twice.
+
     artwork_queued: HashSet<String>,
-    /// Works whose frame could not be read, so a reload does not retry forever.
+
     artwork_failed: HashSet<String>,
-    /// How many works came back without a drawable frame, shown honestly.
+
     artwork_failures: usize,
     extractor: Option<Extractor>,
-    /// The background pass that stores runtimes for files nobody has played yet.
+
     durations: Option<DurationPass>,
-    /// Held while a file is open, so the duration pass never shares the drive
-    /// with a viewing.
+
     probe_paused: Arc<AtomicBool>,
-    /// Whether this instance may run background work at all.
-    ///
-    /// A launch may: extraction is what makes the grid drawable. A test may not:
-    /// it would start ffmpeg processes and write into a fixture library, which is
-    /// a side effect no unit test should have.
+
     background_work: bool,
 
     player: Option<Player>,
@@ -483,273 +358,229 @@ pub struct App {
     frame: Option<Frame>,
     active: Option<Active>,
     scrub: Option<f64>,
-    /// Volume the viewer is dragging right now, in percent.
-    ///
-    /// Held only while a drag is in flight so the knob follows the pointer
-    /// instead of the player, whose read-back arrives a frame or two later. Cleared
-    /// on release, after which the player's own value is what is drawn.
+
     volume_drag: Option<f64>,
 
-    /// The next episode offered after this one ended, with its countdown.
     up_next: Option<UpNext>,
-    /// Intro and credits markers stored for the file now open.
+
     markers: Vec<SegmentMarker>,
-    /// A segment whose start was pinned and is waiting for its end.
+
     mark_pending: Option<(String, i64)>,
-    /// The intro marker already auto-skipped, so a seek engine that reports the
-    /// pre-seek position one more time cannot skip twice.
+
     auto_skipped: Option<String>,
 
-    /// Whether the window is in the platform's fullscreen mode.
-    ///
-    /// Tracked here rather than asked of the window every frame: the mode is set
-    /// asynchronously and may be left by the system (⌃⌘F, the green button), so
-    /// this is what the app last asked for. The chrome is hidden on the strength
-    /// of it, and a viewer who leaves fullscreen with the platform's own control
-    /// gets the chrome back on the next toggle.
     fullscreen: bool,
 
-    /// Window width in logical pixels, updated from resize events.
-    ///
-    /// Held because the grid's column count is derived from it. Kept as a plain f32
-    /// rather than a `Size` so a test can set a width without a window existing.
     window_width: f32,
 
-    /// Stored preferences, held so a per-frame tick never reads the database.
     preferences: Preferences,
 
-    /// Viewer profiles, reloaded whenever they can have changed.
     profiles: Vec<Profile>,
-    /// Authorized folders, reloaded whenever they can have changed.
+
     sources: Vec<Source>,
-    /// New-profile text field.
+
     new_profile: String,
-    /// Source chosen for relinking, and the new root typed for it.
+
     relink_target: Option<String>,
     relink_path: String,
-    /// Destination for the next backup, pre-filled with a dated default.
+
     backup_path: String,
-    /// Backup chosen for restoring, and whether the confirm step is armed.
+
     restore_path: String,
     armed_restore: Option<String>,
-    /// Language text fields, applied when submitted rather than per keystroke.
+
     subtitle_input: String,
     audio_input: String,
-    /// Folder whose removal is waiting for confirmation.
+
     armed_remove: Option<String>,
-    /// Profile whose removal is waiting for confirmation.
+
     armed_profile: Option<String>,
 
-    /// Text field for granting a new media root.
     new_root: String,
     scan_token: Option<ScanToken>,
-    /// Folders waiting for the running scan to end.
+
     pending_scans: Vec<String>,
     scan_events: Option<Receiver<ScanEvent>>,
-    /// Entries walked and files imported by the running scan, for its progress row.
+
     scan_visited: u64,
     scan_imported: u64,
-    /// When the running scan started, in Unix milliseconds.
+
     scan_started_ms: Option<i64>,
-    /// When the catalogue was last refreshed part-way through a scan.
-    ///
-    /// A scan is the slowest thing the app does on a folder it has never seen, and
-    /// waiting for it to end before drawing anything made a first run look stalled.
-    /// Zero means "refresh at the next report", which is what makes the first
-    /// cards appear as soon as the walk has imported anything.
+
     scan_refresh_ms: i64,
     status: Option<String>,
     error: Option<String>,
 
-    /// Update cycles left in which to point the menu bar's Quit at the window's
-    /// close action, and what the attempt settled on.
-    ///
-    /// Zero means this `App` will never do it. A launch starts with the full
-    /// budget; an `App` a test built starts at zero, because a test process has
-    /// no menu bar to route and AppKit must not be reached off the main thread.
     quit_routing_budget: u8,
     quit_routing: crate::quit::QuitRouting,
-    /// File a check launch was asked to report the routing outcome to.
+
     quit_check: Option<PathBuf>,
 }
 
-/// User intent.
 #[derive(Debug, Clone)]
 pub enum Message {
-    /// Navigate to Home.
     GoHome,
-    /// Navigate to the library.
+
     GoBrowse,
-    /// Go up one level.
+
     Back,
-    /// Reload every projection from the library.
+
     Refresh,
 
-    /// The search field changed.
     SearchChanged(String),
-    /// The kind filter changed.
+
     KindChanged(KindFilter),
-    /// The genre filter changed.
+
     GenreChanged(Option<String>),
-    /// Watched-state filter changed.
+
     WatchChanged(WatchFilter),
-    /// The sort order changed.
+
     SortChanged(SortChoice),
-    /// Toggle the watchlist-only filter.
+
     ToggleWatchlistOnly(bool),
-    /// Toggle the favourites-only filter.
+
     ToggleFavoritesOnly(bool),
-    /// Toggle the available-only filter.
+
     ToggleAvailableOnly(bool),
-    /// Go to the next page.
+
     NextPage,
-    /// Go to the previous page.
+
     PreviousPage,
 
-    /// Move the keyboard cursor.
     Move(Focus),
-    /// Activate the focused row or card.
+
     Activate,
-    /// Open the detail screen for a file.
+
     OpenDetail(String),
-    /// Play a file from the stored position.
+
     Play(String),
-    /// Play a file from the beginning, ignoring stored progress.
+
     Restart(String),
-    /// Toggle the favourite flag of the shown work.
+
     ToggleFavorite(String),
-    /// Toggle the watchlist flag of the shown work.
+
     ToggleWatchlist(String),
-    /// Mark the shown edition watched or unwatched.
+
     ToggleWatched(String),
-    /// Remove the shown edition from Continue Watching.
+
     HideFromContinue(String),
 
-    /// The new-root text field changed.
     NewRootChanged(String),
-    /// Grant and scan the folder in the text field.
+
     AddFolder,
-    /// Choose a folder with the platform's own dialog and add it.
+
     ChooseFolder,
-    /// Choose the new location for the folder being relinked.
+
     ChooseRelinkFolder,
-    /// Choose where a backup is written.
+
     ChooseBackupPath,
-    /// Choose a backup file to restore or inspect.
+
     ChooseRestoreFile,
-    /// Cancel a running scan.
+
     CancelScan,
-    /// Rescan one folder the library already holds.
+
     RescanSource(String),
-    /// Ask to remove a folder, or confirm that request when repeated.
+
     RemoveSource(String),
-    /// Withdraw a removal or restore confirmation.
+
     CancelArmed,
-    /// Choose the folder to relink.
+
     RelinkTargetChosen(String),
-    /// The relink path text field changed.
+
     RelinkPathChanged(String),
-    /// Point the chosen folder at the typed path and rescan it.
+
     RelinkSource,
 
-    /// Navigate to Settings.
     GoSettings,
-    /// The active profile changed.
+
     ProfileChosen(String),
-    /// The new-profile text field changed.
+
     NewProfileChanged(String),
-    /// Add the profile in the text field and switch to it.
+
     AddProfile,
-    /// Remove a profile.
+
     RemoveProfile(String),
-    /// Turn automatic next-episode playback on or off.
+
     ToggleAutoplay(bool),
-    /// Turn automatic intro skipping on or off.
+
     ToggleAutoSkip(bool),
-    /// Jump to the end of the intro or credits segment the playhead is inside.
+
     SkipSegment,
-    /// Pin the start of a segment, or finish the one already pinned.
+
     MarkSegment(String),
-    /// Store the pinned marker with its end at the playhead.
+
     FinishSegment,
-    /// Apply the typed subtitle language, or clear it when empty.
+
     ApplySubtitleLanguage,
-    /// Apply the typed audio language, or clear it when empty.
+
     ApplyAudioLanguage,
-    /// The subtitle language field changed.
+
     SubtitleLanguageChanged(String),
-    /// The audio language field changed.
+
     AudioLanguageChanged(String),
-    /// The backup destination changed.
+
     BackupPathChanged(String),
-    /// Write a backup now.
+
     BackupNow,
-    /// The restore source changed.
+
     RestorePathChanged(String),
-    /// Validate the chosen backup, then restore from it on the second press.
+
     RestoreNow,
-    /// Check a backup file and report what it holds without changing anything.
+
     InspectRestore,
-    /// Dismiss the last status line.
+
     ClearStatus,
 
-    /// Leave the player and return to the library.
     BackFromPlayer,
-    /// The window's real mode, read back after a resize.
+
     ModeChanged(iced::window::Mode),
-    /// Start the offered next episode without waiting for its countdown.
+
     PlayNextNow,
-    /// Stay on the finished episode instead of continuing the series.
+
     CancelNext,
-    /// Play, pause, or replay a finished file.
+
     TogglePlay,
-    /// The scrub control moved; nothing is committed yet.
+
     Scrub(f64),
-    /// Commit the scrubbed position.
+
     SeekCommit,
-    /// The volume control moved, in percent; the player follows immediately.
+
     Volume(f64),
-    /// The volume drag ended, so the value is stored.
+
     VolumeCommit,
-    /// Mute or unmute the output.
+
     ToggleMute,
-    /// Enter or leave the platform's fullscreen mode.
+
     ToggleFullscreen,
-    /// Seek by a fixed step, positive forwards.
+
     SeekStep(f64),
-    /// Choose a track, or turn a kind off with [`NO_TRACK`].
+
     SelectTrack(TrackKind, i64),
-    /// The window was resized to this width in logical pixels.
+
     Resized(f32),
-    /// Subtitle text size, in percent of normal, as a slider reports it.
+
     SubtitleScale(f64),
-    /// Subtitle placement, in percent of the screen height from the top.
+
     SubtitlePosition(f64),
-    /// Poll the player and the scan.
+
     Tick,
-    /// A keyboard event.
+
     Keyboard(keyboard::Event),
-    /// Quit.
+
     Close,
 }
 
-/// A direction the keyboard cursor can move.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
-    /// One card left.
     Left,
-    /// One card right.
+
     Right,
-    /// One row up.
+
     Up,
-    /// One row down.
+
     Down,
 }
 
-/// Drives the player at [`PLAYER_TICK`], and status at [`STATUS_TICK`].
-///
-/// The timer thread ends as soon as its receiver drops, so an idle Home screen
-/// does not wake the runtime sixty times a second.
 fn ticks(interval: Duration) -> Subscription<Message> {
     use iced::futures::StreamExt;
     use iced::futures::channel::mpsc;
@@ -769,23 +600,12 @@ fn ticks(interval: Duration) -> Subscription<Message> {
     })
 }
 
-/// A file's location, only if it exists and resolves inside its granted root.
-///
-/// The relative path comes from the database, which a restored backup can
-/// supply; `..` or a link inside the folder must not let playback read outside
-/// what the owner granted.
 fn contained_media_path(root: &Path, relative: &str) -> Option<PathBuf> {
     let root = std::fs::canonicalize(root).ok()?;
     let path = std::fs::canonicalize(root.join(relative)).ok()?;
     (path.starts_with(&root) && path.is_file()).then_some(path)
 }
 
-/// Whether a snapshot may be stored as this viewing's progress.
-///
-/// It must come from this viewing's own load (not the previous file during
-/// autoplay), report a position libmpv has actually reached (not the 0 it shows
-/// before the resume point lands), and postdate the newest seek, or a quit in
-/// that window would store the old place over the new one.
 fn snapshot_is_current(active: &Active, snapshot: &PlayerSnapshot) -> bool {
     snapshot.loaded
         && snapshot.position_ready
@@ -793,8 +613,6 @@ fn snapshot_is_current(active: &Active, snapshot: &PlayerSnapshot) -> bool {
         && snapshot.seek_serial >= active.seek_serial
 }
 
-/// The profile a library opens with: the stored choice while it still exists,
-/// otherwise the first profile.
 fn opening_profile(library: &Library, preferences: &Preferences) -> String {
     let profiles = library.profiles().unwrap_or_default();
     preferences
@@ -808,16 +626,11 @@ fn opening_profile(library: &Library, preferences: &Preferences) -> String {
 
 impl App {
     fn new() -> (Self, Task<Message>) {
-        // A launch is what gives the menu bar's Quit its budget to be re-pointed at
-        // the window's close action; see `route_quit` for why that happens in the
-        // update loop rather than here.
         let (mut app, task) = Self::launch();
         app.quit_routing_budget = QUIT_ROUTING_BUDGET;
         app.quit_check = crate::quit::check_path();
         app.background_work = true;
-        // The library was read while background work was still disabled, so the
-        // first screen's posters are queued here: without this, extraction would
-        // not start until the viewer happened to navigate somewhere.
+
         app.ensure_artwork();
         app.start_durations();
         (app, task)
@@ -848,26 +661,20 @@ impl App {
 
         match Library::open(&path) {
             Ok(library) => (Self::with_library(library, None, label), Task::none()),
-            Err(error) => {
-                // A library that cannot be opened is reported, not silently
-                // replaced by an empty one: the user's history is in there.
-                (
-                    Self::with_library(
-                        Library::open_in_memory().expect("in-memory library"),
-                        Some(format!("{}: {}", error.code(), error)),
-                        label,
-                    ),
-                    Task::none(),
-                )
-            }
+            Err(error) => (
+                Self::with_library(
+                    Library::open_in_memory().expect("in-memory library"),
+                    Some(format!("{}: {}", error.code(), error)),
+                    label,
+                ),
+                Task::none(),
+            ),
         }
     }
 
-    /// Builds the application around an existing library, for tests.
     pub fn with_library(library: Library, error: Option<String>, library_label: String) -> Self {
         let library = Arc::new(library);
-        // A preference read must never keep the library from opening, so an
-        // unreadable preferences row falls back to the defaults.
+
         let preferences = library.preferences().unwrap_or_default();
         let profile_id = opening_profile(&library, &preferences);
         let mut app = Self {
@@ -925,7 +732,7 @@ impl App {
             scan_refresh_ms: 0,
             status: None,
             error,
-            // Only a launch arms this; see the field's own note.
+
             quit_routing_budget: 0,
             quit_routing: crate::quit::QuitRouting::Unsupported,
             quit_check: None,
@@ -935,8 +742,6 @@ impl App {
         app
     }
 
-    /// The language fields start from what is stored, so the screen never shows
-    /// an empty box for a preference that is actually set.
     fn sync_language_inputs(&mut self) {
         self.subtitle_input = self
             .preferences
@@ -946,9 +751,6 @@ impl App {
         self.audio_input = self.preferences.audio_language.clone().unwrap_or_default();
     }
 
-    // ---------------------------------------------------------------- loading
-
-    /// Reloads every projection the current screen needs.
     fn reload(&mut self) {
         self.reload_home();
         self.reload_browse();
@@ -956,11 +758,6 @@ impl App {
         self.ensure_artwork();
     }
 
-    /// Reloads the profile and folder lists the Settings screen administers.
-    ///
-    /// Failures are reported rather than replaced by an empty list: an empty
-    /// Settings screen would suggest there are no profiles or folders, which is a
-    /// different and untrue statement.
     fn reload_administration(&mut self) {
         match self.library.profiles() {
             Ok(profiles) => self.profiles = profiles,
@@ -991,7 +788,6 @@ impl App {
         self.ensure_artwork();
     }
 
-    /// Runs the current Browse query: a count, then exactly one page of rows.
     fn reload_browse(&mut self) {
         let base = LibraryQuery {
             profile_id: Some(self.profile_id.clone()),
@@ -1000,8 +796,7 @@ impl App {
             genre: self.browse.genre.clone(),
             watched: self.browse.watch.watched(),
             available_only: self.browse.available_only,
-            // One card per film or series. Per file, a show of 149 episodes was
-            // 149 cards with the same title; its Detail lists the episodes.
+
             group_by_work: true,
             watchlist_only: self.browse.watchlist_only,
             favorites_only: self.browse.favorites_only,
@@ -1017,8 +812,6 @@ impl App {
             }
         }
 
-        // A filter that shrank the result set must not leave the viewer on a page
-        // that no longer exists.
         let pages = self.browse.page_count();
         if self.browse.page >= pages {
             self.browse.page = pages - 1;
@@ -1034,8 +827,6 @@ impl App {
         }
 
         if let Ok(genres) = self.library.known_genres() {
-            // A genre that is no longer present must not stay selected, or the
-            // library would look empty for no visible reason.
             if let Some(selected) = &self.browse.genre
                 && !genres.contains(selected)
             {
@@ -1047,12 +838,6 @@ impl App {
         self.ensure_artwork();
     }
 
-    // -------------------------------------------------------------- artwork
-
-    /// Works the current screen shows, deduplicated.
-    ///
-    /// Only these are asked for first: a grid must draw what is on it before it
-    /// spends the machine's time on works nobody is looking at.
     fn visible_work_ids(&self) -> Vec<String> {
         let mut ids: Vec<String> = Vec::new();
         let mut add = |work_id: &str| {
@@ -1078,23 +863,10 @@ impl App {
         ids
     }
 
-    /// Loads every stored poster the screen shows and queues the ones missing.
-    ///
-    /// Nothing is extracted while a file is playing: video decoding owns the GPU
-    /// and the disk, and a poster can wait — which is also the rule that keeps
-    /// watching from being interrupted by background work.
     fn ensure_artwork(&mut self) {
         self.queue_artwork(false);
     }
 
-    /// Queues posters for what is on screen, and optionally for the library.
-    ///
-    /// `visible_only` is what the poll loop uses to refill a freed queue slot: a
-    /// page of cards must not sit blank while the viewer waits, but the queue must
-    /// not turn into an idle marathon either — extracting a poster for every work
-    /// in a 309-work library is minutes of ffmpeg and disk, which is not something
-    /// to start behind the viewer's back. The rest of the library fills in a few at
-    /// a time as they navigate.
     fn queue_artwork(&mut self, visible_only: bool) {
         if self.screen == Screen::Player {
             return;
@@ -1115,9 +887,6 @@ impl App {
             match self.library.artworks_for(&missing) {
                 Ok(found) => {
                     for art in found {
-                        // The aspect is recorded whether or not the handle was new:
-                        // a poster loaded from a previous launch has to be drawn at
-                        // its own shape too, and only this path sees it.
                         if art.width > 0 && art.height > 0 {
                             self.artwork_aspect
                                 .insert(art.work_id.clone(), art.width as f32 / art.height as f32);
@@ -1142,8 +911,7 @@ impl App {
             if visible_only {
                 return;
             }
-            // Nothing on screen needs a poster, so the queue takes a few others
-            // and the library fills in while the viewer reads.
+
             candidates = match self.library.artwork_candidates(ARTWORK_IDLE_BATCH) {
                 Ok(candidates) => candidates,
                 Err(error) => return self.report(&error),
@@ -1164,15 +932,13 @@ impl App {
         };
         for candidate in candidates {
             let work_id = candidate.work_id.clone();
-            // Recorded only when the work was actually accepted: a full queue must
-            // leave the work free to be offered again rather than look queued.
+
             if extractor.request(candidate) {
                 self.artwork_queued.insert(work_id);
             }
         }
     }
 
-    /// Starts the duration pass unless one is running or background work is off.
     fn start_durations(&mut self) {
         if self.background_work && self.durations.is_none() {
             self.durations = Some(spawn_duration_pass(
@@ -1182,7 +948,6 @@ impl App {
         }
     }
 
-    /// Shows new runtimes as the pass stores them, and notes when it has ended.
     fn drain_durations(&mut self) {
         self.probe_paused
             .store(self.active.is_some(), Ordering::Relaxed);
@@ -1202,7 +967,7 @@ impl App {
         if ended {
             self.durations = None;
         }
-        // Not while a file plays: the player screen draws none of these lists.
+
         if stored && self.screen != Screen::Player {
             self.reload_home();
             self.reload_browse();
@@ -1210,12 +975,6 @@ impl App {
         }
     }
 
-    /// Takes whatever the extractor finished since the last tick.
-    ///
-    /// Returns how many events were handled. The caller uses that to refill the
-    /// queue: the queue is 16 deep and a Browse page shows more than 16 works, so
-    /// without a refill the cards past the sixteenth stayed blank until the viewer
-    /// pressed a key.
     fn drain_artwork(&mut self) -> usize {
         let Some(extractor) = &self.extractor else {
             return 0;
@@ -1243,8 +1002,7 @@ impl App {
                     self.artwork_queued.remove(&work_id);
                     self.artwork_failed.insert(work_id);
                     self.artwork_failures += 1;
-                    // Said once, not once per title: a folder of unreadable files
-                    // should not turn the footer into a scrolling list.
+
                     if self.artwork_failures == 1 {
                         self.status = Some(format!("No poster could be drawn — {reason}"));
                     }
@@ -1254,19 +1012,12 @@ impl App {
         handled
     }
 
-    /// Keeps the keyboard cursor inside the loaded page.
     fn clamp_focus(&mut self) {
         let len = self.visible_len();
         self.focus = if len == 0 { 0 } else { self.focus.min(len - 1) };
     }
 
-    /// The Home item at a cursor position: suggestions first, then progress.
-    ///
-    /// The order is the drawing order, so an index means the same card the cursor
-    /// highlights and the one Enter opens.
     fn home_item(&self, index: usize) -> Option<&LibraryItem> {
-        // The cursor runs down the screen in drawing order: Continue watching,
-        // then the suggestions below it.
         if index < self.home.len() {
             self.home.get(index)
         } else {
@@ -1276,14 +1027,11 @@ impl App {
         }
     }
 
-    /// How many items the keyboard cursor can reach on this screen.
     fn visible_len(&self) -> usize {
         match self.screen {
-            // Suggestions are reachable from the same cursor as Continue Watching,
-            // so the arrow keys cover the whole screen rather than half of it.
             Screen::Home => self.home.len() + self.suggestions.len(),
             Screen::Browse => self.browse.items.len(),
-            // Settings is a form with no grid, and the player has its own keys.
+
             Screen::Settings | Screen::Player => 0,
             Screen::Detail => self
                 .detail
@@ -1293,36 +1041,17 @@ impl App {
         }
     }
 
-    /// Records a core error with its stable code, so the message is diagnosable.
     fn report(&mut self, error: &CoreError) {
         self.error = Some(format!("{}: {}", error.code(), error));
     }
 
-    /// Points the menu bar's Quit at the window's close action, once it can.
-    ///
-    /// On macOS the Quit item AppKit installs ends the process below the event
-    /// loop, so a viewing in progress is finalised by nobody. Re-pointing it at
-    /// the action the close button performs makes the two the same operation, and
-    /// this is where that happens because the menu bar only exists once the
-    /// application has finished starting.
-    ///
-    /// Best-effort and reported, never fatal: if it never succeeds, quitting still
-    /// works — it simply cannot store the position it is at, and a user reading the
-    /// log should be able to find out that is why.
-    ///
-    /// Returns whether the process should now stop, which it does when a check
-    /// launch has its answer.
     fn route_quit(&mut self) -> bool {
-        // The budget is the whole guard. It is not enough to check whether the last
-        // outcome was graceful, because the starting value answers that before
-        // anything has been tried.
         if self.quit_routing_budget == 0 {
             return false;
         }
         let routing = crate::quit::route_quit_through_close();
         self.quit_routing = routing;
-        // Spending the budget is what stops every later update from asking the
-        // window server again, whether the answer was good or the budget ran out.
+
         let settled = if routing.is_graceful() {
             self.quit_routing_budget = 0;
             true
@@ -1340,7 +1069,6 @@ impl App {
             return false;
         }
 
-        // A check launch asked for nothing but this answer.
         let Some(path) = self.quit_check.clone() else {
             return false;
         };
@@ -1352,8 +1080,6 @@ impl App {
         }
         true
     }
-
-    // ------------------------------------------------------------ navigation
 
     fn open_detail(&mut self, file_id: &str) {
         let item = match self.library.item(file_id, Some(&self.profile_id)) {
@@ -1376,13 +1102,11 @@ impl App {
             Err(error) => return self.report(&error),
         };
 
-        // Opening one episode of a series from inside its own Detail keeps the
-        // original way back; anything else returns to the card it came from.
         let origin = match (&self.detail, self.screen) {
             (Some(detail), Screen::Detail) => detail.origin,
             _ => (self.screen, self.focus),
         };
-        // The cursor starts on the file that was opened, so Enter plays it.
+
         self.focus = episodes
             .iter()
             .position(|episode| episode.id == item.id)
@@ -1397,7 +1121,6 @@ impl App {
         self.ensure_artwork();
     }
 
-    /// Sibling episodes of a series, freshly read for the active profile.
     fn episodes_of(&self, item: &LibraryItem) -> Result<Vec<LibraryItem>, CoreError> {
         if item.kind != MediaKind::Series {
             return Ok(Vec::new());
@@ -1410,9 +1133,7 @@ impl App {
         })
     }
 
-    /// Opens a file: session first, then the player, then the resume seek.
     fn open_player(&mut self, file_id: &str, from_start: bool) {
-        // A session still open here would be replaced without its final position.
         if self.active.is_some() {
             self.finish_active();
         }
@@ -1438,8 +1159,6 @@ impl App {
             return;
         }
         let Some(path) = self.media_path(&item) else {
-            // The library still lists the file but it is gone, or the source is
-            // no longer mounted. Say so and name the recovery, do not play nothing.
             self.error = Some(format!(
                 "{} cannot be read right now; relink its source and rescan.",
                 item.filename
@@ -1464,14 +1183,12 @@ impl App {
 
         let resume = if from_start { 0 } else { opened.resume_from_ms };
         let player = self.player.as_ref().expect("player started above");
-        // Before the file, not after: these are video-output properties, so setting
-        // them first means the very first subtitle drawn is already the right size.
+
         player.set_subtitle_style(
             f64::from(self.preferences.subtitle_scale_percent) / 100.0,
             f64::from(self.preferences.subtitle_position_percent),
         );
-        // Likewise the level: a viewer who turned the last film down should not be
-        // greeted by full volume on the next one.
+
         player.set_volume(f64::from(self.preferences.volume_percent));
         let load_id = player.load_at(&path, Some(resume as f64 / 1_000.0));
         self.active = Some(Active {
@@ -1486,8 +1203,7 @@ impl App {
         self.snapshot = player.snapshot();
         self.frame = None;
         self.scrub = None;
-        // Segments are per edition, so a ruled intro does not follow the film into
-        // a different cut of it.
+
         self.markers.clear();
         self.reload_markers(&item.edition_id);
         self.mark_pending = None;
@@ -1495,18 +1211,11 @@ impl App {
         self.screen = Screen::Player;
     }
 
-    /// Absolute path of a library item, resolved through its authorized source.
     fn media_path(&self, item: &LibraryItem) -> Option<PathBuf> {
         let source = self.library.source(&item.source_id).ok()?;
         contained_media_path(Path::new(&source.root_path), &item.relative_path)
     }
 
-    /// Ends any viewing before another screen takes the window.
-    ///
-    /// The header's Home, Library and Settings buttons (and ⌘1–3) are reachable
-    /// from the player. Without this they swapped the screen while libmpv kept
-    /// playing out of sight, and the next title replaced the open session without
-    /// storing where the viewer had got to.
     fn end_viewing(&mut self) -> Task<Message> {
         if self.active.is_none() && self.screen != Screen::Player {
             return Task::none();
@@ -1518,29 +1227,24 @@ impl App {
         Task::none()
     }
 
-    /// Stores progress and closes the session, then returns to the library.
     fn leave_player(&mut self) {
         let origin = self
             .active
             .as_ref()
             .map(|active| active.origin)
             .unwrap_or(Screen::Browse);
-        // The final position is stored before the session closes, so leaving
-        // during playback never loses more than the checkpoint interval.
+
         self.stop_playback();
         self.screen = origin;
         self.reload();
         self.refresh_detail();
     }
 
-    /// Re-reads the open detail item so its progress and flags stay truthful.
     fn refresh_detail(&mut self) {
         let Some(file_id) = self.detail.as_ref().map(|detail| detail.item.id.clone()) else {
             return;
         };
         if let Ok(Some(item)) = self.library.item(&file_id, Some(&self.profile_id)) {
-            // The episode rows carry watched state and positions too; re-reading
-            // only the opened file left the rest of the list showing the old ones.
             let episodes = self.episodes_of(&item).ok();
             if let Some(detail) = self.detail.as_mut() {
                 detail.item = item;
@@ -1551,9 +1255,6 @@ impl App {
         }
     }
 
-    // -------------------------------------------------------------- playback
-
-    /// A player snapshot mid-file, for tests that need one without libmpv.
     #[cfg(test)]
     fn playing_snapshot(position: f64, duration: f64) -> PlayerSnapshot {
         PlayerSnapshot {
@@ -1566,7 +1267,6 @@ impl App {
         }
     }
 
-    /// Writes one checkpoint, reporting failures instead of hiding them.
     fn save(&mut self, active: &mut Active, snapshot: &PlayerSnapshot, ended: bool) {
         if !snapshot_is_current(active, snapshot) || snapshot.duration_ms() <= 0 {
             return;
@@ -1585,9 +1285,7 @@ impl App {
     fn poll(&mut self) {
         self.drain_scan();
         self.drain_durations();
-        // A finished extraction frees a queue slot; fill it in the same tick, or the
-        // rest of the visible page never gets a poster. Not on every tick: the
-        // refill asks the database which works still need one.
+
         if self.drain_artwork() > 0 {
             self.queue_artwork(true);
         }
@@ -1601,15 +1299,13 @@ impl App {
         }
         let ended = snapshot.ended && !self.snapshot.ended;
         self.snapshot = snapshot;
-        // Taken out of `self` so the save can borrow the library and the tracker
-        // at the same time; it goes straight back.
+
         if let Some(mut active) = self.active.take() {
             let snapshot = self.snapshot.clone();
             self.save(&mut active, &snapshot, ended);
             self.active = Some(active);
         }
-        // After the save, so the episode is stored and marked watched before the
-        // next one takes over the session.
+
         if ended {
             self.advance_to_next_episode();
         }
@@ -1620,8 +1316,7 @@ impl App {
         {
             self.play_up_next();
         }
-        // After the save, so skipping does not jump the checkpoint around, and
-        // last, so a finished file is never seeked away from its end.
+
         if !ended {
             self.maybe_auto_skip_intro();
         }
@@ -1630,18 +1325,12 @@ impl App {
     fn toggle_play(&mut self) {
         let Some(player) = &self.player else { return };
         match play_action(self.snapshot.state) {
-            // Un-pausing a finished file does nothing at all, so a replay reopens
-            // it; that also gives the new viewing its own session and generation.
             PlayAction::Replay => self.replay(),
             PlayAction::Pause => player.set_paused(true),
             PlayAction::Resume => player.set_paused(false),
         }
     }
 
-    /// Reopens the current file from the beginning and keeps the return path.
-    ///
-    /// The finished session is saved and closed first, so a replay cannot leave
-    /// an open session behind or lose the fact that the file was watched.
     fn replay(&mut self) {
         let Some(file_id) = self.active.as_ref().map(|active| active.file_id.clone()) else {
             return;
@@ -1649,21 +1338,15 @@ impl App {
         let origin = self.active.as_ref().map(|active| active.origin);
         self.finish_active();
         self.open_player(&file_id, true);
-        // `open_player` reads the origin from the screen, which is still the
-        // player here; put back where this viewing came from.
+
         if let (Some(origin), Some(active)) = (origin, self.active.as_mut()) {
             active.origin = origin;
         }
     }
 
-    /// Ends any viewing in progress: final position saved, session closed.
-    ///
-    /// Used both when the window closes and when the app quits, so the two paths
-    /// cannot disagree about what happens to an open file.
     fn stop_playback(&mut self) {
         self.up_next = None;
-        // The player's own snapshot is the newest truth; the held one is the
-        // fallback, and is what makes this path testable without a player.
+
         let snapshot = self
             .player
             .as_ref()
@@ -1683,14 +1366,7 @@ impl App {
         self.snapshot = PlayerSnapshot::default();
     }
 
-    /// Saves and closes the current viewing, stops the player, clears its state.
-    ///
-    /// Shared by replay and autoplay, which both end one viewing and start
-    /// another: the finished viewing has to be stored first in either case, and
-    /// both must leave no open session behind.
     fn finish_active(&mut self) {
-        // An offer belongs to the viewing that ended; a replay or another file must
-        // not be cut short by its countdown.
         self.up_next = None;
         if let Some(mut active) = self.active.take() {
             let snapshot = self.player.as_ref().map(|player| player.snapshot());
@@ -1709,21 +1385,6 @@ impl App {
         self.snapshot = PlayerSnapshot::default();
     }
 
-    /// Continues into the next verified episode once one finishes.
-    ///
-    /// The finished viewing is already saved and marked watched before this runs,
-    /// so finding nothing to play leaves the library correct. A gap stops the
-    /// chain rather than skipping it: `next_episode` reports `None` instead of
-    /// guessing, and that `None` is respected.
-    ///
-    /// Autoplay starts only a file that is readable right now. An unreadable next
-    /// episode leaves the finished player on screen with the reason, rather than
-    /// swapping one failure for another the viewer never asked for.
-    /// The episode that should follow `file_id`, or `None` to stop.
-    ///
-    /// Split out from the transition so the decision can be tested without a
-    /// player: the choice of what plays next is product logic, and only starting
-    /// it needs libmpv.
     fn next_episode_after(&self, file_id: &str) -> Result<Option<LibraryItem>, CoreError> {
         if !self.preferences.autoplay_next {
             return Ok(None);
@@ -1753,8 +1414,7 @@ impl App {
             ));
             return;
         }
-        // Offered, not taken: the next episode starts after a countdown the viewer
-        // can cut short or cancel, rather than the app jumping on its own.
+
         self.status = Some(format!("Finished {title}."));
         self.up_next = Some(UpNext {
             file_id: next.id,
@@ -1763,7 +1423,6 @@ impl App {
         });
     }
 
-    /// Starts the offered next episode, keeping the viewing's way back.
     fn play_up_next(&mut self) {
         let Some(next) = self.up_next.take() else {
             return;
@@ -1788,8 +1447,7 @@ impl App {
 
     fn seek_to(&mut self, seconds: f64) {
         let Some(player) = &self.player else { return };
-        // The seek generation must advance before the player reports the new
-        // position, otherwise the core would reject those checkpoints.
+
         if let Some(active) = &mut self.active
             && let Err(error) = active.tracker.seek(&self.library)
         {
@@ -1802,12 +1460,6 @@ impl App {
         }
     }
 
-    // -------------------------------------------------------- skip segments
-
-    /// The stored marker the playhead is inside, if any.
-    ///
-    /// Returned by value so the caller can seek without holding a borrow on the
-    /// marker list it is about to update.
     fn active_marker(&self) -> Option<SegmentMarker> {
         let position = self.snapshot.position_ms();
         self.markers
@@ -1816,7 +1468,6 @@ impl App {
             .cloned()
     }
 
-    /// Jumps past the segment the playhead is in.
     fn skip_segment(&mut self) {
         let Some(marker) = self.active_marker() else {
             self.status = Some("No intro or credits marker covers this position yet.".to_string());
@@ -1833,7 +1484,6 @@ impl App {
         );
     }
 
-    /// Pins a segment's start, or closes the one already pinned.
     fn toggle_segment_mark(&mut self, kind: &str) {
         if self
             .mark_pending
@@ -1860,10 +1510,6 @@ impl App {
         ));
     }
 
-    /// Stores the pinned marker, ending it at the playhead.
-    ///
-    /// The end is taken from the player rather than asked for in a field: the
-    /// position on screen is the one the viewer is describing.
     fn finish_segment_mark(&mut self) {
         let Some((kind, start_ms)) = self.mark_pending.take() else {
             return;
@@ -1903,13 +1549,11 @@ impl App {
         }
     }
 
-    /// Skips a marked intro once, when the preference asks for it.
     fn maybe_auto_skip_intro(&mut self) {
         if !self.preferences.auto_skip_intro {
             return;
         }
-        // Before the resume point lands the player reports 0, which sits inside an
-        // intro marked from 0:00; a skip then would replace the resume point.
+
         if !self
             .active
             .as_ref()
@@ -1936,14 +1580,6 @@ impl App {
         self.status = Some("Skipped the intro.".to_string());
     }
 
-    // ------------------------------------------------------------------ scan
-
-    /// The track chooser's options and current selection for one kind.
-    ///
-    /// The player is the single source of truth: the selection is read back from
-    /// the snapshot rather than remembered here, so a switch libmpv refused shows
-    /// as not having happened. Subtitles add a real "Off" entry, because turning
-    /// them off is a libmpv operation and a state the user has to be able to see.
     fn track_chooser(&self, kind: TrackKind) -> (Vec<TrackChoice>, Option<TrackChoice>) {
         let mut choices: Vec<TrackChoice> = self
             .snapshot
@@ -1966,19 +1602,10 @@ impl App {
             .iter()
             .find(|choice| in_use == Some(choice.id))
             .cloned()
-            // Subtitles default to "Off" rather than to an empty control, so the
-            // row always states what is happening.
             .or_else(|| choices.first().cloned());
         (choices, selected)
     }
 
-    // -------------------------------------------------------------- settings
-
-    /// Switches the active viewer profile.
-    ///
-    /// The switch is not a display change: progress, lists and Continue Watching
-    /// are projected for one profile, so every screen is reloaded from the new
-    /// profile rather than reusing what the previous one was showing.
     fn choose_profile(&mut self, profile_id: String) {
         if !self.profiles.iter().any(|profile| profile.id == profile_id) {
             self.error = Some("That profile is no longer in the library.".to_string());
@@ -1987,8 +1614,7 @@ impl App {
         self.profile_id = profile_id.clone();
         self.focus = 0;
         self.detail = None;
-        // The library is stored as the profile to open with, so the choice
-        // survives a restart instead of resetting to the first profile.
+
         let preferences = Preferences {
             default_profile: Some(profile_id),
             ..self.preferences.clone()
@@ -1997,7 +1623,6 @@ impl App {
         self.reload();
     }
 
-    /// Adds the profile in the text field and makes it the active one.
     fn add_profile(&mut self) {
         let name = self.new_profile.trim().to_string();
         if name.is_empty() {
@@ -2015,11 +1640,6 @@ impl App {
         }
     }
 
-    /// Removes a profile and everything it watched, on the second press.
-    ///
-    /// It deletes a viewer's whole history, so it asks twice like removing a
-    /// folder or restoring a backup. The last profile is refused by the store
-    /// straight away, so that refusal needs no confirmation.
     fn remove_profile(&mut self, profile_id: String) {
         let name = self
             .profiles
@@ -2042,8 +1662,7 @@ impl App {
         if removed_active {
             self.profile_id = opening_profile(&self.library, &Preferences::default());
         }
-        // A stored default pointing at the removed profile would fail the next
-        // preference save; any other stored choice is the viewer's and is kept.
+
         if removed_active
             || self.preferences.default_profile.as_deref() == Some(profile_id.as_str())
         {
@@ -2057,22 +1676,13 @@ impl App {
         self.reload();
     }
 
-    /// Stores the whole preference set, keeping the in-memory copy in step.
     fn save_preferences(&mut self, preferences: Preferences) {
         match self.library.set_preferences(&preferences) {
-            // An unrelated error (a failed scan, say) stays until it is dismissed;
-            // a volume or toggle save is not an answer to it.
             Ok(()) => self.preferences = preferences,
             Err(error) => self.report(&error),
         }
     }
 
-    /// How loud the output is, as the volume control should draw it.
-    ///
-    /// The drag wins while it is in flight so the knob follows the pointer; then
-    /// the player's own read-back, so the control shows what is really happening;
-    /// then the stored preference, because a player that has not reported `volume`
-    /// yet must still start at the viewer's setting rather than at an empty control.
     fn volume_percent(&self) -> f64 {
         self.volume_drag
             .or(self.snapshot.volume)
@@ -2080,10 +1690,6 @@ impl App {
             .clamp(0.0, 100.0)
     }
 
-    /// Sends a dragged volume to the player without storing it yet.
-    ///
-    /// Storing on every step of a drag would write the database on each pixel of
-    /// travel; the value is stored once, when the drag ends.
     fn drag_volume(&mut self, percent: f64) {
         if !percent.is_finite() {
             return;
@@ -2095,7 +1701,6 @@ impl App {
         }
     }
 
-    /// Stores the volume the drag ended on.
     fn commit_volume(&mut self) {
         let Some(percent) = self.volume_drag.take() else {
             return;
@@ -2111,10 +1716,6 @@ impl App {
         self.save_preferences(preferences);
     }
 
-    /// Mutes or unmutes the output.
-    ///
-    /// Not stored: mute is a momentary decision about this viewing, while the
-    /// volume beside it is the level the viewer wants next time.
     fn toggle_mute(&mut self) {
         let Some(player) = &self.player else {
             return;
@@ -2124,12 +1725,6 @@ impl App {
         self.status = Some(if muted { "Muted." } else { "Sound on." }.to_string());
     }
 
-    /// Stores a subtitle style and shows it on any subtitle already on screen.
-    ///
-    /// Both halves matter: the stored value is what the next viewing inherits, and
-    /// pushing it to the running player is what makes the change visible while
-    /// something is playing, which is the only moment a subtitle style means
-    /// anything.
     fn apply_subtitle_style(&mut self, scale_percent: u16, position_percent: u16) {
         let preferences = Preferences {
             subtitle_scale_percent: scale_percent,
@@ -2147,10 +1742,6 @@ impl App {
         self.push_subtitle_style();
     }
 
-    /// Sends the stored subtitle style to the player, if one is running.
-    ///
-    /// A no-op with no player: there is nothing to draw the subtitles, and the
-    /// stored preference is applied when one opens.
     fn push_subtitle_style(&self) {
         let Some(player) = &self.player else {
             return;
@@ -2161,7 +1752,6 @@ impl App {
         );
     }
 
-    /// Applies a typed language tag, or clears the preference when blank.
     fn apply_language(&mut self, subtitle: bool) {
         let (value, current) = if subtitle {
             (
@@ -2197,7 +1787,6 @@ impl App {
         }
     }
 
-    /// Rescans a folder the library already holds.
     fn rescan_source(&mut self, source_id: String) {
         if let Err(error) = self
             .library
@@ -2209,11 +1798,6 @@ impl App {
         self.start_scan(source_id);
     }
 
-    /// Points a folder at a new location, then rescans it.
-    ///
-    /// Relinking is what makes a removable drive work again after the mount path
-    /// changes: the grant is re-issued, every file under it becomes unavailable
-    /// until the rescan re-proves each one, and nothing is deleted in the meantime.
     fn relink_source(&mut self) {
         let Some(source_id) = self.relink_target.clone() else {
             self.error = Some("Choose the folder to relink first.".to_string());
@@ -2233,11 +1817,6 @@ impl App {
         self.start_scan(source_id);
     }
 
-    /// Removes a folder from the library, or asks first.
-    ///
-    /// Removal hides the folder's files and keeps every work, progress row and
-    /// list entry, so it is recoverable — but it is still a large visible change,
-    /// which is why the first press only asks.
     fn remove_source(&mut self, source_id: String) {
         if self.armed_remove.as_deref() != Some(source_id.as_str()) {
             self.armed_remove = Some(source_id);
@@ -2259,7 +1838,6 @@ impl App {
         }
     }
 
-    /// Writes a backup of the whole library to the typed path.
     fn backup_now(&mut self) {
         let raw = self.backup_path.trim().to_string();
         if raw.is_empty() {
@@ -2279,7 +1857,6 @@ impl App {
         }
     }
 
-    /// Reports what a backup file holds without changing anything.
     fn inspect_restore(&mut self) {
         let raw = self.restore_path.trim().to_string();
         if raw.is_empty() {
@@ -2296,12 +1873,6 @@ impl App {
         }
     }
 
-    /// Restores from the chosen backup, after one confirmation.
-    ///
-    /// Restore replaces this library's profile, progress and list data with the
-    /// backup's, so the first press only states what will happen. The core copies
-    /// the current library aside before it writes anything, and that safety copy
-    /// is named in the result so the user is told where it is.
     fn restore_now(&mut self) {
         let raw = self.restore_path.trim().to_string();
         if raw.is_empty() {
@@ -2322,14 +1893,9 @@ impl App {
         self.armed_restore = None;
         match self.library.restore_from(PathBuf::from(&raw)) {
             Ok(report) => {
-                // A restore replaces the settings table too. Everything held in
-                // memory from it is re-read, or the next preference save would
-                // write the pre-restore set back over the restored one.
                 self.preferences = self.library.preferences().unwrap_or_default();
                 self.sync_language_inputs();
-                // The active profile may not exist in the restored data, so the
-                // session is re-derived rather than left pointing at a profile
-                // that is gone.
+
                 if !self
                     .library
                     .profiles()
@@ -2338,7 +1904,7 @@ impl App {
                 {
                     self.profile_id = opening_profile(&self.library, &self.preferences);
                 }
-                // Posters belong to works, and the restored works are other rows.
+
                 self.artwork.clear();
                 self.artwork_aspect.clear();
                 self.artwork_queued.clear();
@@ -2356,11 +1922,6 @@ impl App {
         }
     }
 
-    /// Opens the platform folder chooser and adds what it returns.
-    ///
-    /// The dialog is modal, so the app is unresponsive until it closes; that is
-    /// the platform's own behaviour for a folder chooser and is preferable to a
-    /// hand-built browser that cannot see every mounted volume.
     fn choose_folder(&mut self) {
         let start = self
             .sources
@@ -2378,7 +1939,6 @@ impl App {
         }
     }
 
-    /// Opens the chooser for the new location of the folder being relinked.
     fn choose_relink_folder(&mut self) {
         if self.relink_target.is_none() {
             self.status = Some("Choose the folder to relink first.".to_string());
@@ -2396,7 +1956,6 @@ impl App {
         }
     }
 
-    /// Suggests the dated backup name in the platform save panel.
     fn choose_backup_path(&mut self) {
         let name = self
             .backup_path
@@ -2438,10 +1997,6 @@ impl App {
         self.add_root(raw);
     }
 
-    /// Grants one canonical root and scans it.
-    ///
-    /// A root that is already granted is reused rather than refused: the whole
-    /// point of choosing the same folder again is to rescan it.
     fn add_root(&mut self, raw: String) {
         let root = PathBuf::from(&raw);
         if !root.is_absolute() {
@@ -2468,11 +2023,7 @@ impl App {
         self.start_scan(source.id);
     }
 
-    /// Starts a bounded background scan for one source.
     fn start_scan(&mut self, source_id: String) {
-        // One walk at a time. A second one used to replace the first's token and
-        // channel, so the first could no longer be cancelled or reported; now it
-        // waits its turn and starts when the running one ends.
         if self.scan_token.is_some() {
             if !self.pending_scans.contains(&source_id) {
                 self.pending_scans.push(source_id);
@@ -2488,7 +2039,7 @@ impl App {
         self.scan_visited = 0;
         self.scan_imported = 0;
         self.scan_started_ms = Some(now_ms());
-        // Due at once: the first report is the one that puts cards on screen.
+
         self.scan_refresh_ms = 0;
         self.status = Some("Scanning…".to_string());
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -2524,7 +2075,6 @@ impl App {
         });
     }
 
-    /// Applies whatever the scan worker has reported since the last tick.
     fn drain_scan(&mut self) {
         let Some(receiver) = self.scan_events.as_ref() else {
             return;
@@ -2556,10 +2106,7 @@ impl App {
                         });
                     } else {
                         status = Some(format!("Scanning… {visited} entries, {imported} imported"));
-                        // Cards while the walk is still going: the acceptance
-                        // checklist promises the library fills as it goes, not only
-                        // when it ends. Bounded by wall clock, because a 250,000-entry
-                        // walk must not turn into 250,000 catalogue reloads.
+
                         if now_ms() - self.scan_refresh_ms >= SCAN_REFRESH_INTERVAL_MS {
                             self.scan_refresh_ms = now_ms();
                             refresh = true;
@@ -2583,8 +2130,7 @@ impl App {
         if let Some(failure) = failure {
             self.error = Some(failure);
         }
-        // A refresh part-way through, so the grid tracks the walk. The finishing
-        // tick reloads everything itself, so it is not done twice.
+
         if refresh && !finished {
             self.reload_home();
             self.reload_browse();
@@ -2594,8 +2140,7 @@ impl App {
             self.scan_token = None;
             self.scan_started_ms = None;
             self.reload();
-            // A scan adds files with no known runtime; probe them now rather than
-            // at the next launch.
+
             self.start_durations();
             if !self.pending_scans.is_empty() {
                 let next = self.pending_scans.remove(0);
@@ -2604,15 +2149,7 @@ impl App {
         }
     }
 
-    /// The progress row shown while a scan is running.
-    ///
-    /// A walk cannot know how many files a folder holds before it has counted
-    /// them, so this reports what it has actually done — entries visited, files
-    /// imported, how long it has run — instead of a bar that would have to invent
-    /// a percentage.
     fn scan_strip(&self) -> Option<Element<'_, Message>> {
-        // No scan, no strip: the row exists only while there is something to
-        // report and a scan to cancel.
         self.scan_token.as_ref()?;
         let tokens = design::tokens();
         let elapsed = self
@@ -2645,11 +2182,7 @@ impl App {
         )
     }
 
-    // ---------------------------------------------------------------- update
-
     fn update(&mut self, message: Message) -> Task<Message> {
-        // Done here rather than while starting, because the menu bar this changes
-        // does not exist until the application has finished starting.
         if self.route_quit() {
             return iced::exit();
         }
@@ -2816,16 +2349,10 @@ impl App {
             Message::SubtitleLanguageChanged(value) => self.subtitle_input = value,
             Message::AudioLanguageChanged(value) => self.audio_input = value,
             Message::Resized(width) => {
-                // A zero or non-finite width arrives while a window is being
-                // minimised or created; keeping the previous value avoids a layout
-                // that briefly has no columns at all.
                 if width.is_finite() && width > 0.0 {
                     self.window_width = width;
                 }
-                // Entering or leaving fullscreen resizes the window, including when
-                // macOS does it (the green button, ⌃⌘F). Ask which mode the window
-                // is really in, so the hidden chrome and Escape follow the window
-                // rather than what the app last requested.
+
                 return iced::window::latest()
                     .and_then(iced::window::mode)
                     .map(Message::ModeChanged);
@@ -2852,8 +2379,7 @@ impl App {
             Message::BackupNow => self.backup_now(),
             Message::RestorePathChanged(value) => {
                 self.restore_path = value;
-                // A different file is a different decision, so the confirmation
-                // does not carry over to it.
+
                 self.armed_restore = None;
             }
             Message::InspectRestore => self.inspect_restore(),
@@ -2863,7 +2389,6 @@ impl App {
                 self.error = None;
             }
             Message::CancelScan => {
-                // Cancel means stop scanning, not "start the next one".
                 self.pending_scans.clear();
                 if let Some(token) = &self.scan_token {
                     token.cancel();
@@ -2897,11 +2422,6 @@ impl App {
             Message::Tick => self.poll(),
             Message::Keyboard(event) => return self.handle_key(event),
             Message::Close => {
-                // Quitting while a file is open would otherwise leave the session
-                // row `active`: the last periodic checkpoint is within a second of
-                // the truth, but a session nobody can still write to is a lie the
-                // next launch has to clean up. Stopping the player first also
-                // releases the audio device before the process goes away.
                 self.stop_playback();
                 return iced::exit();
             }
@@ -2909,7 +2429,6 @@ impl App {
         Task::none()
     }
 
-    /// Moves the keyboard cursor by one card or row, clamped to the page.
     fn move_focus(&mut self, direction: Focus) {
         let len = self.visible_len();
         if len == 0 {
@@ -2917,14 +2436,7 @@ impl App {
             return;
         }
         let current = self.focus.min(len - 1);
-        // Up and Down move by a whole row, so the step has to be the column count the
-        // grid was actually drawn with: a fixed step would land on the wrong card as
-        // soon as the window is wide enough to change the layout.
-        //
-        // The Detail screen's episodes are one column, so a row there is one
-        // episode. Stepping by the grid's column count made Down do nothing at all
-        // on a series shorter than one row of cards, which made the third episode
-        // of a three-episode season unreachable from the keyboard.
+
         let step = match self.screen {
             Screen::Detail => 1,
             _ => self.columns(),
@@ -2941,7 +2453,6 @@ impl App {
         self.focus = next.unwrap_or(current);
     }
 
-    /// Enter on the focused item.
     fn activate(&mut self) {
         let file_id = match self.screen {
             Screen::Home => self.home_item(self.focus).map(|item| item.id.clone()),
@@ -2950,7 +2461,7 @@ impl App {
                 .items
                 .get(self.focus)
                 .map(|item| item.id.clone()),
-            // The highlighted episode, not the one the screen was opened with.
+
             Screen::Detail => self.detail.as_ref().map(|detail| {
                 detail
                     .episodes
@@ -2962,14 +2473,12 @@ impl App {
             Screen::Player | Screen::Settings => None,
         };
         match (self.screen, file_id) {
-            // From Detail, Enter means "play"; the arrows move within a series.
             (Screen::Detail, Some(file_id)) => self.open_player(&file_id, false),
             (_, Some(file_id)) => self.open_detail(&file_id),
             _ => {}
         }
     }
 
-    /// One step up the hierarchy: Player → its origin, Detail → Browse, else Home.
     fn back(&mut self) {
         match self.screen {
             Screen::Player => self.leave_player(),
@@ -2992,7 +2501,6 @@ impl App {
         }
     }
 
-    /// Flips a work-level flag and reloads so the change is visible everywhere.
     fn set_flag(&mut self, work_id: &str, flag: Flag) {
         let current = self
             .detail
@@ -3026,8 +2534,6 @@ impl App {
             return Task::none();
         };
 
-        // Screen switching uses a modifier on purpose: a bare letter would also
-        // be typed into the search field and steal the keystroke.
         if modifiers.command() || modifiers.control() {
             match key {
                 Key::Character(ref character) if character.as_str() == "1" => {
@@ -3043,18 +2549,15 @@ impl App {
             }
             return Task::none();
         }
-        // Most branches only mutate state; the platform-level ones (fullscreen)
-        // have to hand a task back to iced, which is why this returns one.
+
         match self.screen {
             Screen::Player => match key {
                 Key::Named(Named::Escape) => {
-                    // A pending next episode is the nearest thing to undo.
                     if self.up_next.take().is_some() {
                         self.status = Some("Autoplay cancelled.".to_string());
                         return Task::none();
                     }
-                    // Escape leaves fullscreen first. A viewer who pressed it to get
-                    // the pointer back would not expect to lose the film as well.
+
                     if self.fullscreen {
                         return self.toggle_fullscreen();
                     }
@@ -3087,8 +2590,7 @@ impl App {
                 },
                 _ => {}
             },
-            // Settings is a form, not a grid: the arrows belong to whichever
-            // field has focus, so only Escape is claimed here.
+
             Screen::Settings => {
                 if let Key::Named(Named::Escape) = key {
                     self.back();
@@ -3107,12 +2609,6 @@ impl App {
         Task::none()
     }
 
-    /// Enters or leaves the platform's fullscreen mode.
-    ///
-    /// The mode change belongs to the window, not to the app, so it is asked for
-    /// as a task rather than being simulated by resizing. With no window — as in a
-    /// test — the flag still tracks what was asked, and nothing is drawn on screen
-    /// that could disagree with it.
     fn toggle_fullscreen(&mut self) -> Task<Message> {
         self.fullscreen = !self.fullscreen;
         let mode = if self.fullscreen {
@@ -3120,15 +2616,11 @@ impl App {
         } else {
             iced::window::Mode::Windowed
         };
-        // `and_then` over `Task<Option<Id>>` skips the change when no window
-        // answers, which is exactly a test with no window attached.
+
         iced::window::latest().and_then(move |id| iced::window::set_mode(id, mode))
     }
 
-    /// Seeks by `delta` seconds, clamped to the media.
     fn seek_step(&mut self, delta: f64) {
-        // Until libmpv reports a length there is nothing to clamp to, and clamping
-        // to 0 turned every arrow press into "back to the start".
         if !(self.snapshot.duration.is_finite() && self.snapshot.duration > 0.0) {
             return;
         }
@@ -3136,7 +2628,6 @@ impl App {
         self.seek_to(target);
     }
 
-    /// Flips the shown detail item's work-level flag from a key press.
     fn toggle_focused_flag(&mut self, flag: Flag) {
         let Some(work_id) = self
             .detail
@@ -3148,7 +2639,6 @@ impl App {
         self.set_flag(&work_id, flag);
     }
 
-    /// Marks the shown edition watched or unwatched from a key press.
     fn toggle_focused_watched(&mut self) {
         let Some(edition_id) = self
             .detail
@@ -3163,13 +2653,7 @@ impl App {
     fn subscription(&self) -> Subscription<Message> {
         let mut subscriptions = vec![
             iced::keyboard::listen().map(Message::Keyboard),
-            // Routed through the same Close handling as the header button, so the
-            // window's close box and that button cannot disagree about whether the
-            // open file was stored.
             iced::window::close_requests().map(|_| Message::Close),
-            // The grid's column count follows the window, so a 3440-wide ultrawide
-            // shows more cards rather than four very wide ones. Resizes arrive as
-            // events rather than being polled, so this costs nothing while idle.
             iced::window::resize_events().map(|(_id, size)| Message::Resized(size.width)),
         ];
         let interval = if self.screen == Screen::Player {
@@ -3185,8 +2669,6 @@ impl App {
         design::theme()
     }
 
-    // ------------------------------------------------------------------ view
-
     fn view(&self) -> Element<'_, Message> {
         let body = match self.screen {
             Screen::Home => self.home_view(),
@@ -3195,9 +2677,7 @@ impl App {
             Screen::Player => self.player_view(),
             Screen::Settings => self.settings_view(),
         };
-        // A fullscreen player is the film and nothing else: the window is the
-        // screen, so a header and footer would be chrome around the picture rather
-        // than a frame the picture sits in.
+
         if self.fullscreen && self.screen == Screen::Player {
             return container(body)
                 .style(|_theme| design::page_style())
@@ -3219,8 +2699,6 @@ impl App {
             .into()
     }
 
-    /// The persistent top bar: where you are, what is playing locally, and the
-    /// two facts a user must be able to check (library file, token provenance).
     fn header(&self) -> Element<'_, Message> {
         let tokens = design::tokens();
         let capability = if self.capability.available {
@@ -3249,9 +2727,6 @@ impl App {
         .spacing(tokens.spacing.field_x)
         .align_y(Alignment::Center);
 
-        // The nav buttons already say where you are; the label only earns its
-        // place when it carries something they cannot, which is a page and a count
-        // on Browse. "Settings Settings" was the other case.
         let label = self.screen_label();
         if !matches!(self.screen, Screen::Home | Screen::Settings) {
             nav = nav.push(
@@ -3261,13 +2736,6 @@ impl App {
             );
         }
 
-        // A running scan has its own strip with its counts and a Cancel beside
-        // them; a second Cancel in the header would be two controls for one act.
-
-        // The header carries a warning only when something is actually wrong.
-        // Version strings and the resolved libmpv belong in Settings → About; a
-        // watching screen that announces its own build numbers is a development
-        // window, not a product.
         let mut facts: iced::widget::Row<'_, Message> = row![].spacing(tokens.spacing.field_x);
         if !self.capability.available {
             facts = facts.push(
@@ -3316,8 +2784,6 @@ impl App {
         }
     }
 
-    /// A status/error strip plus the keyboard legend, so navigation is
-    /// discoverable without a mouse.
     fn footer(&self) -> Element<'_, Message> {
         let tokens = design::tokens();
         let line = if let Some(error) = &self.error {
@@ -3353,17 +2819,12 @@ impl App {
         .into()
     }
 
-    // ------------------------------------------------------------------ Home
-
     fn home_view(&self) -> Element<'_, Message> {
         let tokens = design::tokens();
         let mut body = column![]
             .spacing(tokens.spacing.content_pad)
             .width(Length::Fill);
 
-        // Continue watching leads when there is anything to continue: resuming a
-        // film is the one action a viewer opens the app to take. Suggestions follow
-        // it, and for a new library they are the only thing there is.
         let resuming = !self.home.is_empty();
         body = body.push(text("Continue watching").size(tokens.type_scale.title_sm));
         if resuming {
@@ -3386,7 +2847,6 @@ impl App {
         scrollable(body).height(Length::Fill).into()
     }
 
-    /// The folder-granting control. Without it an empty library has no way out.
     fn add_folder_row(&self) -> Element<'_, Message> {
         let tokens = design::tokens();
         let first_run = self.sources.is_empty();
@@ -3443,8 +2903,6 @@ impl App {
         .into()
     }
 
-    // -------------------------------------------------------------- Browse
-
     fn browse_view(&self) -> Element<'_, Message> {
         let tokens = design::tokens();
         let filters = column![
@@ -3470,9 +2928,6 @@ impl App {
                     Message::WatchChanged
                 ),
             ]
-            // Genres come from enrichment, which a scanned library does not have
-            // yet, so the picker exists only once there is something to pick —
-            // and always offers the way back to every genre.
             .push((!self.browse.genres.is_empty()).then(|| {
                 pick_list(
                     std::iter::once(ANY_GENRE.to_string())
@@ -3535,8 +2990,6 @@ impl App {
         .height(Length::Fill)
         .into()
     }
-
-    // -------------------------------------------------------------- Detail
 
     fn detail_view(&self) -> Element<'_, Message> {
         let tokens = design::tokens();
@@ -3688,9 +3141,6 @@ impl App {
             }
         }
 
-        // The poster sits beside the facts, not above them: the title, the actions
-        // and the synopsis are what a viewer reads, and a large image would push
-        // them below the fold on a short window.
         let details: Element<'_, Message> = match self.artwork.get(&item.work_id) {
             Some(handle) => row![
                 image(handle.clone())
@@ -3708,11 +3158,6 @@ impl App {
         scrollable(details).height(Length::Fill).into()
     }
 
-    /// Height the Detail poster needs so the artwork is not cropped.
-    ///
-    /// Bounded at both ends: a very wide frame would otherwise be a letterbox
-    /// strip, and a very tall poster would push the title below the fold on a
-    /// short window.
     fn detail_poster_height(&self, work_id: &str) -> f32 {
         let aspect = self
             .artwork_aspect
@@ -3723,7 +3168,6 @@ impl App {
         (DETAIL_POSTER.0 / aspect).clamp(140.0, DETAIL_POSTER.1)
     }
 
-    /// A compact one-per-line episode list; the arrow keys walk it.
     fn episode_list(&self, episodes: &[LibraryItem]) -> Element<'_, Message> {
         let tokens = design::tokens();
         let mut list = column![].spacing(2.0).width(Length::Fill);
@@ -3761,21 +3205,14 @@ impl App {
         scrollable(list).height(Length::Fixed(240.0)).into()
     }
 
-    // ------------------------------------------------------------- shared UI
-
-    /// A bounded grid of cards, where `base` is the focus index of the first card.
     fn card_grid(&self, items: &[LibraryItem], base: usize) -> Element<'_, Message> {
         let tokens = design::tokens();
-        // Computed once, so the row chunking, the focus index and the padding all
-        // agree even if a resize event arrives mid-view.
+
         let columns = self.columns();
         let mut grid = column![]
             .spacing(tokens.spacing.field_x)
             .width(Length::Fill);
         for (row_index, chunk) in items.chunks(columns).enumerate() {
-            // Top-aligned, because a card without a poster is genuinely shorter
-            // and stretching it to its neighbours' height would draw an empty
-            // surface that reads as a missing image.
             let mut cells = row![]
                 .spacing(tokens.spacing.field_x)
                 .width(Length::Fill)
@@ -3784,9 +3221,7 @@ impl App {
                 let index = base + row_index * columns + column_index;
                 cells = cells.push(self.card(item, self.focus == index));
             }
-            // Pad the final row so every card keeps the same width. A page is a fixed
-            // 24 items, so with an odd column count the last row is genuinely short:
-            // padding is what stops those cards stretching to fill it.
+
             for _ in chunk.len()..columns {
                 cells = cells.push(Space::new().width(Length::FillPortion(1)));
             }
@@ -3795,21 +3230,14 @@ impl App {
         grid.into()
     }
 
-    /// Cards per row for the window currently open.
     fn columns(&self) -> usize {
         grid_columns(self.window_width)
     }
 
-    /// One card: retained poster when there is one, then title and state.
-    ///
-    /// No placeholder image is drawn for a work that has none. A generic poster
-    /// would claim to be this title's artwork, and a title-only card is the
-    /// truthful version of "no artwork was found".
     fn card(&self, item: &LibraryItem, focused: bool) -> Element<'_, Message> {
         self.card_with(item, focused, None)
     }
 
-    /// A card with an optional line saying why it is being shown.
     fn card_with(
         &self,
         item: &LibraryItem,
@@ -3835,10 +3263,6 @@ impl App {
                 clock(item.position_ms as f64 / 1_000.0)
             )
         } else if item.position_ms > 0 {
-            // A stored position with no stored duration is a real state: the file
-            // was watched by a build that had not probed it yet. Saying "not
-            // started" beside a card in Continue watching would be a lie about the
-            // one thing the row is for.
             format!("resume at {}", clock(item.position_ms as f64 / 1_000.0))
         } else if item.watched {
             "watched".to_string()
@@ -3858,9 +3282,7 @@ impl App {
             );
             content = content.push(Space::new().height(Length::Fixed(4.0)));
         }
-        // A focused card is drawn on the focus fill, which is nearly white in the
-        // pinned palette: muted grey and the near-white accent were unreadable or
-        // invisible there, so every line takes the focus foreground instead.
+
         let (muted, accent) = if focused {
             (
                 tokens.palette.focus_foreground,
@@ -3887,10 +3309,6 @@ impl App {
             );
         }
 
-        // The card is sized by its own text instead of a hand-summed pixel height.
-        // The sum was 25 px short of what the lines actually take at the pinned
-        // type scale, so the reason line spilled past the card's surface — a bug
-        // that only showed once posters arrived and the extra line was drawn.
         button(content)
             .on_press(Message::OpenDetail(item.id.clone()))
             .style(design::tile_style(focused))
@@ -3899,7 +3317,6 @@ impl App {
             .into()
     }
 
-    /// The suggestion grid, which says why each card is offered.
     fn suggestion_grid(&self, base: usize) -> Element<'_, Message> {
         let tokens = design::tokens();
         let columns = self.columns();
@@ -3927,7 +3344,6 @@ impl App {
         grid.into()
     }
 
-    /// An honest empty/blocked state: a title and the concrete next action.
     fn empty_note(&self, title: &str, detail: &str) -> Element<'_, Message> {
         let tokens = design::tokens();
         container(
@@ -3945,24 +3361,12 @@ impl App {
         .into()
     }
 
-    // ------------------------------------------------------------- Player
-
-    // -------------------------------------------------------------- Settings
-
-    /// Viewer, playback, folder and data settings.
-    ///
-    /// Every control here performs the action it names: there is no control that
-    /// only looks enabled. Where an action is destructive — removing a folder,
-    /// restoring a backup — the first press states what will happen and the second
-    /// carries it out, which is the honest form of a confirmation when the app has
-    /// no separate dialog chrome.
     fn settings_view(&self) -> Element<'_, Message> {
         let tokens = design::tokens();
         let heading = settings_heading;
         let note = settings_note;
         let panel = settings_panel;
 
-        // --- viewer -------------------------------------------------------
         let mut viewers = column![].spacing(tokens.spacing.field_y);
         for profile in &self.profiles {
             let active = profile.id == self.profile_id;
@@ -3984,8 +3388,7 @@ impl App {
                         .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
                 );
             }
-            // The last profile cannot be removed, so the control is absent rather
-            // than present and failing.
+
             if self.profiles.len() > 1 {
                 row = row.push(
                     button(
@@ -4027,7 +3430,6 @@ impl App {
                 "Each profile keeps its own progress, favourites and watchlist.",
             ));
 
-        // --- playback -----------------------------------------------------
         let playback = column![
             checkbox(self.preferences.autoplay_next)
                 .label("Play the next episode automatically")
@@ -4114,7 +3516,6 @@ impl App {
         ]
         .spacing(tokens.spacing.field_y);
 
-        // --- folders ------------------------------------------------------
         let mut folders = column![].spacing(tokens.spacing.field_y);
         if self.sources.is_empty() {
             folders = folders.push(note(
@@ -4187,9 +3588,7 @@ impl App {
                         pick_list(choices, chosen, |choice: SourceChoice| {
                             Message::RelinkTargetChosen(choice.id)
                         })
-                        // Without a placeholder the control is blank until a folder
-                        // is chosen, which reads as a broken control rather than
-                        // as one waiting for a choice.
+
                         .placeholder("Choose a folder"),
                         button(text("Choose…").size(tokens.type_scale.label))
                             .on_press(Message::ChooseRelinkFolder)
@@ -4214,7 +3613,6 @@ impl App {
                 ));
         }
 
-        // --- data ---------------------------------------------------------
         let restore_armed = self.armed_restore.is_some();
         let data = column![
             text("Back up".to_string()).size(tokens.type_scale.label),
@@ -4274,8 +3672,6 @@ impl App {
         ]
         .spacing(tokens.spacing.field_y);
 
-        // Stated once here rather than in the header: what this build is running on
-        // is useful when something is wrong, not while watching.
         let playback_fact = if self.capability.available {
             format!(
                 "Playback: libmpv {}",
@@ -4333,9 +3729,6 @@ impl App {
         };
 
         let header = row![
-            // The way out is absent in fullscreen, because Escape (or f) is the way
-            // out there and a button would be a target the pointer cannot reach
-            // without leaving the picture.
             button(
                 text(if self.fullscreen {
                     "Windowed"
@@ -4427,9 +3820,7 @@ impl App {
         ]
         .spacing(tokens.spacing.field_x)
         .align_y(Alignment::Center);
-        // Volume sits with the transport rather than on a separate screen: it is
-        // the one thing a viewer reaches for without leaving the film. The label
-        // reads the player's own level, so "50%" never sits beside silence.
+
         let volume_row = row![
             button(text(if muted { "Unmute" } else { "Mute" }).size(tokens.type_scale.label))
                 .on_press(Message::ToggleMute)
@@ -4445,9 +3836,7 @@ impl App {
         ]
         .spacing(tokens.spacing.field_x)
         .align_y(Alignment::Center);
-        // The skip button appears only when a stored marker actually covers the
-        // playhead: an always-visible button would claim a segment the library
-        // does not know about.
+
         let mut segment_row: iced::widget::Row<'_, Message> = row![]
             .spacing(tokens.spacing.field_x)
             .align_y(Alignment::Center);
@@ -4464,9 +3853,7 @@ impl App {
                     .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
             );
         }
-        // Each button names what it will do to its own kind. One shared label
-        // read "End credits at…" on the intro button, which actually started a
-        // new intro mark and dropped the pinned credits start.
+
         for kind in ["intro", "credits"] {
             let label = match &self.mark_pending {
                 Some((pending, start)) if pending == kind => {
@@ -4517,9 +3904,7 @@ impl App {
 
         let (audio_choices, audio_selected) = self.track_chooser(TrackKind::Audio);
         let (subtitle_choices, subtitle_selected) = self.track_chooser(TrackKind::Subtitle);
-        // A picker with nothing to pick is a dead control, so each kind renders
-        // as a chooser only when the player actually reported tracks of it. The
-        // other kind says so in words instead of showing an inert dropdown.
+
         let reported_any = !audio_choices.is_empty() || !subtitle_choices.is_empty();
         let mut track_row: iced::widget::Row<'_, Message> = row![]
             .spacing(tokens.spacing.field_x)
@@ -4565,9 +3950,6 @@ impl App {
         let resume = self
             .active
             .as_ref()
-            // The stored position no longer describes anything once the file has
-            // finished, so the line is dropped rather than left claiming a resume
-            // beside an Ended player.
             .filter(|active| active.resume_from_ms > 0 && !self.snapshot.ended)
             .map(|active| {
                 text(format!(
@@ -4576,14 +3958,10 @@ impl App {
                 ))
                 .size(tokens.type_scale.micro)
             })
-            .unwrap_or_else(|| text("").size(tokens.type_scale.micro)); // Only the resume note; the file's identifier is a library detail, not
-        // something a viewer needs under a film.
+            .unwrap_or_else(|| text("").size(tokens.type_scale.micro));
+
         let footer = row![resume].spacing(tokens.spacing.field_x);
 
-        // The picture takes the whole body and the controls float over its lower
-        // edge, rather than the film being squeezed into whatever a column of
-        // control rows leaves behind. A player that shrinks the picture to make
-        // room for its own buttons has the priorities backwards.
         let chrome = container(
             column![controls, volume_row, segments, track_row, footer]
                 .spacing(tokens.spacing.field_y),
@@ -4592,9 +3970,6 @@ impl App {
         .padding(tokens.spacing.content_pad)
         .width(Length::Fill);
 
-        // Only the transport floats over the picture. The title row stays above it:
-        // text drawn over a bright frame is unreadable exactly when the film is
-        // bright, and a scrim behind a title bar is furniture across the image.
         let overlay = column![Space::new().height(Length::Fill), chrome]
             .spacing(tokens.spacing.field_y)
             .width(Length::Fill)
@@ -4618,18 +3993,12 @@ impl App {
     }
 }
 
-/// A section title on the Settings screen.
 fn settings_heading(label: &str) -> Element<'_, Message> {
     text(label.to_string())
         .size(design::tokens().type_scale.subtitle)
         .into()
 }
 
-/// An explanatory line under a Settings control.
-///
-/// These carry the consequences a control cannot state by itself — that a gap
-/// stops autoplay, that restore copies the current library aside — so the copy is
-/// part of the control's meaning rather than decoration.
 fn settings_note(label: &str) -> Element<'static, Message> {
     text(label.to_string())
         .size(design::tokens().type_scale.micro)
@@ -4637,7 +4006,6 @@ fn settings_note(label: &str) -> Element<'static, Message> {
         .into()
 }
 
-/// Wraps one Settings section in the raised panel surface.
 fn settings_panel(content: Element<'_, Message>) -> Element<'_, Message> {
     container(content)
         .style(|_theme| design::container_style(Level::Panel, false))
@@ -4646,16 +4014,10 @@ fn settings_panel(content: Element<'_, Message>) -> Element<'_, Message> {
         .into()
 }
 
-/// One entry in the folder chooser on the Settings screen.
-///
-/// Carries the label and the identifier together, so the list shows the user's own
-/// folder name while the message that comes back names the folder by its stable
-/// id rather than by a display string that could change underneath it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceChoice {
-    /// Stable source identifier, used in the message.
     pub id: String,
-    /// User-facing folder label, shown in the list.
+
     pub label: String,
 }
 
@@ -4665,11 +4027,6 @@ impl std::fmt::Display for SourceChoice {
     }
 }
 
-/// Plain-language description of a folder's availability.
-///
-/// Each state names a different recovery, which is why they are not collapsed
-/// into "unavailable": a disconnected drive is plugged back in, a revoked grant
-/// is granted again, and a missing path is relinked.
 fn source_state_label(state: SourceState) -> &'static str {
     match state {
         SourceState::Available => "Available",
@@ -4682,21 +4039,14 @@ fn source_state_label(state: SourceState) -> &'static str {
     }
 }
 
-/// One entry in the player's track chooser.
-///
-/// `id` is both the identity compared against the player's reported selection and
-/// the value handed back when the entry is picked, so "Off" is a real [`NO_TRACK`]
-/// selection rather than a separate kind of value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackChoice {
-    /// libmpv track id, or [`NO_TRACK`] for the "Off" entry.
     pub id: i64,
-    /// The label shown in the list.
+
     pub label: String,
 }
 
 impl TrackChoice {
-    /// The entry that switches a kind off.
     fn off() -> Self {
         Self {
             id: NO_TRACK,
@@ -4704,7 +4054,6 @@ impl TrackChoice {
         }
     }
 
-    /// Labels a reported track for the chooser.
     fn from_track(track: &MediaTrack) -> Self {
         Self {
             id: track.id,
@@ -4719,19 +4068,16 @@ impl std::fmt::Display for TrackChoice {
     }
 }
 
-/// What the player's single transport control does in a given state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayAction {
-    /// Stop the picture where it is.
     Pause,
-    /// Continue from the paused position.
+
     Resume,
-    /// Start the finished file again from the beginning.
+
     Replay,
 }
 
 impl PlayAction {
-    /// The control's label for this action.
     pub fn label(self) -> &'static str {
         match self {
             Self::Pause => "Pause",
@@ -4741,12 +4087,6 @@ impl PlayAction {
     }
 }
 
-/// Chooses the transport action for a player state.
-///
-/// The player's state machine treats `Ended` as terminal — it maps both
-/// `(Ended, _)` and `(_, Ended)` to `Ended` — so clearing the pause flag on a
-/// finished file is a no-op that would leave the control dead. A finished file
-/// gets [`PlayAction::Replay`] instead, which reopens it.
 pub fn play_action(state: screenroom_player::PlayerState) -> PlayAction {
     use screenroom_player::PlayerState;
     match state {
@@ -4756,25 +4096,13 @@ pub fn play_action(state: screenroom_player::PlayerState) -> PlayAction {
     }
 }
 
-/// A work-level flag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Flag {
-    /// Favourite.
     Favorite,
-    /// Watchlist.
+
     Watchlist,
 }
 
-/// Copy for an empty Browse screen: a title and the concrete next action.
-///
-/// Three genuinely different situations arrive at the same "nothing here" moment,
-/// and naming the wrong one sends the viewer somewhere useless: a first run has no
-/// filters to change, and a folder that was granted but never read has nothing to
-/// change either. Both used to read "Nothing matches. Change the filters", which
-/// describes neither.
-///
-/// `has_sources` means at least one folder is granted; `narrowed` means a search or
-/// filter is excluding rows.
 pub fn browse_empty_copy(has_sources: bool, narrowed: bool) -> (&'static str, &'static str) {
     match (has_sources, narrowed) {
         (false, _) => (
@@ -4794,50 +4122,29 @@ pub fn browse_empty_copy(has_sources: bool, narrowed: bool) -> (&'static str, &'
     }
 }
 
-/// Cards per grid row for a window this wide, in logical pixels.
-///
-/// The grid was four fixed columns, which is right for the 1280-wide default window
-/// and wrong at both ends of the range this owner actually uses. Four cards across a
-/// 3440px ultrawide are ~860px each, so a poster grid reads as four billboards; at a
-/// narrow window they are cramped. The count follows a comfortable card width instead.
-///
-/// A pure function of the width, so the layout at 3440×1440 and at 1280×800 are both
-/// asserted without a window existing — which matters because the ultrawide is the
-/// one machine this cannot be run on.
-///
-/// The bounds are deliberate: two columns is the fewest that still reads as a grid,
-/// and eight is where a 3440-wide window lands before cards start looking thin.
-/// Everything outside the range clamps rather than erroring, because a window
-/// manager is allowed to ask for any width at all.
 pub fn grid_columns(window_width: f32) -> usize {
-    /// Card width the layout aims for, including the gap between cards.
     const TARGET_CARD_PX: f32 = 300.0;
-    /// Fewest columns that still reads as a grid.
+
     const MIN_COLUMNS: usize = 2;
-    /// Most columns offered, so an ultrawide does not produce slivers.
+
     const MAX_COLUMNS: usize = 8;
 
     if !window_width.is_finite() {
         return DEFAULT_COLUMNS;
     }
-    // The shell pads both sides, so the usable width is narrower than the window.
+
     let usable = window_width - 2.0 * design::tokens().spacing.shell_pad;
     if usable <= 0.0 {
         return MIN_COLUMNS;
     }
     let columns = (usable / TARGET_CARD_PX).floor();
-    // A NaN cast to usize is 0, and 0 columns would divide by zero below.
+
     if !columns.is_finite() || columns < 1.0 {
         return MIN_COLUMNS;
     }
     (columns as usize).clamp(MIN_COLUMNS, MAX_COLUMNS)
 }
 
-/// Rounds a slider position to a whole percent inside `min..=max`.
-///
-/// A slider works in floats and a preference is stored as a whole percent, so the
-/// conversion happens here rather than in the view, where it would be one more
-/// place for the shown value and the stored one to disagree.
 pub fn round_percent(value: f64, min: u16, max: u16) -> u16 {
     if !value.is_finite() {
         return min;
@@ -4845,9 +4152,6 @@ pub fn round_percent(value: f64, min: u16, max: u16) -> u16 {
     (value.round().max(0.0) as u16).clamp(min, max)
 }
 
-/// Truncates a label to `max` characters with an ellipsis.
-///
-/// Cards are fixed height, so an overlong filename must not reflow the grid.
 fn truncate(value: &str, max: usize) -> String {
     if value.chars().count() <= max {
         return value.to_string();
@@ -4857,10 +4161,6 @@ fn truncate(value: &str, max: usize) -> String {
     out
 }
 
-/// Current Unix time in milliseconds.
-///
-/// Used only for elapsed-time copy (how long a scan has run, a dated backup
-/// name); the library's own timestamps are the store's business.
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -4868,7 +4168,6 @@ pub fn now_ms() -> i64 {
         .unwrap_or_default()
 }
 
-/// Formats seconds as `m:ss` or `h:mm:ss`.
 pub fn clock(seconds: f64) -> String {
     if !seconds.is_finite() || seconds < 0.0 {
         return "0:00".to_string();
@@ -4902,9 +4201,6 @@ mod tests {
 
     #[test]
     fn the_grid_shows_more_cards_as_the_window_widens() {
-        // The two windows this owner actually uses, asserted without either existing.
-        // The ultrawide is the machine this cannot be run on, so the layout rule is
-        // the only thing that can be checked here.
         let laptop = grid_columns(1280.0);
         let ultrawide = grid_columns(3440.0);
         assert_eq!(
@@ -4916,8 +4212,6 @@ mod tests {
             "an ultrawide must show more cards, not wider ones: {ultrawide} vs {laptop}"
         );
 
-        // And the width of a card on the ultrawide stays in the range the rule aims
-        // for, which is the actual complaint: four columns of 860px each.
         let usable = 3440.0 - 2.0 * design::tokens().spacing.shell_pad;
         let card = usable / ultrawide as f32;
         assert!(
@@ -4928,7 +4222,6 @@ mod tests {
 
     #[test]
     fn the_column_count_is_monotonic_and_always_usable() {
-        // A window manager may ask for any width at all, including nonsense.
         let mut previous = 0;
         for width in [
             320.0_f32, 800.0, 1024.0, 1280.0, 1920.0, 2560.0, 3440.0, 5120.0,
@@ -4945,8 +4238,6 @@ mod tests {
             previous = columns;
         }
 
-        // Degenerate widths must still produce a drawable grid rather than zero
-        // columns, which would divide by zero in the card layout.
         for width in [0.0_f32, -100.0, 10.0, f32::NAN, f32::INFINITY] {
             let columns = grid_columns(width);
             assert!(columns >= 2, "{width} produced {columns} columns");
@@ -4955,9 +4246,6 @@ mod tests {
 
     #[test]
     fn keyboard_rows_move_by_the_columns_the_grid_was_drawn_with() {
-        // Up/Down step a whole row, so the step and the layout have to agree: a fixed
-        // step would land on the wrong card on a wider window. This is the coupling
-        // that a constant column count used to hide.
         let (mut app, _directory) = app_with(24);
         app.window_width = 3440.0;
         let columns = app.columns();
@@ -4969,15 +4257,12 @@ mod tests {
         app.move_focus(Focus::Up);
         assert_eq!(app.focus, 0, "Up must return to the same column");
 
-        // Right stays one item, so moving along a row is unaffected.
         app.move_focus(Focus::Right);
         assert_eq!(app.focus, 1);
     }
 
     #[test]
     fn a_resize_event_that_has_no_usable_width_is_ignored() {
-        // A minimize or a window being created reports a zero width; keeping the last
-        // good value avoids a frame laid out with no usable width.
         let (mut app, _directory) = app_with(4);
         app.window_width = 1920.0;
         for width in [0.0_f32, -1.0, f32::NAN, f32::INFINITY] {
@@ -4993,16 +4278,11 @@ mod tests {
 
     #[test]
     fn an_empty_browse_screen_names_the_situation_it_is_actually_in() {
-        // A first run, an unread folder and an over-narrow search all produce an
-        // empty grid. Telling all three to "change the filters" sends two of them
-        // to a control that cannot help.
         let first_run = browse_empty_copy(false, false);
         assert!(first_run.0.contains("No media"));
         assert!(first_run.1.contains("Add a folder"));
         assert!(!first_run.1.contains("filter"));
 
-        // The same copy with filters showing, because there is still nothing to
-        // filter: the next action does not change.
         assert_eq!(browse_empty_copy(false, true), first_run);
 
         let unread = browse_empty_copy(true, false);
@@ -5013,7 +4293,6 @@ mod tests {
         assert!(filtered.0.contains("filters"));
         assert!(filtered.1.contains("Clear the search"));
 
-        // Every state is a real sentence with a next action, never a blank panel.
         for (title, detail) in [first_run, unread, filtered] {
             assert!(!title.is_empty() && !detail.is_empty());
             assert!(detail.ends_with('.'), "copy should be a sentence: {detail}");
@@ -5022,8 +4301,6 @@ mod tests {
 
     #[test]
     fn sort_order_alone_does_not_count_as_narrowing_the_library() {
-        // Sorting can never remove a row, so an empty grid is not the sort's fault
-        // and "clear the filters" would be a dead end.
         let mut browse = Browse::new();
         browse.sort = SortChoice::Progress;
         assert!(!browse.narrowed());
@@ -5041,7 +4318,6 @@ mod tests {
             assert!(browse.narrowed(), "a narrowing filter went unnoticed");
         }
 
-        // Whitespace in the search box is not a search.
         let mut browse = Browse::new();
         browse.text = "   ".into();
         assert!(!browse.narrowed());
@@ -5055,22 +4331,16 @@ mod tests {
         );
         assert_eq!(round_percent(125.4, min, max), 125);
         assert_eq!(round_percent(125.6, min, max), 126);
-        // A slider can report a hair outside its range while the handle snaps, and
-        // a preference outside the range is refused by the core, so it is clamped.
+
         assert_eq!(round_percent(-8.0, min, max), min);
         assert_eq!(round_percent(9_999.0, min, max), max);
-        // A non-finite position has no nearest percent; the minimum is at least a
-        // value the core will accept and store.
+
         assert_eq!(round_percent(f64::NAN, min, max), min);
         assert_eq!(round_percent(f64::INFINITY, min, max), min);
     }
 
     #[test]
     fn the_offered_subtitle_range_is_one_the_core_accepts() {
-        // The two crates define these bounds independently: the player against what
-        // libmpv will take, the core against what it will store. If either drifts,
-        // a slider at its end would store a refused value and the Settings screen
-        // would show an error for a control the user can see.
         let (scale_low, scale_high) = screenroom_player::SUB_SCALE_RANGE;
         assert!(scale_low <= f64::from(Preferences::SUBTITLE_SCALE_MIN_PERCENT) / 100.0);
         assert!(scale_high >= f64::from(Preferences::SUBTITLE_SCALE_MAX_PERCENT) / 100.0);
@@ -5102,7 +4372,6 @@ mod tests {
             "the flag follows the mode that was asked for"
         );
 
-        // The player is the screen where a fullscreen mode means anything.
         app.screen = Screen::Player;
         let _ = app.handle_key(press(Key::Named(Named::Escape)));
         assert!(
@@ -5111,16 +4380,12 @@ mod tests {
         );
         assert_eq!(app.screen, Screen::Player, "the film is still open");
 
-        // And a second Escape, now that there is no fullscreen to leave, does
-        // leave the player rather than doing nothing at all.
         let _ = app.handle_key(press(Key::Named(Named::Escape)));
         assert_ne!(app.screen, Screen::Player);
     }
 
     #[test]
     fn the_volume_control_shows_the_player_then_the_stored_level() {
-        // Three sources, in the order they become true: the drag in flight, the
-        // player's own read-back, and the stored preference before a player exists.
         let (mut app, _directory) = app_with(2);
         app.preferences.volume_percent = 40;
         assert_eq!(
@@ -5142,8 +4407,7 @@ mod tests {
             77.0,
             "the drag wins while it is in flight"
         );
-        // A report arriving mid-drag must not yank the knob out from under the
-        // pointer; the drag is only cleared on release.
+
         app.snapshot.volume = Some(62.0);
         assert_eq!(app.volume_percent(), 77.0);
     }
@@ -5163,8 +4427,6 @@ mod tests {
         assert_eq!(app.volume_drag, None, "the drag is over");
         assert_eq!(app.volume_percent(), 56.0);
 
-        // Nonsense from a slider cannot reach the store: it is clamped first, and
-        // the core would refuse anything outside 0-100.
         app.drag_volume(-30.0);
         app.commit_volume();
         assert_eq!(app.library.preferences().unwrap().volume_percent, 0);
@@ -5187,7 +4449,7 @@ mod tests {
         assert_eq!(play_action(PlayerState::Ended), PlayAction::Replay);
         assert_eq!(play_action(PlayerState::Paused), PlayAction::Resume);
         assert_eq!(play_action(PlayerState::Playing), PlayAction::Pause);
-        // Every state must produce a labelled control, never an empty one.
+
         for state in [
             PlayerState::Idle,
             PlayerState::Resolving,
@@ -5203,10 +4465,6 @@ mod tests {
 
     #[test]
     fn the_page_size_is_a_whole_number_of_reference_rows() {
-        // The column count is now derived from the window width, so a page need not
-        // fill its last row. What keeps the grid square is the layout padding a
-        // partial row with spacers; this only keeps the page size a whole number of
-        // rows for the width the reference grid describes.
         assert_eq!(PAGE_SIZE, (DEFAULT_COLUMNS * PAGE_ROWS) as i64);
         assert_eq!(PAGE_SIZE % DEFAULT_COLUMNS as i64, 0);
     }
@@ -5230,7 +4488,6 @@ mod tests {
         assert_eq!(SortChoice::Added.sort(), Sort::Added);
     }
 
-    /// Builds a library with `count` ingested files under one real temp folder.
     fn library_with(count: usize) -> (Library, tempfile::TempDir) {
         let directory = tempfile::TempDir::new().expect("temp dir");
         let library = Library::open_in_memory().expect("library");
@@ -5266,8 +4523,6 @@ mod tests {
 
     #[test]
     fn a_retained_poster_is_cached_for_its_card() {
-        // The whole point of retaining bytes is that drawing needs no network and
-        // no second decode of the media file; the card gets a handle from the row.
         let (library, _directory) = library_with(2);
         let item = library.items(&LibraryQuery::page(1)).expect("items")[0].clone();
         library
@@ -5292,8 +4547,6 @@ mod tests {
 
     #[test]
     fn a_test_built_app_never_starts_an_extraction() {
-        // Extraction spawns ffmpeg and writes into the library; a unit test must not
-        // do either. Only a launch sets this, and the queue is what it gates.
         let (mut app, _directory) = app_with(4);
         app.screen = Screen::Browse;
         app.reload_browse();
@@ -5303,9 +4556,6 @@ mod tests {
 
     #[test]
     fn a_marker_covers_only_the_interval_it_describes() {
-        // The button appears from the start of the segment to its end and not one
-        // frame outside it: a skip offered over the opening scene would cut the
-        // film, and one offered after the intro would do nothing.
         let (mut app, _directory) = app_with(1);
         app.markers = vec![SegmentMarker {
             id: "marker".to_string(),
@@ -5351,8 +4601,6 @@ mod tests {
             seek_serial: 0,
         });
 
-        // A resume at 25:00: until it lands the player reports 0:00 for this load,
-        // or the previous file's position; neither may trigger a skip.
         app.preferences.auto_skip_intro = true;
         app.markers[0].start_ms = 0;
         app.snapshot = PlayerSnapshot {
@@ -5373,7 +4621,6 @@ mod tests {
             ..App::playing_snapshot(90.0, 3_600.0)
         };
 
-        // Off by default: nothing moves on its own.
         app.maybe_auto_skip_intro();
         assert!(app.auto_skipped.is_none());
         assert_ne!(app.status.as_deref(), Some("Skipped the intro."));
@@ -5383,8 +4630,6 @@ mod tests {
         assert_eq!(app.auto_skipped.as_deref(), Some("marker"));
         assert_eq!(app.status.as_deref(), Some("Skipped the intro."));
 
-        // A player that reports the pre-seek position again must not skip twice,
-        // and the status is not overwritten on every frame.
         app.status = None;
         app.maybe_auto_skip_intro();
         assert!(app.status.is_none());
@@ -5392,9 +4637,6 @@ mod tests {
 
     #[test]
     fn the_home_cursor_walks_continue_watching_before_suggestions() {
-        // The cursor must run down the page in the order the page is drawn, or
-        // Enter opens whatever card the eye is not on. Continue watching leads now,
-        // so it owns the first index.
         let (mut app, _directory) = app_with(2);
         let all = app.library.items(&LibraryQuery::page(10)).expect("items");
         app.suggestions = vec![Recommendation {
@@ -5421,10 +4663,6 @@ mod tests {
 
     #[test]
     fn a_test_built_app_never_reaches_for_the_menu_bar() {
-        // Routing ⌘Q talks to AppKit, which is only legal on the main thread. A
-        // library is built here, not launched, so the budget must stay at zero: if
-        // it did not, the first `update` in any of these tests would call into the
-        // window server from a test thread.
         let (mut app, _directory) = app_with(1);
         assert_eq!(app.quit_routing_budget, 0, "not armed by construction");
         let _ = app.update(Message::Refresh);
@@ -5475,8 +4713,7 @@ mod tests {
     #[test]
     fn focus_walks_the_grid_and_stops_at_the_edges() {
         let (mut app, _directory) = app_with(10);
-        // A test-built app has never been resized, so it is laid out for the
-        // reference width; the wider case is covered separately.
+
         assert_eq!(app.columns(), DEFAULT_COLUMNS);
         assert_eq!(app.focus, 0);
         app.move_focus(Focus::Left);
@@ -5487,7 +4724,7 @@ mod tests {
         assert_eq!(app.focus, 1, "there is no row above the first");
         app.move_focus(Focus::Down);
         assert_eq!(app.focus, 1 + DEFAULT_COLUMNS, "down moves a whole row");
-        // Walk to the last card and confirm it does not run past the page.
+
         for _ in 0..20 {
             app.move_focus(Focus::Right);
             app.move_focus(Focus::Down);
@@ -5498,14 +4735,6 @@ mod tests {
 
     #[test]
     fn down_the_episode_list_moves_one_episode_not_one_grid_row() {
-        // Detail draws its episodes as a single column, so an arrow press has to
-        // move one episode. It used the grid's column count, which on a window four
-        // cards wide made Down do nothing at all on a short season — so the third
-        // episode of a three-episode show could not be reached from the keyboard
-        // at all, which is what acceptance step 3 asks for.
-        // Eight titles, so the grid has more than one row: with only a page of
-        // cards that all fit on one row, Down could not move there either and the
-        // grid half of this test would pass for the wrong reason.
         let (mut app, _directory) = app_with(8);
         let episodes = app.browse.items[..3].to_vec();
         app.detail = Some(Detail {
@@ -5530,7 +4759,6 @@ mod tests {
         app.move_focus(Focus::Up);
         assert_eq!(app.focus, 1, "and comes back one");
 
-        // The grid is unchanged: one row is still one row of cards.
         app.screen = Screen::Browse;
         app.focus = 0;
         app.move_focus(Focus::Down);
@@ -5577,7 +4805,7 @@ mod tests {
             app.browse.total, 10,
             "the prefix matches Title.000 through Title.009"
         );
-        // A quote must be treated as text, never as SQL.
+
         app.browse.text = "O'Brien%'".to_string();
         app.reload_browse();
         assert_eq!(app.browse.total, 0);
@@ -5664,7 +4892,6 @@ mod tests {
         assert!(path.ends_with("Screenroom/library.db"));
     }
 
-    /// A series of two episodes, so autoplay has something real to follow.
     fn series_app() -> (App, Vec<String>, tempfile::TempDir) {
         let directory = tempfile::TempDir::new().expect("temp dir");
         let library = Library::open_in_memory().expect("library");
@@ -5716,8 +4943,6 @@ mod tests {
             "the cursor starts on it"
         );
 
-        // Reopened on the second episode, the cursor follows that one: Enter
-        // plays what is highlighted, not the file the screen happened to open.
         app.open_detail(&ids[1]);
         let detail = app.detail.as_ref().expect("detail");
         assert_eq!(detail.episodes[app.focus].id, ids[1]);
@@ -5788,7 +5013,6 @@ mod tests {
         let _ = app.update(Message::GoHome);
         assert!(app.up_next.is_none(), "leaving the player drops the offer");
 
-        // Replaying the finished episode during the countdown keeps the replay.
         let opened =
             PlaybackTracker::open(&app.library, &app.profile_id, &ids[0]).expect("a session");
         app.active = Some(Active {
@@ -5833,7 +5057,7 @@ mod tests {
             app.next_episode_after(&ids[0]).unwrap().is_none(),
             "a viewer who turned autoplay off must not have it happen anyway"
         );
-        // The preference is stored, not just held in memory.
+
         assert!(!app.library.preferences().unwrap().autoplay_next);
     }
 
@@ -5880,8 +5104,6 @@ mod tests {
         assert_eq!(selected.map(|choice| choice.id), Some(1));
         assert!(audio[0].label.contains("English 5.1"));
 
-        // A kind the player reported nothing for yields no options, so the view
-        // renders a statement rather than an inert dropdown.
         app.snapshot
             .tracks
             .retain(|track| track.kind != TrackKind::Subtitle);
@@ -5939,13 +5161,11 @@ mod tests {
             "the new profile must not inherit the first profile's favourites"
         );
 
-        // The choice is stored, so a restart reopens as the same viewer.
         assert_eq!(
             app.library.preferences().unwrap().default_profile,
             Some(guest.clone())
         );
 
-        // And the original viewer still has their own favourite.
         let _ = app.update(Message::ProfileChosen(first));
         assert_eq!(
             app.library
@@ -6037,9 +5257,7 @@ mod tests {
             app.library.source(&source.id).is_ok(),
             "but its row survives, so recovery copy can still name it"
         );
-        // The favourite is hidden while the folder is out of the library, and it
-        // is not deleted: re-admitting the folder brings it straight back. That,
-        // not the queried count, is the claim that nothing was destroyed.
+
         assert_eq!(
             app.library
                 .count(&LibraryQuery {
@@ -6098,7 +5316,6 @@ mod tests {
         assert!(backup.is_file(), "the backup is written: {:?}", app.error);
         assert!(app.error.is_none(), "unexpected error: {:?}", app.error);
 
-        // A change made after the backup, so the restore is observable.
         app.library
             .set_favorite(&app.profile_id, "anything", true)
             .ok();
@@ -6175,7 +5392,7 @@ mod tests {
             app.subtitle_input, "bn",
             "the field shows the restored value"
         );
-        // The next unrelated save must not write the pre-restore set back.
+
         let _ = app.update(Message::ToggleAutoplay(false));
         assert_eq!(
             app.library
@@ -6250,9 +5467,7 @@ mod tests {
     fn quitting_with_a_file_open_saves_the_final_position() {
         let (mut app, _directory) = app_with(1);
         let item = app.browse.items[0].clone();
-        // A session opened exactly as playback opens one, without starting libmpv:
-        // the quit path's job is to close whatever is open and store where it got
-        // to, which is testable on its own.
+
         let opened =
             PlaybackTracker::open(&app.library, &app.profile_id, &item.id).expect("a session");
         app.active = Some(Active {
@@ -6282,7 +5497,7 @@ mod tests {
             watching[0].position_ms, 42_500,
             "the position at quit is what was stored, to the tenth of a second"
         );
-        // And a later viewing resumes from there rather than from the start.
+
         let reopened =
             PlaybackTracker::open(&app.library, &app.profile_id, &item.id).expect("a new session");
         assert_eq!(reopened.resume_from_ms, 42_500);
@@ -6341,7 +5556,7 @@ mod tests {
             ..App::playing_snapshot(10.0, 100.0)
         };
         assert!(snapshot_is_current(&active, &current));
-        // The previous file, still reported while autoplay opens the next one.
+
         assert!(!snapshot_is_current(
             &active,
             &PlayerSnapshot {
@@ -6349,7 +5564,7 @@ mod tests {
                 ..current.clone()
             }
         ));
-        // Loaded, but the resume point has not landed: its 0 must not be stored.
+
         assert!(!snapshot_is_current(
             &active,
             &PlayerSnapshot {
@@ -6357,7 +5572,7 @@ mod tests {
                 ..current.clone()
             }
         ));
-        // A seek asked for and not yet confirmed.
+
         assert!(!snapshot_is_current(
             &active,
             &PlayerSnapshot {
@@ -6388,7 +5603,7 @@ mod tests {
     fn the_window_mode_read_back_overrides_what_the_app_last_asked_for() {
         let (mut app, _directory) = app_with(1);
         app.fullscreen = true;
-        // macOS left fullscreen on its own (green button); the read-back says so.
+
         let _ = app.update(Message::ModeChanged(iced::window::Mode::Windowed));
         assert!(!app.fullscreen);
         let _ = app.update(Message::ModeChanged(iced::window::Mode::Fullscreen));
@@ -6404,11 +5619,6 @@ mod tests {
         assert!(app.error.is_some());
     }
 
-    /// Pumps ticks until the running scan reports it is done.
-    ///
-    /// The scan is a real thread, so this waits for the real event rather than
-    /// assuming a fixed delay; the deadline is what stops a hang from becoming a
-    /// hung test suite.
     fn finish_scan(app: &mut App) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         while app.scan_token.is_some() {
@@ -6419,8 +5629,7 @@ mod tests {
             let _ = app.update(Message::Tick);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        // The finishing tick reloads the catalogue after clearing the token, so one
-        // more pass lets that reload land before the assertions read it.
+
         let _ = app.update(Message::Tick);
     }
 
@@ -6440,8 +5649,7 @@ mod tests {
         assert!(app.scan_token.is_some());
         app.new_root = directory.path().join("b").to_string_lossy().to_string();
         let _ = app.update(Message::AddFolder);
-        // A walk only ends on a Tick, and none has run, so the first is still in
-        // flight: the second must wait in the queue, not replace its progress row.
+
         assert_eq!(app.pending_scans.len(), 1, "the second scan is queued");
         assert!(app.scan_token.is_some());
         finish_scan(&mut app);
@@ -6453,7 +5661,6 @@ mod tests {
         );
     }
 
-    /// Adds a folder through the interface and waits for its first scan.
     fn add_folder(app: &mut App, root: &std::path::Path) {
         app.new_root = root.to_string_lossy().to_string();
         let _ = app.update(Message::AddFolder);
@@ -6464,11 +5671,6 @@ mod tests {
         finish_scan(app);
     }
 
-    /// Writes a file and dates it an hour ago.
-    ///
-    /// The scanner skips a file that changed moments ago, because it may still be
-    /// copying. A test that wrote a file and scanned immediately would therefore
-    /// import nothing and prove nothing.
     fn write_settled(path: &std::path::Path, contents: &[u8]) {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).expect("folder");
@@ -6482,8 +5684,6 @@ mod tests {
             .expect("backdate");
     }
 
-    /// Every name, size and modification time under a folder, for proving that a
-    /// scan read the media without writing to it.
     fn folder_fingerprint(
         root: &std::path::Path,
     ) -> Vec<(String, u64, Option<std::time::SystemTime>)> {
@@ -6513,10 +5713,6 @@ mod tests {
 
     #[test]
     fn a_first_run_scan_builds_the_library_and_writes_nothing_to_the_media_folder() {
-        // The whole first-run journey, on a folder this test made: an empty
-        // library, one granted folder, a finished scan, and a catalogue to browse.
-        // The second half is the promise that matters most — a scan reads the
-        // owner's drive and leaves it exactly as it found it.
         let directory = tempfile::TempDir::new().expect("temp dir");
         let media = directory.path().join("media");
         write_settled(
@@ -6550,9 +5746,6 @@ mod tests {
 
     #[test]
     fn a_folder_that_moved_keeps_its_history_until_it_is_relinked() {
-        // The removable-drive case, which is the everyday one here: a folder is
-        // granted at one path, the volume comes back at another, and the owner's
-        // progress must survive both the disappearance and the relink.
         let directory = tempfile::TempDir::new().expect("temp dir");
         let media = directory.path().join("media");
         write_settled(&media.join("Show.S01E01.Pilot.mkv"), b"not really a video");
@@ -6567,7 +5760,6 @@ mod tests {
             .expect("items")
             .remove(0);
 
-        // Half-way through the episode, so the resume point is real.
         let session = app
             .library
             .start_session(&app.profile_id, &item.id)
@@ -6584,7 +5776,6 @@ mod tests {
             .expect("checkpoint");
         app.library.end_session(&session).expect("end");
 
-        // The volume comes back under a different name.
         let moved = directory.path().join("media 1");
         std::fs::rename(&media, &moved).expect("move the folder");
         let _ = app.update(Message::RescanSource(source_id.clone()));
@@ -6606,7 +5797,6 @@ mod tests {
             "the resume point survived the folder disappearing"
         );
 
-        // Point it at where the volume actually is now.
         let _ = app.update(Message::RelinkTargetChosen(source_id.clone()));
         let _ = app.update(Message::RelinkPathChanged(
             moved.to_string_lossy().to_string(),
@@ -6640,9 +5830,6 @@ mod tests {
 
     #[test]
     fn a_restore_from_a_damaged_backup_changes_nothing() {
-        // Restore replaces the library, so the failure path is the one that has to
-        // be exact: a file that is not a backup must be refused, and the library,
-        // its progress and its profiles must be exactly as they were.
         let directory = tempfile::TempDir::new().expect("temp dir");
         let library = Library::open_in_memory().expect("library");
         let source = library.add_source(directory.path(), None).expect("source");
@@ -6688,7 +5875,7 @@ mod tests {
         let _ = app.update(Message::RestorePathChanged(
             damaged.to_string_lossy().to_string(),
         ));
-        // The first press only states what would happen; the second applies it.
+
         let _ = app.update(Message::RestoreNow);
         let _ = app.update(Message::RestoreNow);
 

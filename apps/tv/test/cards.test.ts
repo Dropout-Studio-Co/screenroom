@@ -35,9 +35,7 @@ function item(overrides: Partial<LibraryItem> = {}): LibraryItem {
 }
 
 test('the grid fits the authored surface exactly, with no overflow', () => {
-  // The same class of bug as the desktop's fixed four columns: a grid that is not
-  // derived from the surface pushes its last card off the edge, and on a TV the edge
-  // is the bezel.
+
   for (const columns of [1, 2, 3, 4, 5, 6]) {
     const geometry = gridFor(columns, 3)
     const lastX = cellPosition(columns - 1, geometry).x
@@ -69,7 +67,7 @@ test('the gutter holds a focused card without touching its neighbour', () => {
 })
 
 test('a degenerate grid is still a grid', () => {
-  // Zero or negative counts come from a layout that has not been measured yet.
+
   for (const columns of [0, -3, Number.NaN]) {
     const geometry = gridFor(columns, 0)
     assert.ok(Number.isInteger(geometry.cardWidth) && geometry.cardWidth > 0)
@@ -99,10 +97,7 @@ test('the art is 16:9 and the card is taller than its art', () => {
 })
 
 test('a card is tall enough for both lines it draws, and a page fits the band it is given', () => {
-  // The first TV build sized the title strip from a guess (`body * 2.4`) while the two
-  // text lines under the art needed more, so the title and its subtitle were drawn past
-  // the card's own bottom edge and were cut off. The same guess let a third row land
-  // below the set. Both are geometry, so both are checked here rather than by eye.
+
   const bands = [
     { columns: 4, rows: 2, top: 232, bottom: 992 },
     { columns: 5, rows: 2, top: 204, bottom: 992 },
@@ -137,13 +132,12 @@ test('a card carries the exact values the template asks for', () => {
   assert.equal(second?.focused, false)
   assert.equal(first?.scale, FOCUS_SCALE)
   assert.equal(second?.scale, 1)
-  // The focused card is drawn on the focus surface, which is the design system's own
-  // focus treatment rather than a ring or an outline.
+
   assert.match(first?.fill ?? '', /^#[0-9a-f]{6}$/)
   assert.notEqual(first?.fill, second?.fill)
   assert.equal(first?.width, geometry.cardWidth)
   assert.ok(Number.isInteger(first?.y))
-  // No card may be drawn off the bottom of the authored surface.
+
   const last = cellPosition(5, geometry)
   assert.ok(last.y + geometry.cardHeight <= APP_HEIGHT, 'the last row is off screen')
 })
@@ -172,14 +166,12 @@ test('the subtitle says the one thing the card cannot show', () => {
     '1995 · 9:00 left',
   )
   assert.equal(subtitleFor(item({ positionMs: 0, durationMs: 0, year: null })), 'Not started')
-  // An unavailable item says why it cannot play, in place of the year: a card that
-  // silently looked normal and then refused to play is the worse experience.
+
   assert.match(subtitleFor(item({ available: false })), /Not readable/)
 })
 
 test('a card for a file with no measured duration still reads honestly', () => {
-  // The duration is unknown until the file has been played once, so the label must not
-  // claim a countdown it cannot compute.
+
   const label = subtitleFor(item({ positionMs: 120_000, durationMs: 0 }))
   assert.equal(label, '1995 · 2:00')
 })
@@ -196,9 +188,7 @@ test('a grid with a rail beside it starts after the rail and still fits', () => 
 })
 
 test('a window of a long list is placed from the top of the band, not from the list', () => {
-  // A thousand files are drawn ten at a time. The cards in the window are placed from
-  // their position *in the window*, while the cursor is still an absolute index, so the
-  // first drawn row always lands at the top of the band.
+
   const geometry = gridFor(5, 2, TOKENS, APP_WIDTH, { top: 200, bottom: 980, left: 342 })
   const window = { first: 5, columns: 5 }
   const items = Array.from({ length: 10 }, (_value, index) =>
@@ -215,8 +205,7 @@ test('a window of a long list is placed from the top of the band, not from the l
 })
 
 test('the token scale the grid derives from is the one the desktop uses', () => {
-  // If the TV scale were re-derived by hand, the grid would drift with it and nothing
-  // would catch it: the card widths are integers computed from these numbers.
+
   assert.equal(TOKENS.type.body, 16 * 1.75)
   const geometry = gridFor(4, 2)
   assert.equal(geometry.originX, Math.round(TOKENS.spacing.shellPad))

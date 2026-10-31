@@ -1,18 +1,3 @@
-//! Prints the audio output's clock against the video playhead, once a second.
-//!
-//! This exists because `audio-pts` is not a continuous value: libmpv publishes it
-//! on its own schedule, so a two-point sample can report a rate that is an artefact
-//! of the update granularity rather than of playback. A time series makes the real
-//! behaviour visible — granularity, offset and any accumulating drift — which is
-//! what any claim about audio or A/V sync has to be based on.
-//!
-//! ```bash
-//! cargo run -p screenroom-player --example audio_clock
-//! ```
-//!
-//! It synthesises its own fixture with FFmpeg, so it needs no user media and never
-//! touches anything outside a temporary directory.
-
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -21,9 +6,6 @@ use screenroom_player::Player;
 use tempfile::TempDir;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // An explicit path lets a caller measure a heavier clip than the default one
-    // (for example 1080p, where the software bridge costs real CPU) without this
-    // example growing a fixture matrix.
     let directory = TempDir::new()?;
     let path = match std::env::args().nth(1) {
         Some(path) => PathBuf::from(path),
@@ -93,7 +75,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Builds a clip with a moving picture and a real tone.
 fn fixture(directory: &TempDir) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let path = directory.path().join("audio-clock.mp4");
     let status = Command::new("ffmpeg")

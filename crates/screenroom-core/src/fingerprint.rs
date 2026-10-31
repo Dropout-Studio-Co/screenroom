@@ -1,23 +1,11 @@
-//! Bounded content fingerprint.
-//!
-//! Fingerprints exist to *recognise* a file across a rename or a moved drive.
-//! They are candidates, not proof: only the size plus the sampled edge bytes are
-//! hashed, so two different files with identical edges can collide. Nothing in
-//! the core merges two files from a fingerprint alone.
-
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-/// Bytes sampled from the head and tail of a larger file.
 const SAMPLE_BYTES: usize = 65_536;
 
-/// Hashes the size plus head/tail samples of a media file.
-///
-/// Files of `2 * SAMPLE_BYTES` or fewer are hashed in full. The size is mixed in
-/// first so a truncated copy cannot share a fingerprint with its original.
 pub fn media_fingerprint(path: &Path, size: u64) -> std::io::Result<String> {
     let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
@@ -99,7 +87,7 @@ mod tests {
 
         bytes[SAMPLE_BYTES * 3 - 1] = 0;
         let _ = write(&path, &bytes);
-        // Restoring the tail restores the fingerprint: middle bytes are not read.
+
         assert_eq!(original, media_fingerprint(&path, size).unwrap());
     }
 

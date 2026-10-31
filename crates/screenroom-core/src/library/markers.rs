@@ -1,33 +1,16 @@
-//! Verifiable skip segments: intros and credits.
-//!
-//! Nothing here guesses. A marker exists only when something that could know
-//! said where the segment starts and ends, and it records which — `user` for a
-//! position the viewer pinned while watching, `manual` for an imported or
-//! corrected one. A marker that would not fit inside the edition it describes is
-//! refused rather than clamped, because a skipped stretch of the wrong film is
-//! worse than no button at all.
-
 use rusqlite::OptionalExtension;
 
 use super::{Library, new_id};
 use crate::domain::SegmentMarker;
 use crate::error::{CoreError, Result};
 
-/// Start of the title sequence.
 pub const INTRO: &str = "intro";
-/// End credits.
+
 pub const CREDITS: &str = "credits";
 
-/// The marker kinds this library accepts.
 pub const KINDS: [&str; 2] = [INTRO, CREDITS];
 
 impl Library {
-    /// Records where an intro or credits segment is, replacing any marker of the
-    /// same kind on that edition.
-    ///
-    /// One marker per kind per edition is the rule the player's button relies on:
-    /// two overlapping intro markers would make "Skip intro" ambiguous, and the
-    /// second viewing would have no way to choose.
     pub fn set_marker(
         &self,
         edition_id: &str,
@@ -107,7 +90,6 @@ impl Library {
         Ok(marker)
     }
 
-    /// Every marker stored for an edition, earliest first.
     pub fn markers(&self, edition_id: &str) -> Result<Vec<SegmentMarker>> {
         let connection = self.connection();
         let mut statement = connection.prepare(
@@ -127,7 +109,6 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// Removes one marker by identifier.
     pub fn remove_marker(&self, id: &str) -> Result<()> {
         let changed = self
             .connection()
@@ -141,12 +122,6 @@ impl Library {
         Ok(())
     }
 
-    /// Records a segment the viewer pinned while watching.
-    ///
-    /// The duration comes from the library rather than the caller, so a marker
-    /// can never be validated against a number the player made up, and an edition
-    /// whose length is still unknown is refused with the reason it is refused
-    /// instead of storing a marker that the next viewing cannot check.
     pub fn mark_segment(
         &self,
         edition_id: &str,

@@ -1,16 +1,8 @@
-//! Preferences, backup and restore.
-//!
-//! These are the tests that stand between the user's history and a bad write, so
-//! they check the refusals as carefully as the happy path: what happens to an
-//! unrelated file, to the library file itself, and to the previous library after
-//! a restore.
-
 use std::fs;
 
 use screenroom_core::{Ingest, Library, Preferences, parse_filename};
 use tempfile::TempDir;
 
-/// A file-backed library, because backup and restore are about the file on disk.
 fn open_library(directory: &TempDir) -> Library {
     Library::open(directory.path().join("screenroom.db")).expect("library")
 }
@@ -31,7 +23,6 @@ fn ingest(library: &Library, source_id: &str, root: &str, path: &str) -> String 
         .expect("ingest")
 }
 
-/// A library with media, a list entry and stored progress.
 fn populated(directory: &TempDir) -> (Library, String) {
     let media = directory.path().join("media");
     fs::create_dir_all(&media).unwrap();
@@ -122,14 +113,12 @@ fn a_subtitle_style_outside_the_offered_range_is_refused() {
         let error = library.set_preferences(&preferences).unwrap_err();
         assert_eq!(error.code(), code);
     }
-    // Refused on the way in, so the previously stored style is still what opens.
+
     assert_eq!(library.preferences().unwrap(), Preferences::default());
 }
 
 #[test]
 fn an_unusable_stored_subtitle_style_still_lets_the_library_open() {
-    // A library written by a build with a wider range, or corrupted, must open.
-    // The read direction clamps and falls back; only the write direction refuses.
     let directory = TempDir::new().expect("temp dir");
     let library = open_library(&directory);
     library
@@ -161,15 +150,13 @@ fn preferences_survive_a_reopen() {
     let profile = library.profiles().unwrap().remove(0);
     let chosen = Preferences {
         autoplay_next: false,
-        // The new preference is part of the round trip too: a saved choice that is
-        // not stored is a setting the next launch silently forgets.
+
         auto_skip_intro: true,
         subtitle_language: Some("pt-BR".to_string()),
         audio_language: Some("en".to_string()),
         subtitle_scale_percent: 175,
         subtitle_position_percent: 92,
-        // Volume is the setting a viewer is most likely to change and least
-        // likely to want reset on the next launch.
+
         volume_percent: 35,
         default_profile: Some(profile.id.clone()),
     };
@@ -209,7 +196,7 @@ fn an_injected_language_tag_is_refused_and_nothing_is_saved() {
         })
         .unwrap_err();
     assert_eq!(error.code(), "invalid_language");
-    // The rejection is for the whole save, so the other field did not land either.
+
     assert_eq!(library.preferences().unwrap(), Preferences::default());
 }
 
@@ -258,7 +245,6 @@ fn a_backup_carries_every_table_and_restores_into_a_fresh_library() {
     assert_eq!(report.info.profiles, 1);
     assert!(report.info.created_ms.is_some(), "the backup is dated");
 
-    // A different, empty library restored from it holds the same content.
     let restore_directory = TempDir::new().expect("temp dir");
     let target = open_library(&restore_directory);
     target.restore_from(&backup_path).expect("restore");
@@ -298,7 +284,6 @@ fn a_restore_keeps_the_previous_library_beside_it() {
     let backup_path = directory.path().join("copy.db");
     library.backup_to(&backup_path).expect("backup");
 
-    // Change the library after the backup, so the safety copy is distinguishable.
     let source = library.sources().unwrap().remove(0);
     ingest(&library, &source.id, &source.root_path, "Se7en (1995).mkv");
     assert_eq!(
@@ -315,8 +300,6 @@ fn a_restore_keeps_the_previous_library_beside_it() {
         .expect("a safety copy is written before replacing anything");
     assert!(std::path::Path::new(&safety).is_file());
 
-    // The live library is back to the backup, and the safety copy holds the state
-    // that was replaced, so the user can go back to it.
     assert_eq!(
         library
             .items(&screenroom_core::LibraryQuery::page(50))

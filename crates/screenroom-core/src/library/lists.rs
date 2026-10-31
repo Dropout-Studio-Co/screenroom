@@ -1,28 +1,17 @@
-//! Per-profile lists and explicit watched state.
-//!
-//! Lists key on the work and progress keys on the edition, so a metadata
-//! correction, a rename or a disconnected drive never loses them.
-
 use rusqlite::params;
 
 use super::{Library, now_ms};
 use crate::error::Result;
 
 impl Library {
-    /// Marks a work as a favourite for one profile.
     pub fn set_favorite(&self, profile_id: &str, work_id: &str, value: bool) -> Result<()> {
         self.set_list_flag(profile_id, work_id, "favorite", value)
     }
 
-    /// Adds or removes a work from one profile's watchlist.
     pub fn set_watchlisted(&self, profile_id: &str, work_id: &str, value: bool) -> Result<()> {
         self.set_list_flag(profile_id, work_id, "watchlisted", value)
     }
 
-    /// Explicitly marks an edition watched or unwatched.
-    ///
-    /// This is a user decision, so it clears the resume position and any hidden
-    /// flag rather than letting a later heuristic fight it.
     pub fn mark_watched(&self, profile_id: &str, edition_id: &str, value: bool) -> Result<()> {
         let mut connection = self.connection();
         let tx = connection.transaction()?;
@@ -42,7 +31,6 @@ impl Library {
         Ok(())
     }
 
-    /// Hides an edition from Continue Watching without changing its watched state.
     pub fn hide_continue(&self, profile_id: &str, edition_id: &str) -> Result<()> {
         self.connection().execute(
             "UPDATE progress SET hidden = 1 WHERE profile_id = ?1 AND edition_id = ?2",

@@ -1,15 +1,3 @@
-//! Retained artwork bytes.
-//!
-//! The rule that decides this module's shape is the offline one: a library must
-//! draw without a network, so what is kept is the image itself, never a remote
-//! URL. Nothing here fetches or generates an image; a client extracts a frame
-//! from media it already has and hands the encoded bytes over, and this module
-//! decides whether they may be stored and gives them back later.
-//!
-//! Artwork belongs to a **work**, not a file: every episode of a series shares
-//! one poster. The file the frame came from is remembered so a re-extraction can
-//! be traced, but it is not part of the identity.
-
 use std::path::PathBuf;
 
 use rusqlite::OptionalExtension;
@@ -17,55 +5,39 @@ use rusqlite::OptionalExtension;
 use super::{Library, now_ms};
 use crate::error::{CoreError, Result};
 
-/// Largest image this library will store.
-///
-/// A poster is a thumbnail, not a gallery print: 768 KiB is far more than a
-/// 400-pixel-wide JPEG needs, and the ceiling is what stops a mistaken caller
-/// from putting a whole frame or a video file into the database.
 pub const MAX_ARTWORK_BYTES: usize = 768 * 1024;
 
-/// Largest accepted dimension, in pixels.
 pub const MAX_ARTWORK_SIDE: i64 = 4096;
 
-/// A poster as it is stored: encoded bytes plus enough to draw them honestly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Artwork {
-    /// Work the image belongs to.
     pub work_id: String,
-    /// Media type of the bytes, currently always `image/jpeg`.
+
     pub mime: String,
-    /// Pixel width, as extracted.
+
     pub width: i64,
-    /// Pixel height, as extracted.
+
     pub height: i64,
-    /// Position in the source file the frame was taken from, in milliseconds.
+
     pub sampled_at_ms: i64,
-    /// The encoded image.
+
     pub bytes: Vec<u8>,
 }
 
-/// A work whose artwork is worth extracting, with the file to read it from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtworkCandidate {
-    /// Work that has no artwork yet.
     pub work_id: String,
-    /// The file to sample a frame from.
+
     pub file_id: String,
-    /// Title, for progress reporting only.
+
     pub title: String,
-    /// Known duration of the edition, or `0` when the player has not reported it.
+
     pub duration_ms: i64,
-    /// Absolute path of the file to sample.
+
     pub path: PathBuf,
 }
 
 impl Library {
-    /// Stores artwork for a work, replacing any earlier image for it.
-    ///
-    /// Validation is deliberately strict and happens before the write: the bytes
-    /// must be a JPEG, within [`MAX_ARTWORK_BYTES`], and describe a plausible
-    /// image. A rejected image stores nothing at all, so a failed extraction can
-    /// never leave a half-written poster that the UI would then draw.
     pub fn store_artwork(
         &self,
         work_id: &str,
@@ -81,9 +53,7 @@ impl Library {
                 "The extracted image was empty or too large to keep.",
             ));
         }
-        // JPEG only: the magic number is checked rather than trusted from the
-        // caller, so a truncated or mislabelled file is refused here instead of
-        // failing later in the image decoder, where the reason would be invisible.
+
         if !bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
             return Err(CoreError::library(
                 "invalid_artwork",
@@ -136,7 +106,6 @@ impl Library {
         Ok(())
     }
 
-    /// Reads the artwork stored for one work.
     pub fn artwork(&self, work_id: &str) -> Result<Option<Artwork>> {
         let connection = self.connection();
         let row = connection
@@ -159,11 +128,6 @@ impl Library {
         Ok(row)
     }
 
-    /// Reads the artwork for a page of works in one query.
-    ///
-    /// A grid asks for every card at once; one query per card would make a page
-    /// of 24 cost 24 round trips, which is the difference between a page that
-    /// opens instantly and one that visibly fills in.
     pub fn artworks_for(&self, work_ids: &[String]) -> Result<Vec<Artwork>> {
         if work_ids.is_empty() {
             return Ok(Vec::new());
@@ -194,22 +158,10 @@ impl Library {
         Ok(found)
     }
 
-    /// Works that have no artwork yet and a readable file to sample one from.
-    ///
-    /// Only available files are offered: extracting a frame from a disconnected
-    /// drive would fail every time, and a queue full of guaranteed failures hides
-    /// the works that could actually be drawn.
     pub fn artwork_candidates(&self, limit: i64) -> Result<Vec<ArtworkCandidate>> {
         self.candidates(None, limit.clamp(1, 200))
     }
 
-    /// Candidates restricted to the works a screen is showing.
-    ///
-    /// A grid must draw what is on it before it fills in the rest of the library:
-    /// a viewer looking at a page of 24 cards cares about those 24 works, not
-    /// about the alphabetically first ones, so the visible set is filtered in the
-    /// query rather than by trimming a global page — which would return almost
-    /// nothing whenever the library is larger than one page.
     pub fn artwork_candidates_in(&self, work_ids: &[String]) -> Result<Vec<ArtworkCandidate>> {
         if work_ids.is_empty() {
             return Ok(Vec::new());
@@ -217,7 +169,6 @@ impl Library {
         self.candidates(Some(work_ids), work_ids.len().min(200) as i64)
     }
 
-    /// The one candidate query, optionally restricted to named works.
     fn candidates(&self, work_ids: Option<&[String]>, limit: i64) -> Result<Vec<ArtworkCandidate>> {
         let filter = match work_ids {
             Some(ids) => format!(
@@ -275,7 +226,6 @@ impl Library {
             .collect())
     }
 
-    /// How many works still have no artwork.
     pub fn missing_artwork_count(&self) -> Result<i64> {
         Ok(self.connection().query_row(
             "SELECT COUNT(*) FROM works w
@@ -291,12 +241,10 @@ mod tests {
     use super::*;
     use crate::{Ingest, SCHEMA_VERSION, parse_filename, schema};
 
-    /// A minimal JPEG header, enough for the magic-number check.
     fn jpeg() -> Vec<u8> {
         vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F']
     }
 
-    /// A library holding one ingested file, with its work and file identifiers.
     fn one_file(name: &str) -> (tempfile::TempDir, Library, String, String) {
         let directory = tempfile::tempdir().expect("tempdir");
         let library = Library::open_in_memory().expect("library");
@@ -327,11 +275,6 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("library.db");
         {
-            // Everything a schema 2 library had, and nothing else: neither the
-            // artwork table nor the later join indexes existed, and their absence
-            // is what the migration adds. The cutoff is the artwork statement
-            // itself, so it has to name that boundary rather than count from the
-            // end of the list — the end of the list is where new indexes land.
             let connection = rusqlite::Connection::open(&path).expect("open");
             for statement in &schema::CREATE[..schema::CREATE.len() - 5] {
                 connection.execute(statement, []).expect("schema");
@@ -351,7 +294,7 @@ mod tests {
             .expect("version");
         assert_eq!(version, SCHEMA_VERSION);
         assert_eq!(library.profiles().expect("profiles").len(), 1);
-        // The new table is usable immediately.
+
         assert!(library.artwork("nothing").expect("read").is_none());
     }
 
@@ -390,7 +333,6 @@ mod tests {
         assert_eq!((stored.width, stored.height), (400, 600));
         assert_eq!(stored.mime, "image/jpeg");
 
-        // Replacing is an overwrite, not a second row: one poster per work.
         library
             .store_artwork(&work, Some(&file_id), &jpeg(), 200, 300, 4_000)
             .expect("replace");
@@ -423,8 +365,6 @@ mod tests {
         assert!(candidates[0].path.exists(), "a candidate must be readable");
         assert_eq!(library.missing_artwork_count().expect("count"), 1);
 
-        // The visible-set query filters in SQL, so a work that is not on the
-        // screen is never offered and the one that is, is.
         let wrong = library
             .artwork_candidates_in(&["another-work".to_string()])
             .expect("wrong");
@@ -434,7 +374,6 @@ mod tests {
             .expect("right");
         assert_eq!(right.len(), 1);
 
-        // A work that has artwork is not offered again.
         library
             .store_artwork(&work, None, &jpeg(), 400, 600, 1_000)
             .expect("store");

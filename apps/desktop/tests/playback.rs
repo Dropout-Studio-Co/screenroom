@@ -1,9 +1,3 @@
-//! Durable resume across a relaunch, and the checkpoint policy around it.
-//!
-//! The store-level tests use the real SQLite file so "reopen the library" means
-//! exactly that. The end-to-end test additionally decodes a real clip with libmpv
-//! and reports honestly when this host has no player.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,7 +8,6 @@ use screenroom_desktop::playback::PlaybackTracker;
 use screenroom_player::Player;
 use tempfile::TempDir;
 
-/// Creates a library on disk with one ingested file, and returns its path.
 fn seeded(directory: &TempDir, relative_path: &str) -> (PathBuf, String) {
     let database = directory.path().join("library.db");
     let media_root = directory.path().join("media");
@@ -75,7 +68,6 @@ fn progress_survives_reopening_the_library() {
 
     assert_eq!(stored_position(&database, &file_id), (30_000, false));
 
-    // A second launch must resume where the first one stopped.
     let library = Library::open(&database).expect("library");
     let opened = PlaybackTracker::open(&library, &profile(&library), &file_id).expect("open");
     assert_eq!(opened.resume_from_ms, 30_000);
@@ -115,13 +107,11 @@ fn checkpoints_are_throttled_but_a_seek_is_not() {
         .tracker;
 
     assert!(tracker.record(&library, 1_000, 60_000, false).unwrap());
-    // Half a second later: too soon, and the core is not asked.
+
     assert!(!tracker.record(&library, 1_500, 60_000, false).unwrap());
-    // A second later: due.
+
     assert!(tracker.record(&library, 2_200, 60_000, false).unwrap());
 
-    // After a seek the next report belongs to a new generation, so it must be
-    // written even though the position barely moved.
     tracker.seek(&library).expect("seek generation");
     assert!(tracker.record(&library, 2_300, 60_000, false).unwrap());
     tracker.close(&library).expect("close");
@@ -142,10 +132,6 @@ fn a_zero_duration_is_never_written() {
     assert_eq!(stored_position(&database, &file_id).0, 0);
 }
 
-/// Writes a real, rights-clear clip with FFmpeg and returns its path.
-///
-/// `testsrc2` is generated inside this process's control and carries a burnt-in
-/// timecode, so nothing here depends on the machine's own media.
 fn generated_clip(media_root: &Path, name: &str, seconds: u32) -> PathBuf {
     let clip = media_root.join(name);
     let video = format!("testsrc2=size=320x240:rate=25:duration={seconds}");
@@ -183,10 +169,6 @@ fn generated_clip(media_root: &Path, name: &str, seconds: u32) -> PathBuf {
     clip
 }
 
-/// Waits until decoded frames are running past `seconds`.
-///
-/// A player that loads but never advances is the failure this reports, so the
-/// last snapshot is part of the panic message.
 fn wait_for_position(player: &Player, seconds: f64) -> screenroom_player::PlayerSnapshot {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
@@ -202,8 +184,6 @@ fn wait_for_position(player: &Player, seconds: f64) -> screenroom_player::Player
     }
 }
 
-/// A real decode that stores progress, then proves a fresh library instance
-/// restores it. This is the automated half of the M2 resume acceptance.
 #[test]
 fn a_real_playback_session_resumes_after_the_library_is_reopened() {
     let directory = TempDir::new().expect("temp dir");
@@ -231,8 +211,6 @@ fn a_real_playback_session_resumes_after_the_library_is_reopened() {
     let player = match Player::start() {
         Ok(player) => player,
         Err(error) => {
-            // No libmpv on this host: the storage half above still ran, and this
-            // half reports that it could not rather than pretending to pass.
             eprintln!("skipped the decode half: {error}");
             return;
         }
@@ -261,24 +239,17 @@ fn a_real_playback_session_resumes_after_the_library_is_reopened() {
         "stored position was {position} ms, expected at least 400"
     );
 
-    // Reopening must offer exactly that position back to the player.
     let library = Library::open(&database).expect("library");
     let opened = PlaybackTracker::open(&library, &profile(&library), &file_id).expect("open");
     assert_eq!(opened.resume_from_ms, position);
 }
 
-/// The app's Replay control reopens a finished file on the same player.
-///
-/// `PlayerState::Ended` is terminal, so "play the finished file again" is a
-/// *second load on one `Player` instance*, not a state change. A player that
-/// loads twice but only ever decodes once would leave Replay looking broken and
-/// this is the test that catches it.
 #[test]
 fn a_finished_file_plays_again_on_the_same_player() {
     let directory = TempDir::new().expect("temp dir");
     let media_root = directory.path().join("media");
     fs::create_dir_all(&media_root).expect("media root");
-    // Long enough that reaching 1s on the second run is not a race with the end.
+
     let clip = generated_clip(&media_root, "Replay.mkv", 6);
 
     let player = match Player::start() {
@@ -293,7 +264,6 @@ fn a_finished_file_plays_again_on_the_same_player() {
     let first = wait_for_position(&player, 0.4);
     player.stop();
 
-    // The replay: the same file, loaded again, from the beginning.
     player.load_at(&clip, Some(0.0));
     let deadline = Instant::now() + Duration::from_secs(10);
     while player.snapshot().position > 0.5 {

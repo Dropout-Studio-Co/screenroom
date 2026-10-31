@@ -1,13 +1,3 @@
-//! Real libmpv smoke test.
-//!
-//! This is not a mock: it generates a synthetic clip with FFmpeg, loads the
-//! device's libmpv at runtime, opens the file and reads the duration back.
-//!
-//! It proves the *client API boundary* — dynamic loading, core creation, option
-//! setting, command argument passing, event waiting and property reads. It does
-//! **not** prove a rendered frame: no render context, GPU surface or window is
-//! involved, so it cannot stand in for the desktop presentation gate.
-
 use std::path::Path;
 use std::process::Command;
 
@@ -36,7 +26,6 @@ fn generate_clip(path: &Path) -> bool {
 fn libmpv_opens_a_real_file_and_reports_its_duration() {
     let capability = capability();
     if !capability.available {
-        // Report, never pretend: hosts without libmpv cannot produce this receipt.
         eprintln!("SKIPPED: {}", capability.reason);
         return;
     }
@@ -55,7 +44,7 @@ fn libmpv_opens_a_real_file_and_reports_its_duration() {
 
     let library = LibMpv::load().expect("libmpv loads");
     let mut player = Mpv::new(&library).expect("mpv core initialises");
-    // Decode without a video output: this exercises demux and decode, not display.
+
     player.set_option("vo", "null").expect("vo=null");
     player.set_option("ao", "null").expect("ao=null");
     player.set_option("pause", "yes").expect("start paused");

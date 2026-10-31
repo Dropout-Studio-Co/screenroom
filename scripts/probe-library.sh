@@ -1,21 +1,5 @@
 #!/usr/bin/env bash
-# Probes every media file under a root with ffprobe, read-only, into JSON Lines.
-#
-# **Reads the media root and writes nothing there.** Output goes to the path you
-# name, which should be outside the root (`.artifacts/...` in this repo). This is a
-# measurement tool for real-library work, not part of the app: the app decides
-# playback compatibility from the platform player, never from a container list.
-#
-#   scripts/probe-library.sh "/Volumes/SomeDrive/movies & shows" .artifacts/probe.jsonl
-#
-# Every line is one file:
-#   {"path": "<relative path>", "ok": true, "format": {...}, "streams": [...]}
-#   {"path": "<relative path>", "ok": false, "error": "<ffprobe stderr, first line>"}
-#
-# Excluded, the same way a scan is: AppleDouble `._*` companions, dot-directories,
-# backup folders and anything outside a media-container extension. Concurrency is
-# bounded (`PROBE_JOBS`, default 4) so a USB drive is not saturated and the machine
-# stays usable; no file is ever opened for writing.
+
 set -uo pipefail
 
 root="${1:?usage: probe-library.sh <media-root> <output.jsonl>}"
@@ -30,14 +14,10 @@ command -v ffprobe >/dev/null || { echo "ffprobe is not installed" >&2; exit 2; 
 command -v jq >/dev/null || { echo "jq is not installed" >&2; exit 2; }
 
 mkdir -p "$(dirname "$out")"
-# Each worker writes its own file and the results are concatenated at the end:
-# several processes appending to one descriptor interleaves their JSON and
-# corrupts the line that happens to land in the middle.
+
 work=$(mktemp -d -t screenroom-probe)
 trap 'rm -rf "$work"' EXIT
 
-# The extensions the library imports; probing one it would not import would make
-# the probe matrix disagree with the catalogue.
 find "$root" -type f \
   \( -iname '*.mkv' -o -iname '*.mp4' -o -iname '*.m4v' -o -iname '*.avi' \
      -o -iname '*.mov' -o -iname '*.webm' -o -iname '*.mpeg' -o -iname '*.mpg' \
@@ -72,7 +52,5 @@ find "$root" -type f \
     rm -f "$stderr"
   ' "$root"
 
-# One line per file, sorted so two runs over the same drive diff cleanly and no
-# line is a splice of two workers.
 cat "$work"/*.jsonl 2>/dev/null | jq -c . | sort >"$out"
 echo "probed $(wc -l <"$out" | tr -d ' ') file(s) into $out" >&2

@@ -1,46 +1,27 @@
-//! Playback sessions and durable resume progress.
-//!
-//! Rules enforced here, not in the UI:
-//!
-//! * One active session per library at a time; starting a new one closes the old.
-//! * Progress is accepted only from the current session generation and a
-//!   strictly increasing event sequence, so a late native callback (a seek
-//!   completion, a delayed position event) cannot rewind newer progress.
-//! * A seek bumps the seek generation; progress from before the seek is
-//!   rejected until the player reports the new generation.
-//! * `ended` marks the edition watched and closes the session.
-
 use rusqlite::{OptionalExtension, params};
 
 use super::{Library, new_id, now_ms};
 use crate::domain::PlaybackSession;
 use crate::error::{CoreError, Result};
 
-/// Longest duration a checkpoint will accept: seven days, in milliseconds.
 pub(crate) const MAX_DURATION_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
-/// One progress report from the player.
 #[derive(Debug, Clone, Copy)]
 pub struct Checkpoint<'a> {
-    /// Authoritative session.
     pub session: &'a PlaybackSession,
-    /// Playhead position in milliseconds.
+
     pub position_ms: i64,
-    /// Media duration in milliseconds.
+
     pub duration_ms: i64,
-    /// Monotonic event sequence for this session.
+
     pub sequence: i64,
-    /// Seek generation the player is reporting against.
+
     pub seek_generation: i64,
-    /// True when the player reached the end of the media.
+
     pub ended: bool,
 }
 
 impl Library {
-    /// Opens an authoritative session for a media file.
-    ///
-    /// Any previously active session is closed first, so two native players can
-    /// never both own the current progress row.
     pub fn start_session(&self, profile_id: &str, file_id: &str) -> Result<PlaybackSession> {
         let mut connection = self.connection();
         let tx = connection.transaction()?;
@@ -85,7 +66,6 @@ impl Library {
         Ok(session)
     }
 
-    /// Marks that the player started a seek and returns the new seek generation.
     pub fn begin_seek(&self, session: &PlaybackSession) -> Result<i64> {
         let mut connection = self.connection();
         let tx = connection.transaction()?;
@@ -109,11 +89,6 @@ impl Library {
         Ok(next)
     }
 
-    /// Stores progress if, and only if, this report is still authoritative.
-    ///
-    /// Returns `false` (without writing) for a stale session, an out-of-order
-    /// event, a seek generation mismatch, an impossible duration, or a session
-    /// whose profile/file/edition no longer match the row.
     pub fn checkpoint(&self, report: Checkpoint<'_>) -> Result<bool> {
         if report.position_ms < 0
             || report.duration_ms <= 0
@@ -195,7 +170,6 @@ impl Library {
         Ok(true)
     }
 
-    /// Closes a session without writing progress.
     pub fn end_session(&self, session: &PlaybackSession) -> Result<()> {
         self.connection().execute(
             "UPDATE sessions SET status = 'closed' WHERE id = ?1 AND generation = ?2",

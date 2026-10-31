@@ -23,7 +23,7 @@ test('every file gets controls and a way out, even with no tracks at all', () =>
 })
 
 test('a file that never started gets no transport rows, only the way out', () => {
-  // A Pause row over a black screen is a control that looks operable and does nothing.
+
   const rows = buildPlayerMenu({
     tracks: [],
     state: { audioIndex: null, textIndex: null, silent: true },

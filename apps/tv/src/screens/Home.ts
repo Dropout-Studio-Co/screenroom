@@ -1,21 +1,3 @@
-/**
- * Home: what the owner was watching, or the whole library when they are not.
- *
- * This screen is the fix for the defect the owner found on the set. The scan had
- * catalogued over a thousand files, and Home drew one line of text and no cards — it
- * only ever showed *Continue watching*, which is empty until something has been played.
- * A library that is only visible after you have already watched something is a library
- * that cannot be started.
- *
- * So the shelf is decided by `core/browse.ts`: resume points when there are any, and
- * the whole catalogue when there are not. Either way the rail is beside it, and either
- * way the grid scrolls rather than paging, which is what makes a thousand files
- * drawable on a 2021 TV: only ten cards exist at a time, and the window slides.
- *
- * The rail is a real focus zone. Home opens on it so the navigation is found on the
- * first launch without a key the remote may not have.
- */
-
 import Blits from '@lightningjs/blits'
 
 import { COLUMNS, ROWS, emptyState, homeShelf } from '../core/browse.ts'
@@ -41,15 +23,12 @@ import {
   sources,
 } from '../app/runtime.ts'
 
-/** The route this screen remembers its cursor under. */
 const ROUTE = '/'
 
-/** Where the grid starts, just right of the rail. */
 const CONTENT_LEFT = RAIL_WIDTH + Math.round(TOKENS.spacing.shellPad * 0.6)
 
 export default Blits.Component('Home', {
-  // A child component has to be declared here as well as imported: the engine resolves
-  // a template tag against this map, and an undeclared one throws at render time.
+
   components: { Rail },
   template: `
     <Element w="1920" h="1080" :color="$background">
@@ -170,9 +149,7 @@ export default Blits.Component('Home', {
       bodySize: Math.round(TOKENS.type.body),
       captionSize: Math.round(TOKENS.type.caption),
       subY: Math.round(TOKENS.spacing.shellPad + TOKENS.type.title * 1.4),
-      // The grid's own numbers, copied out of `computed.grid` by `applyLayout` before the
-      // first paint: a template resolves `$name` against state, so a value that exists
-      // only on a computed object is `undefined` here and its node is drawn nowhere.
+
       artHeight: 0,
       fieldX: 0,
       titleY: 0,
@@ -191,7 +168,7 @@ export default Blits.Component('Home', {
       emptyTitle: '',
       emptyDetail: '',
       cards: [] as ReturnType<typeof buildCards>,
-      /** The absolute index of the first drawn card, which is what `cards` maps from. */
+
       shelfFirst: 0,
       count: 0,
       zone: 'rail' as NavZone,
@@ -200,13 +177,7 @@ export default Blits.Component('Home', {
     }
   },
   computed: {
-    /**
-     * The grid, sized to the band this screen leaves for it.
-     *
-     * `left` keeps the first column clear of the rail. `gridFor` shrinks the cards until
-     * both rows fit between the header and the footer, so nothing is drawn past the
-     * bottom of the television.
-     */
+
     grid() {
       const top = Math.round(
         TOKENS.spacing.shellPad + TOKENS.type.title * 1.4 + TOKENS.type.body * 2.6,
@@ -227,13 +198,7 @@ export default Blits.Component('Home', {
       this.reload()
     },
   },
-  /**
-   * The remote keys, as the engine names them.
-   *
-   * This block is not decoration: an input handler is only reachable when it is
-   * declared here, and the screen's own `methods` are what it calls. Without it the
-   * arrow keys arrive and go nowhere.
-   */
+
   input: {
     left() {
       this.press('left')
@@ -252,7 +217,7 @@ export default Blits.Component('Home', {
     },
   },
   methods: {
-    /** Copies the derived geometry into state, where the template can see it. */
+
     applyLayout(): void {
       const grid = this.grid
       this.artHeight = grid.artHeight
@@ -267,7 +232,7 @@ export default Blits.Component('Home', {
       this.emptyWidth = APP_WIDTH - CONTENT_LEFT - Math.round(TOKENS.spacing.shellPad)
       this.footY = 1080 - Math.round(TOKENS.spacing.shellPad + TOKENS.type.body * 2.4)
     },
-    /** The cursor's bounds, which depend on what the shelf is currently holding. */
+
     bounds(): { railCount: number; contentCount: number; columns: number } {
       return {
         railCount: RAIL_ENTRIES.length,
@@ -275,7 +240,7 @@ export default Blits.Component('Home', {
         columns: COLUMNS,
       }
     },
-    /** Reads the store, restores the cursor, and rebuilds the shelf. */
+
     reload(): void {
       const all = items()
       const situation = emptyState({
@@ -301,7 +266,7 @@ export default Blits.Component('Home', {
         ? `OK opens · ◄ ► ▲ ▼ move · ${driveLine}`
         : `Browser preview — nothing here proves TV playback · ${driveLine}`
     },
-    /** Rebuilds the cards for the current cursor, which is what the template shows. */
+
     repaint(): void {
       const shelf = homeShelf(items())
       this.heading = shelf.heading
@@ -317,9 +282,7 @@ export default Blits.Component('Home', {
       this.shelfFirst = window.first
       this.cards = buildCards(
         shelf.items.slice(window.first, window.first + window.count),
-        // One cursor, one highlight. While the rail owns the cursor the grid draws no
-        // focused card, because two inverted surfaces at once is a viewer not knowing
-        // which one Enter will act on.
+
         this.zone === 'content' ? this.contentIndex : -1,
         this.grid,
         TOKENS,
@@ -336,7 +299,7 @@ export default Blits.Component('Home', {
         this.bounds(),
       )
     },
-    /** One D-pad press, by the rules `core/nav.ts` tests. */
+
     press(direction: 'left' | 'right' | 'up' | 'down'): void {
       const current: NavPosition = {
         zone: this.zone,
@@ -356,7 +319,7 @@ export default Blits.Component('Home', {
       this.contentIndex = next.content
       this.repaint()
     },
-    /** OK on the rail opens a destination; OK on a card opens the file. */
+
     enter(): void {
       if (this.zone === 'rail') {
         const entry = RAIL_ENTRIES[this.railIndex]
@@ -367,7 +330,7 @@ export default Blits.Component('Home', {
           this.$router.to(entry.route)
           return
         }
-        // Home on Home is not a dead key: it moves the cursor into the shelf.
+
         if (this.count > 0) {
           this.zone = 'content'
           this.contentIndex = Math.max(0, this.contentIndex)

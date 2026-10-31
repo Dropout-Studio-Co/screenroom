@@ -1,37 +1,4 @@
 #!/usr/bin/env node
-/**
- * Turns the Vite output into something a TV can install.
- *
- * Vite produces a web page; a Tizen widget is a directory with a `config.xml` at its
- * root and an `index.html` that loads nothing from outside that directory. The gap
- * between those two is what this script closes, and it closes it *checking* rather than
- * copying and hoping: every failure below is one that would otherwise appear as a blank
- * screen on the TV, where there is no console to read.
- *
- * The checks, and why each one is here:
- *
- * * `main.js` exists and is referenced by `index.html`. A bundle that is built but not
- *   linked is a white screen with no error.
- * * **`main.js` is loaded as a classic deferred script, not as a module.** Vite emits
- *   `<script type="module" crossorigin src=”./main.js”>`, and a widget runs from a
- *   `file://` origin where Chromium refuses module scripts on CORS grounds. The result
- *   is an installed app that launches, shows nothing, and reports nothing — which is
- *   exactly what the first build of this client did on the owner's TV. `defer` keeps
- *   the execution order a module would have had (after the document is parsed, so the
- *   mounted element exists), which is why the tag is rewritten rather than dropped.
- * * no reference is absolute. The widget has no origin, so `/assets/main.js` resolves
- *   against nothing. Vite is configured for relative output, and this verifies it
- *   rather than trusting the config.
- * * the bundle contains no module-only syntax. `import.meta` and a top-level
- *   `import`/`export` are parse-time errors in a classic script, so one leftover would
- *   turn the whole bundle into the same blank screen by a different route.
- * * `config.xml` names the same `index.html`, and carries the version this build was
- *   made from. A widget whose declared version drifts from its code cannot be told
- *   apart from the previous one once it is installed.
- *
- * The output is `build/tizen/`, a directory containing nothing but what belongs in the
- * widget. Nothing here writes outside this package.
- */
 
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
@@ -43,16 +10,11 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const distDir = join(packageRoot, 'dist')
 const configPath = join(packageRoot, 'config.xml')
 const iconPath = join(packageRoot, 'icon.png')
-// `build/widget` rather than `build/tizen`: this directory is wiped on every build, and
-// the packaged `.wgt` used to land inside it — so re-staging quietly deleted the one
-// artifact that takes a toolchain to produce. The package is copied out to `build/`
-// instead, where nothing here can remove it.
+
 const stageDir = join(packageRoot, 'build', 'widget')
 
-/** Files that must exist for the widget to be installable. */
 const REQUIRED = ['index.html', 'main.js']
 
-/** Stops the build with a message that says what to do about it. */
 function fail(message) {
   console.error(`prepare-tizen-dist: ${message}`)
   process.exit(1)
@@ -79,7 +41,6 @@ async function main() {
     fail('dist/index.html does not load ./main.js relatively; the widget would load nothing.')
   }
 
-  // Rewrite the module tag Vite emits into one a `file://` widget can actually run.
   const stagedHtml = html
     .replace(/<script[^>]*\bsrc=["']\.\/main\.js["'][^>]*><\/script>/, '<script defer src="./main.js"></script>')
     .replace(/\s*<link[^>]*rel=["']modulepreload["'][^>]*>/g, '')
@@ -89,8 +50,7 @@ async function main() {
   if (/type=["']module["']/.test(stagedHtml)) {
     fail('index.html still contains a module script; a widget cannot run one from file://.')
   }
-  // An absolute URL here would work in the dev server and fail in the widget, which is
-  // exactly the kind of difference that survives until the TV.
+
   const absolute = [...html.matchAll(/(?:src|href)=["'](\/[^"']*)["']/g)].map((match) => match[1])
   if (absolute.length > 0) {
     fail(`dist/index.html references absolute paths (${absolute.join(', ')}); a widget has no origin.`)
@@ -110,8 +70,7 @@ async function main() {
 
   await rm(stageDir, { recursive: true, force: true })
   await mkdir(stageDir, { recursive: true })
-  // Only the built page and the widget's own metadata: anything else in the directory
-  // is something the TV would download for no reason, or something that must not ship.
+
   await writeFile(join(stageDir, 'index.html'), stagedHtml, 'utf8')
   await copyFile(join(distDir, 'main.js'), join(stageDir, 'main.js'))
   if (existsSync(join(distDir, 'assets'))) {
@@ -119,10 +78,7 @@ async function main() {
   }
   await writeFile(join(stageDir, 'config.xml'), stamped, 'utf8')
   await copyFile(iconPath, join(stageDir, 'icon.png'))
-  // The Tizen project metadata goes in too, so the staging directory is a complete,
-  // packageable Tizen web project rather than a directory that merely looks like one.
-  // `tizen_web_project.yaml`'s own `excludes` list keeps both files out of the widget,
-  // which is why they can sit beside the files that ship.
+
   for (const metadata of ['.tproject', 'tizen_web_project.yaml']) {
     if (existsSync(join(packageRoot, metadata))) {
       await copyFile(join(packageRoot, metadata), join(stageDir, metadata))
@@ -147,7 +103,6 @@ async function main() {
   console.log('prepare-tizen-dist: config.xml and icon.png included; nothing else.')
 }
 
-/** Copies a directory recursively, without needing Node 22's `cp`. */
 async function copyTree(from, to) {
   await mkdir(to, { recursive: true })
   const { readdir, stat } = await import('node:fs/promises')

@@ -31,9 +31,7 @@ test('the first snapshot of a live session is accepted', () => {
 })
 
 test('a late callback from an ended session never overwrites live progress', () => {
-  // The bug this rule exists for: an old session's sequence counter can be
-  // arbitrarily high, so "newer number wins" would let the previous film's
-  // playhead overwrite the one on screen.
+
   const current = snapshot({ sequence: 2, positionMs: 2000 })
   const stale = snapshot({ sessionId: 'session-ended', sequence: 99_999, positionMs: 500 })
   const verdict = acceptProgress(live, current, stale)
@@ -58,8 +56,7 @@ test('a repeated sequence number is refused rather than written twice', () => {
 })
 
 test('reloading the file in the same session restarts the sequence scale', () => {
-  // Episode 2 of the same session: generation moves, so the sequence counter is
-  // allowed to be lower than episode 1's without being stale.
+
   const first = snapshot({ generation: 1, sequence: 500, positionMs: 500_000 })
   const second = snapshot({ generation: 2, sequence: 1, positionMs: 1200 })
   const verdict = acceptProgress(live, first, second)
@@ -98,7 +95,7 @@ test('a finished file is finished whether the player said so or the ratio did', 
   assert.equal(isFinished(600_000, 600_000, true), true)
   assert.equal(isFinished(599_000, 600_000, false), true, 'past the ratio')
   assert.equal(isFinished(300_000, 600_000, false), false)
-  // An unknown duration cannot make a file look finished.
+
   assert.equal(isFinished(5000, 0, false), false)
 })
 
@@ -106,8 +103,7 @@ test('a position is only worth writing once it means something', () => {
   assert.equal(isWorthSaving(0, 600_000), false)
   assert.equal(isWorthSaving(5_000, 600_000), false, 'the studio logo is not a resume point')
   assert.equal(isWorthSaving(WORTH_SAVING_MS, 600_000), true)
-  // A short clip: one percent is the floor, not fifteen seconds, or a 2-minute clip
-  // would keep nothing until it was almost over.
+
   assert.equal(isWorthSaving(1_000, 60_000), true)
   assert.equal(isWorthSaving(10, 60_000), false)
 })

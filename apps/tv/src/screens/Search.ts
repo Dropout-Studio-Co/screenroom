@@ -1,16 +1,3 @@
-/**
- * Search: find a file with nothing but the D-pad.
- *
- * A TV has no keyboard, so this screen draws one: six columns of letters and digits,
- * then Space, ⌫ and Clear, all reachable with the arrow keys. Results appear beside the
- * keyboard as the query grows and are one press away — Down from the keyboard's last
- * row, or Left from any result back to the rail.
- *
- * Three zones, one cursor each: the rail, the keys, and the result list. Every
- * transition between them has a key binding that is named on screen, because a search
- * screen you cannot leave is worse than no search at all.
- */
-
 import Blits from '@lightningjs/blits'
 
 import { describeSearch, SEARCH_KEYS, searchResults, withKey } from '../core/search.ts'
@@ -25,13 +12,10 @@ import { items, rememberSearch, searchSession } from '../app/runtime.ts'
 
 const ROUTE = '/search'
 
-/** This screen has three zones: the rail, the keyboard, and the matches. */
 type SearchZone = 'rail' | 'keys' | 'results'
 
-/** The keyboard starts just right of the rail. */
 const CONTENT_LEFT = RAIL_WIDTH + Math.round(TOKENS.spacing.shellPad * 0.6)
 
-/** One drawn result. */
 interface ResultRow {
   readonly id: string
   readonly title: string
@@ -196,7 +180,7 @@ export default Blits.Component('Search', {
       this.reload()
     },
   },
-  /** The remote keys. Arrows and OK are the whole interface. */
+
   input: {
     left() {
       this.press('left')
@@ -215,7 +199,7 @@ export default Blits.Component('Search', {
     },
   },
   methods: {
-    /** Places the keyboard and the result list from the token scale. */
+
     applyLayout(): void {
       const keyboard = this.keyboard
       const keysTop = Math.round(
@@ -234,13 +218,7 @@ export default Blits.Component('Search', {
       this.keyLabelY = Math.round((keyboard.height - this.keyLabelSize * 1.25) / 2)
       this.footY = 1080 - Math.round(TOKENS.spacing.shellPad + TOKENS.type.body * 2.4)
     },
-    /**
-     * Restores the search as the viewer left it.
-     *
-     * The query lives in the runtime rather than in this component's state because
-     * opening a result unmounts the screen: a search that forgot what was typed when the
-     * viewer looked at one match and came back would be a search nobody could use.
-     */
+
     reload(): void {
       const session = searchSession()
       this.query = session.query
@@ -251,7 +229,7 @@ export default Blits.Component('Search', {
       this.repaint()
       this.footer = 'OK types · ▲▼◄► move · Left from the first column opens the menu · Back returns'
     },
-    /** Rebuilds the keys and the visible matches. */
+
     repaint(): void {
       const matches = searchResults(items(), this.query)
       this.matchCount = matches.length
@@ -282,8 +260,6 @@ export default Blits.Component('Search', {
           }
         })
 
-      // Only the zone that owns the cursor draws a highlight, so there is never a lit
-      // key and a lit match at the same time.
       this.keys = keyCells(this.zone === 'keys' ? this.keyIndex : -1, CONTENT_LEFT, this.keysTop, TOKENS)
       this.railRows = railRows(railIndexFor(ROUTE), this.railIndex, this.zone === 'rail')
       this.queryLabel = `Search: ${this.query === '' ? '—' : this.query}`
@@ -296,7 +272,7 @@ export default Blits.Component('Search', {
         zone: this.zone === 'rail' ? 'rail' : this.zone === 'results' ? 'results' : 'keys',
       })
     },
-    /** One D-pad press, across the three zones. */
+
     press(direction: 'left' | 'right' | 'up' | 'down'): void {
       if (this.zone === 'rail') {
         const next = moveNav(
@@ -328,9 +304,7 @@ export default Blits.Component('Search', {
           this.repaint()
           return
         }
-        // Down with no key below is not a dead press: it enters the matches, which is
-        // the one direction the cursor has left to go. The last row of the keyboard is
-        // short (Space, ⌫, Clear), so "the key below" is not simply "the last row".
+
         if (direction === 'down' && this.matchCount > 0) {
           this.zone = 'results'
           this.resultIndex = 0
@@ -339,7 +313,6 @@ export default Blits.Component('Search', {
         return
       }
 
-      // The result list: one column, so up and down walk it and left leaves.
       if (direction === 'left') {
         this.zone = 'rail'
         this.repaint()
@@ -358,7 +331,7 @@ export default Blits.Component('Search', {
         }
       }
     },
-    /** OK types a key, or opens the focused match. */
+
     enter(): void {
       if (this.zone === 'rail') {
         const entry = RAIL_ENTRIES[this.railIndex]
@@ -369,8 +342,7 @@ export default Blits.Component('Search', {
           this.$router.to(entry.route)
           return
         }
-        // OK on Search while Search is open hands the cursor to the keyboard rather
-        // than doing nothing.
+
         this.zone = 'keys'
         this.repaint()
         return

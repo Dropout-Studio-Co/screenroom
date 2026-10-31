@@ -1,28 +1,14 @@
-//! Native folder selection.
-//!
-//! A media root has to be granted the way the platform grants one. On macOS that
-//! is `NSOpenPanel`, which `rfd` wraps; on every other target this build has no
-//! picker yet, and it says so instead of pretending the dialog was cancelled —
-//! a cancelled dialog and an unavailable one need different words in the UI.
-//!
-//! The dialog is modal, so it blocks the update loop while it is open. That is the
-//! correct behaviour for a folder chooser: nothing else in the window should be
-//! usable until the choice is made or dismissed.
-
 use std::path::{Path, PathBuf};
 
-/// What a selection attempt produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Picked {
-    /// A folder, or a file, was chosen.
     Path(PathBuf),
-    /// The viewer dismissed the dialog.
+
     Cancelled,
-    /// This build has no native picker; the caller should offer the typed path.
+
     Unavailable(&'static str),
 }
 
-/// Opens the platform's folder chooser, starting at `start` when it exists.
 pub fn choose_folder(start: Option<&Path>) -> Picked {
     #[cfg(target_os = "macos")]
     {
@@ -44,7 +30,6 @@ pub fn choose_folder(start: Option<&Path>) -> Picked {
     }
 }
 
-/// Opens the platform's save panel, suggesting `file_name`, and filters to `.db`.
 pub fn choose_backup_path(start: Option<&Path>, file_name: &str) -> Picked {
     #[cfg(target_os = "macos")]
     {
@@ -67,7 +52,6 @@ pub fn choose_backup_path(start: Option<&Path>, file_name: &str) -> Picked {
     }
 }
 
-/// Opens the platform's file panel for a backup to restore from.
 pub fn choose_restore_file(start: Option<&Path>) -> Picked {
     #[cfg(target_os = "macos")]
     {
@@ -95,8 +79,6 @@ mod tests {
 
     #[test]
     fn an_unavailable_picker_says_so_rather_than_looking_cancelled() {
-        // The distinction matters: "cancelled" means the viewer changed their mind
-        // and needs no message, while "unavailable" has to point at the typed path.
         let picked = Picked::Unavailable("no picker");
         assert_ne!(picked, Picked::Cancelled);
     }

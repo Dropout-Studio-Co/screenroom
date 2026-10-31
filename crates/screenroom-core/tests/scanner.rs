@@ -1,5 +1,3 @@
-//! Scanner contract tests against a real temporary directory tree.
-
 use std::fs::{self, File};
 use std::path::Path;
 use std::time::{Duration, SystemTime};
@@ -7,7 +5,6 @@ use std::time::{Duration, SystemTime};
 use screenroom_core::{Library, LibraryQuery, LibraryScanner, ScanToken, SourceState};
 use tempfile::TempDir;
 
-/// Writes `contents` and backdates the mtime so the settle window passes.
 fn write_settled(path: &Path, contents: &[u8]) {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).unwrap();
@@ -56,8 +53,7 @@ fn scans_media_and_reports_skipped_entries() {
 #[test]
 fn scan_ingest_accepts_the_stored_root_spelling() {
     let dir = TempDir::new().unwrap();
-    // Canonical first, so the only difference below is spelling (`//`), not the
-    // macOS `/var` symlink that the scanner rightly refuses as a replaced root.
+
     let base = fs::canonicalize(dir.path()).unwrap();
     let root = base.join("media");
     fs::create_dir_all(&root).unwrap();
@@ -117,8 +113,7 @@ fn non_utf8_parent_directory_is_skipped_as_invalid_name() {
 fn apple_double_companions_are_not_media() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
-    // What macOS writes beside every file on an exFAT USB drive: 4 KiB of
-    // metadata with the same name and the same media extension.
+
     write_settled(&root.join("Film.2020.mkv"), b"real film");
     write_settled(&root.join("._Film.2020.mkv"), b"apple double");
     write_settled(&root.join("Show/Season 1/Show.S01E01.mkv"), b"real episode");
@@ -148,8 +143,7 @@ fn apple_double_companions_are_not_media() {
 fn two_shows_with_one_title_and_different_years_stay_separate() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
-    // Same title, different shows. Episode filenames carry no year, so the year
-    // can only come from the show folder — and it is what keeps them apart.
+
     write_settled(
         &root.join("The Office (2001)/Season 01/The Office - s01e01.mkv"),
         b"british",
@@ -182,9 +176,9 @@ fn two_shows_with_one_title_and_different_years_stay_separate() {
 fn young_files_and_download_sidecars_are_not_imported() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
-    // Fresh mtime: still being written.
+
     fs::write(root.join("Fresh.2020.mkv"), b"growing").unwrap();
-    // Settled but with a download sidecar.
+
     write_settled(&root.join("Queued.2020.mkv"), b"queued");
     fs::write(root.join("Queued.2020.mkv.part"), b"partial").unwrap();
 
@@ -220,7 +214,7 @@ fn cancellation_stops_the_walk_and_keeps_availability() {
     token.cancel();
     let summary = scanner(&library).scan(&source.id, &token, |_| {}).unwrap();
     assert!(summary.cancelled);
-    // A cancelled scan must not withdraw availability.
+
     assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 5);
 }
 
@@ -258,7 +252,7 @@ fn complete_rescan_withdraws_availability_without_losing_progress() {
     let offline = library.item(&gone.id, Some(&profile.id)).unwrap().unwrap();
     assert!(!offline.available);
     assert!(offline.favorite);
-    // Rows stay visible: an absent drive is not a deleted library.
+
     assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 2);
     let only_available = LibraryQuery {
         available_only: true,
@@ -329,7 +323,6 @@ fn a_returned_folder_is_available_again_even_when_its_rescan_is_partial() {
         SourceState::Available
     );
 
-    // Back, but one file is still downloading, so every rescan stays partial.
     fs::rename(&held, &root).unwrap();
     write_settled(&root.join("Downloading.2020.mkv"), b"partial");
     fs::write(root.join("Downloading.2020.mkv.part"), b"downloading").unwrap();
@@ -346,13 +339,6 @@ fn a_returned_folder_is_available_again_even_when_its_rescan_is_partial() {
 
 #[test]
 fn an_unplugged_drive_is_not_an_empty_library() {
-    // The worst failure this application could have is treating a missing disk as a
-    // deleted library: a rescan of an unplugged drive must not withdraw availability,
-    // drop rows, or lose progress. It must report the source as unavailable and
-    // report the scan as incomplete, so nothing downstream believes it finished.
-    //
-    // A volume that is gone and a folder that was deleted are both covered, because
-    // they carry different recovery copy and the same preservation guarantees.
     let dir = TempDir::new().unwrap();
     let volume = dir.path().join("volume");
     let root = volume.join("drive");
@@ -379,9 +365,6 @@ fn an_unplugged_drive_is_not_an_empty_library() {
         .unwrap();
     let file_id = file.id.clone();
 
-    // The folder is deleted while its volume stays mounted. The recovery is a
-    // relink, so saying "drive not attached" here would send the owner to do
-    // something that cannot work.
     fs::remove_dir_all(&root).unwrap();
     let summary = scanner(&library)
         .scan(&source.id, &ScanToken::new(), |_| {})
@@ -403,7 +386,6 @@ fn an_unplugged_drive_is_not_an_empty_library() {
         SourceState::Missing
     );
 
-    // Everything the owner had is still there, and still theirs.
     assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 2);
     let offline = library.item(&file_id, Some(&profile.id)).unwrap().unwrap();
     assert!(!offline.available);
@@ -415,7 +397,6 @@ fn an_unplugged_drive_is_not_an_empty_library() {
     };
     assert_eq!(library.count(&favorites).unwrap(), 1);
 
-    // And the folder coming back restores availability rather than leaving it stale.
     fs::create_dir_all(&root).unwrap();
     write_settled(&root.join("Film.2020.mkv"), b"film");
     write_settled(&root.join("Show.S01E01.mkv"), b"episode");
@@ -433,8 +414,6 @@ fn an_unplugged_drive_is_not_an_empty_library() {
     );
     assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 2);
 
-    // Now the volume itself goes away, taking the mount point with it. This one is
-    // a disconnected drive, and the recovery is to attach it again.
     fs::remove_dir_all(&volume).unwrap();
     let unplugged = scanner(&library)
         .scan(&source.id, &ScanToken::new(), |_| {})
@@ -465,13 +444,6 @@ fn an_unplugged_drive_is_not_an_empty_library() {
 
 #[test]
 fn a_root_behind_a_withdrawn_grant_is_not_a_missing_drive() {
-    // Access being revoked is a third case with its own recovery: re-granting. It is
-    // the one the owner cannot fix by looking at cables, so conflating it with the
-    // others would waste their time.
-    //
-    // Skipped when the process can read a mode-000 directory anyway, which is the
-    // case for a root user; the assertion is about the classification the operating
-    // system reports, not about this test being able to create the condition.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -495,8 +467,7 @@ fn a_root_behind_a_withdrawn_grant_is_not_a_missing_drive() {
                 .scan(&source.id, &ScanToken::new(), |_| {})
                 .unwrap()
         });
-        // Restore before asserting, so a failure cannot leave an unreadable
-        // directory behind for the temporary-directory cleanup.
+
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
 
         if let Some(summary) = outcome {
@@ -519,9 +490,6 @@ fn a_root_behind_a_withdrawn_grant_is_not_a_missing_drive() {
 
 #[test]
 fn a_root_replaced_by_a_symlink_is_refused_rather_than_followed() {
-    // A root whose canonical path no longer matches what was authorized is a
-    // relink question, not a scan question: following it would read media the owner
-    // never granted.
     let dir = TempDir::new().unwrap();
     let root = dir.path().join("root");
     fs::create_dir_all(&root).unwrap();
@@ -546,7 +514,7 @@ fn a_root_replaced_by_a_symlink_is_refused_rather_than_followed() {
             .scan(&source.id, &ScanToken::new(), |_| {})
             .unwrap_err();
         assert_eq!(error.code(), "unsafe_path");
-        // Nothing outside the granted root was imported, and nothing was withdrawn.
+
         assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 1);
         assert!(
             !library
@@ -588,7 +556,6 @@ fn a_source_cannot_be_scanned_twice_at_once() {
     let library = Library::open_in_memory().unwrap();
     let source = library.add_source(root, None).unwrap();
 
-    // Attempt a nested scan from inside the first scan: the source is claimed.
     let mut nested_error = None;
     scanner(&library)
         .scan(&source.id, &ScanToken::new(), |update| {
@@ -606,7 +573,6 @@ fn a_source_cannot_be_scanned_twice_at_once() {
         Some("scan_running".into())
     );
 
-    // The claim is released, so the source is scannable again.
     assert!(
         scanner(&library)
             .scan(&source.id, &ScanToken::new(), |_| {})

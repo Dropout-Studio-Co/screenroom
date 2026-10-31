@@ -1,12 +1,3 @@
-//! The SQLite-backed library: sources, catalog, playback state and lists.
-//!
-//! One [`Library`] owns one connection. Every public method takes `&self`, so a
-//! UI thread, a scanner worker and a native player callback can share it; the
-//! connection lock serialises writes and transactions.
-//!
-//! Availability never deletes: marking a source missing or a file unavailable
-//! keeps works, editions, progress and lists intact.
-
 mod artwork;
 mod backup;
 mod catalog;
@@ -37,23 +28,20 @@ pub use media_info::UnprobedFile;
 pub use playback::Checkpoint;
 pub use settings::Preferences;
 
-/// Ordering choices for a library page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Sort {
-    /// Title, then season and episode.
     #[default]
     Title,
-    /// Newest additions first.
+
     Added,
-    /// Newest release year first.
+
     Year,
-    /// Most recently watched first.
+
     Progress,
 }
 
 impl Sort {
-    /// SQL `ORDER BY` fragment for this ordering.
     fn order_by(self) -> &'static str {
         match self {
             Self::Title => {
@@ -66,44 +54,38 @@ impl Sort {
     }
 }
 
-/// A bounded, paged library query.
-///
-/// `limit` is clamped to `1..=500` so a client can never request an unbounded
-/// page; the UI must page rather than load a 10k-item library at once.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LibraryQuery {
-    /// Profile whose progress and lists are projected. `None` means no profile.
     pub profile_id: Option<String>,
-    /// Case-insensitive substring match over work title and filename.
+
     pub text: String,
-    /// Restrict to one kind.
+
     pub kind: Option<String>,
-    /// Restrict to one work.
+
     pub work_id: Option<String>,
-    /// Restrict to one genre label.
+
     pub genre: Option<String>,
-    /// Restrict to one season number.
+
     pub season: Option<i64>,
-    /// Only files that are readable right now.
+
     pub available_only: bool,
-    /// `Some(true)` watched only, `Some(false)` unwatched only.
+
     pub watched: Option<bool>,
-    /// Only works on the watchlist.
+
     pub watchlist_only: bool,
-    /// Only favourite works.
+
     pub favorites_only: bool,
-    /// Collapse to one representative file per work.
+
     pub group_by_work: bool,
-    /// Ordering.
+
     pub sort: Sort,
-    /// Zero-based row offset.
+
     pub offset: i64,
-    /// Page size, `1..=500`.
+
     pub limit: i64,
 }
 
 impl LibraryQuery {
-    /// A first page of `limit` items for the default ordering.
     pub fn page(limit: i64) -> Self {
         Self {
             limit,
@@ -112,28 +94,14 @@ impl LibraryQuery {
     }
 }
 
-/// How the folder holding the library compares the case of a path.
-///
-/// This decides one thing only: whether two roots that differ just in case are the
-/// same folder. It is a property of the file system, not of the operating system,
-/// which is why it is a value rather than a `cfg!` — a case-sensitive APFS or NTFS
-/// volume exists, and so does a case-insensitive one on Linux.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathSemantics {
-    /// `Shows` and `shows` are the same folder. Windows and the default macOS and
-    /// iOS volumes behave this way.
     CaseInsensitive,
-    /// `Shows` and `shows` are different folders, as on a case-sensitive volume and
-    /// on Linux generally.
+
     CaseSensitive,
 }
 
 impl PathSemantics {
-    /// What this machine's volumes do by default.
-    ///
-    /// A guess, and named as one: it follows the platform's usual file system. A
-    /// library on an unusual volume can override it with
-    /// [`Library::with_path_semantics`].
     pub fn host() -> Self {
         if cfg!(any(windows, target_vendor = "apple")) {
             Self::CaseInsensitive
@@ -143,16 +111,12 @@ impl PathSemantics {
     }
 }
 
-/// A single SQLite library.
 pub struct Library {
     connection: Mutex<Connection>,
     active_scans: Mutex<HashSet<String>>,
     path_semantics: PathSemantics,
     path_style: PathStyle,
-    /// Where the database lives, or `None` for an in-memory library.
-    ///
-    /// Kept so backup and restore can tell the live file from a copy of it, and
-    /// so a safety copy has somewhere to go.
+
     path: Option<PathBuf>,
 }
 
@@ -163,7 +127,6 @@ impl std::fmt::Debug for Library {
 }
 
 impl Library {
-    /// Opens or creates a library at `path`.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         if let Some(parent) = path.parent()
@@ -178,30 +141,15 @@ impl Library {
         )
     }
 
-    /// Opens a throwaway in-memory library, used by tests and previews.
     pub fn open_in_memory() -> Result<Self> {
         Self::from_connection(Connection::open_in_memory()?, None, PathSemantics::host())
     }
 
-    /// How this library compares the *spelling* of two paths.
-    ///
-    /// The default follows the host, and can be overridden so a Windows-only rule
-    /// (a verbatim prefix, a drive letter, either separator) is exercisable from a
-    /// machine that is not Windows.
     pub fn with_path_style(mut self, style: PathStyle) -> Self {
         self.path_style = style;
         self
     }
 
-    /// Chooses how this library compares paths.
-    ///
-    /// The default is
-    /// [`PathSemantics::host`], which is a guess about the volumes this machine
-    /// mounts: most macOS and Windows volumes fold case, but a case-sensitive APFS
-    /// or NTFS volume does not, and on that volume the default would treat two
-    /// spellings of one folder as two folders. Naming the semantics explicitly is
-    /// the way to be certain, and it is also what makes the other platform's
-    /// behaviour testable from this one.
     pub fn with_path_semantics(mut self, semantics: PathSemantics) -> Self {
         self.path_semantics = semantics;
         self
@@ -240,10 +188,6 @@ impl Library {
             }
             v if v == SCHEMA_VERSION => {}
             2 => {
-                // Additive: the artwork table is new, nothing is rewritten. A
-                // library written before posters were retained keeps every row.
-                // Schema 4 is the index batch on top of it; both run in the same
-                // transaction so a schema 2 library is never left half-migrated.
                 let tx = connection.transaction()?;
                 for statement in schema::MIGRATE_2_TO_3 {
                     tx.execute(statement, [])?;
@@ -255,8 +199,6 @@ impl Library {
                 tx.commit()?;
             }
             3 => {
-                // Indexes only. A library written by the build before this one
-                // gains them in place; nothing is rewritten and no row moves.
                 let tx = connection.transaction()?;
                 for statement in schema::MIGRATE_3_TO_4 {
                     tx.execute(statement, [])?;
@@ -281,7 +223,6 @@ impl Library {
             }
         }
 
-        // A crashed process cannot stay authoritative for progress or jobs.
         connection.execute("UPDATE sessions SET status = 'closed'", [])?;
         connection.execute(
             "UPDATE jobs SET status = 'queued' WHERE status = 'running'",
@@ -297,20 +238,12 @@ impl Library {
         })
     }
 
-    /// Borrows the connection for one statement or transaction.
-    ///
-    /// A panic elsewhere must not brick the library, so a poisoned lock is
-    /// recovered rather than unwrapped.
     fn connection(&self) -> MutexGuard<'_, Connection> {
         self.connection
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Registers an in-flight scan for `source_id`.
-    ///
-    /// Two concurrent walks over one root would double-import and fight over
-    /// availability, so the second caller gets `scan_running`.
     pub(crate) fn claim_scan(&self, source_id: &str) -> Result<()> {
         let mut active = self
             .active_scans
@@ -325,7 +258,6 @@ impl Library {
         Ok(())
     }
 
-    /// Clears the in-flight scan registration.
     pub(crate) fn release_scan(&self, source_id: &str) {
         self.active_scans
             .lock()
@@ -333,10 +265,6 @@ impl Library {
             .remove(source_id);
     }
 
-    /// Canonicalises a user-granted root.
-    ///
-    /// Fails closed with a specific reason: a missing folder and a revoked
-    /// permission need different recovery copy in the UI.
     pub(crate) fn canonical_root(&self, root: impl AsRef<Path>) -> Result<PathBuf> {
         let root = root.as_ref();
         if !root.is_absolute() {
@@ -363,20 +291,6 @@ impl Library {
         })
     }
 
-    /// Normalises a path for overlap comparison and identity checks.
-    ///
-    /// Folded when the volume folds case, untouched when it does not, and spelled
-    /// one way regardless of which separator or prefix wrote it — see
-    /// [`crate::paths::location_key`], which is where the rules live and are tested.
-    /// Note that
-    /// folding is **not** a substitute for resolving a path: this compares two
-    /// already-canonical roots, so it is only deciding whether the same folder was
-    /// named twice.
-    ///
-    /// Public because the decision above is one a caller may need to see: a bug
-    /// report about a folder being refused as a duplicate is answered by this
-    /// value, and it is the one part of the library's behaviour that depends on the
-    /// volume rather than on the data.
     pub fn path_key(&self, path: &Path) -> String {
         location_key(
             &path.to_string_lossy(),
@@ -385,7 +299,6 @@ impl Library {
         )
     }
 
-    /// Lists viewer profiles, oldest first.
     pub fn profiles(&self) -> Result<Vec<Profile>> {
         let connection = self.connection();
         let mut statement = connection.prepare("SELECT id, name FROM profiles ORDER BY rowid")?;
@@ -398,7 +311,6 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// Adds a profile, keeping the existing viewer data untouched.
     pub fn add_profile(&self, name: &str) -> Result<Profile> {
         let name = validated(name, 120)?.to_string();
         let profile = Profile { id: new_id(), name };
@@ -409,7 +321,6 @@ impl Library {
         Ok(profile)
     }
 
-    /// Renames a profile.
     pub fn rename_profile(&self, id: &str, name: &str) -> Result<()> {
         let name = validated(name, 120)?.to_string();
         let changed = self.connection().execute(
@@ -425,7 +336,6 @@ impl Library {
         Ok(())
     }
 
-    /// Removes a profile and its progress, refusing to leave the device without one.
     pub fn remove_profile(&self, id: &str) -> Result<()> {
         let mut connection = self.connection();
         let tx = connection.transaction()?;
@@ -452,7 +362,6 @@ impl Library {
     }
 }
 
-/// Trims and validates user-supplied text.
 pub(crate) fn validated(value: &str, max: usize) -> Result<&str> {
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed.chars().count() > max || trimmed.contains('\0') {
@@ -461,7 +370,6 @@ pub(crate) fn validated(value: &str, max: usize) -> Result<&str> {
     Ok(trimmed)
 }
 
-/// Current Unix time in milliseconds.
 pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -469,7 +377,6 @@ pub(crate) fn now_ms() -> i64 {
         .unwrap_or_default()
 }
 
-/// A fresh application-generated identifier.
 pub(crate) fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -507,10 +414,6 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("library.db");
         {
-            // A schema 3 library: every table a schema 2 library had plus the
-            // artwork table, and none of the join indexes schema 4 adds. The
-            // cutoff is where the index batch starts, so it is counted from the
-            // end of the list — that is where new statements are appended.
             let connection = rusqlite::Connection::open(&path).expect("open");
             for statement in &schema::CREATE[..schema::CREATE.len() - 4] {
                 connection.execute(statement, []).expect("schema");
@@ -531,8 +434,6 @@ mod tests {
         assert_eq!(version, SCHEMA_VERSION);
         assert_eq!(library.profiles().expect("profiles").len(), 1);
 
-        // The migration's whole purpose: the joins the catalogue runs get an
-        // index, so a work-to-file join stops scanning the child table.
         for index in [
             "editions_work",
             "files_edition",

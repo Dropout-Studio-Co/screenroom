@@ -1,18 +1,3 @@
-/**
- * Detail: one file, and what can be done with it.
- *
- * The actions are a vertical list, so focus is a single index and Up/Down are the only
- * move keys — the same shape the desktop's detail screen has, for the same reason: with
- * one column there is nothing for a left or right press to mean, and giving it a
- * meaning would be inventing navigation the user did not ask for.
- *
- * The two unusual actions are the ones the core thinks are worth having. **Hide this
- * from Continue watching** is per work, not per file, because an owner who does not
- * want the second episode offered does not want the third one either. **Mark as
- * watched** clears the position rather than keeping it, because a finished file with a
- * stored position is a resume point that lies.
- */
-
 import Blits from '@lightningjs/blits'
 
 import { formatPosition, progressFraction } from '../core/browse.ts'
@@ -22,7 +7,6 @@ import { hex, TOKENS } from '../design/tokens.ts'
 import { routeString } from '../app/route-props.ts'
 import { library } from '../app/runtime.ts'
 
-/** One row in the action list. */
 interface Action {
   readonly key: string
   readonly label: string
@@ -36,7 +20,7 @@ interface Action {
 
 export default Blits.Component('Detail', {
   props: {
-    /** The item's id, passed as route data by the screen that navigated here. */
+
     id: { required: true },
   },
   template: `
@@ -116,9 +100,7 @@ export default Blits.Component('Detail', {
       barHeight: 6,
       barWidth: 1660,
       barFill: 0,
-      // The action list's numbers, copied out of `computed.layout` by `applyLayout` before
-      // the first paint. A template resolves `$name` against state only, so a value that
-      // lives on a computed object is `undefined` here and its node is never drawn.
+
       listWidth: 1100,
       rowHeight: 0,
       fieldX: 0,
@@ -148,7 +130,7 @@ export default Blits.Component('Detail', {
         footY: 1080 - Math.round(TOKENS.spacing.shellPad + TOKENS.type.body * 2),
       }
     },
-    /** The item this screen is showing, or `null` when the id is not in the store. */
+
     item() {
       const id = routeString(this.id)
       return library().items().find((candidate) => candidate.id === id) ?? null
@@ -161,7 +143,7 @@ export default Blits.Component('Detail', {
       this.reload()
     },
   },
-  /** The remote keys. See the note in `Home.ts` for why this block has to exist. */
+
   input: {
     up() {
       this.up()
@@ -174,7 +156,7 @@ export default Blits.Component('Detail', {
     },
   },
   methods: {
-    /** Copies the derived geometry into state, where the template can see it. */
+
     applyLayout(): void {
       const layout = this.layout
       this.listWidth = layout.listWidth
@@ -184,13 +166,12 @@ export default Blits.Component('Detail', {
       this.rowDetailY = layout.rowDetailY
       this.footY = layout.footY
     },
-    /** Rebuilds the header and the action list from the store. */
+
     reload() {
       const item = this.item
       if (item === null) {
         this.focusIndex = 0
-        // An id that is not in the store is a real case: a rescan between navigating
-        // and arriving removes rows. Saying so beats an empty screen that looks broken.
+
         this.title = 'That file is no longer in the library.'
         this.subtitle = 'It may have been removed or renamed since the last scan.'
         this.barFill = 0
@@ -199,8 +180,7 @@ export default Blits.Component('Detail', {
       }
       this.title = item.title
       this.subtitle = this.subtitleFor(item)
-      // An unreadable file is the one case where the footer has something more useful
-      // to say than which key does what: the remedy is outside this screen.
+
       this.footer = item.available
         ? 'Enter selects · Back returns'
         : 'This file cannot be read now — plug the drive in, then scan from Media Sources'
@@ -239,9 +219,6 @@ export default Blits.Component('Detail', {
         detail: 'Leaves this screen. Nothing is saved by leaving.',
       })
 
-      // Clamped *before* the rows are placed: a shorter list than the last render would
-      // otherwise leave the cursor past its end, and the screen would show no focused
-      // row until the next key press.
       this.focusIndex = clampIndex(this.focusIndex, rows.length)
       const layout = this.layout
       this.actions = rows.map((row, index) => {
@@ -292,7 +269,7 @@ export default Blits.Component('Detail', {
       this.focusIndex = next
       this.markFocus()
     },
-    /** Only the fill and ink change when the cursor moves, so only those are rebuilt. */
+
     markFocus() {
       const layout = this.layout
       this.actions = this.actions.map((action, index) => {

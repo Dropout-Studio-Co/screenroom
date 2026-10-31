@@ -1,30 +1,9 @@
-//! Checks a real library through the public API and prints one line per check.
-//!
-//! ```bash
-//! cargo run --release -p screenroom-core --example library_check -- <library.db>
-//! ```
-//!
-//! `tests/` proves the contracts on fixtures it builds itself. This proves the same
-//! contracts still hold on a library that came from a real drive: paging walks every
-//! entry once, search finds what exists and nothing when it does not, sorts and
-//! filters agree with the count, a session produces a resume point, lists filter,
-//! and a backup restores with the same numbers.
-//!
-//! It is safe on a **copy** of a real library but not on the library itself: it
-//! writes a favourite, a progress row, a preference and a throwaway profile, then
-//! restores a backup into a temporary database. The backup it writes is deleted
-//! with the temporary directory and must never be committed — it lists private
-//! media paths.
-//!
-//! Exit code 0 when every check passed, 1 when any failed.
-
 use std::collections::HashSet;
 use std::path::PathBuf;
 
 use screenroom_core::{Checkpoint, Library, LibraryQuery, Sort};
 use tempfile::TempDir;
 
-/// Prints one check and returns whether it failed.
 struct Checks {
     failures: usize,
     passed: usize,
@@ -40,8 +19,6 @@ impl Checks {
         }
     }
 
-    /// A check this library cannot answer. Counted separately so a vacuous pass
-    /// never reads as evidence.
     fn skip(&mut self, label: &str, why: impl AsRef<str>) {
         self.skipped += 1;
         println!("SKIP {label}: {}", why.as_ref());
@@ -86,10 +63,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    // --- paging -------------------------------------------------------------
-    // Walk the whole catalogue in the largest page the contract allows and prove
-    // every row arrives exactly once. A duplicated or dropped row here is the
-    // reason a grid would show a title twice or lose one between pages.
     let page_size = 500_i64;
     let mut seen: HashSet<String> = HashSet::new();
     let mut duplicated = 0_usize;
@@ -121,9 +94,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     );
 
-    // An oversized page is refused rather than honoured or silently truncated: a
-    // client cannot make the library materialise 100k rows, and it must not look
-    // like the answer when it did not.
     let oversized = library.items(&LibraryQuery {
         limit: 100_000,
         ..LibraryQuery::default()
@@ -134,7 +104,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "invalid_page",
     );
 
-    // --- ordering -----------------------------------------------------------
     for sort in [Sort::Title, Sort::Added, Sort::Year, Sort::Progress] {
         let rows = library.items(&LibraryQuery {
             sort,
@@ -148,7 +117,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // Title ordering must actually be sorted, not just non-empty.
     let first_page = library.items(&LibraryQuery {
         sort: Sort::Title,
         limit: 200,
@@ -163,7 +131,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         format!("{} rows compared", first_page.len()),
     );
 
-    // --- search -------------------------------------------------------------
     let first = library
         .items(&LibraryQuery {
             sort: Sort::Title,
@@ -182,7 +149,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         format!("{hits} row(s) for a known title"),
     );
 
-    // Search is a substring match, so a title's first word must also find it.
     if let Some(word) = needle.split_whitespace().next() {
         let by_word = library.count(&LibraryQuery {
             text: word.to_string(),
@@ -195,7 +161,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // LIKE metacharacters must be literal: `%` finds nothing unless a title has one.
     let wildcard = library.count(&LibraryQuery {
         text: "%".into(),
         ..LibraryQuery::default()
@@ -224,7 +189,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         format!("{miss} row(s)"),
     );
 
-    // --- filters ------------------------------------------------------------
     let movies = library.count(&LibraryQuery {
         kind: Some("movie".into()),
         ..LibraryQuery::default()
@@ -256,8 +220,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "invalid_filter",
     );
 
-    // Genre filters need genres, and no metadata provider is configured yet, so a
-    // scanned library carries none. Say so instead of passing on an empty set.
     let genres = library.known_genres()?;
     if genres.is_empty() {
         checks.skip(
@@ -291,8 +253,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         format!("{available} of {total} available"),
     );
 
-    // Seasons are asked for on a real series, not on whatever title ordering put
-    // first — that row is a film, and a film has no seasons to prove.
     let a_series = library.items(&LibraryQuery {
         kind: Some("series".into()),
         sort: Sort::Title,
@@ -307,7 +267,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             !seasons.is_empty() && distinct,
             format!("{} season(s) for a series", seasons.len()),
         );
-        // The episodes of one season must all belong to that season and work.
+
         if let Some(season) = seasons.first() {
             let episodes = library.items(&LibraryQuery {
                 kind: Some("series".into()),
@@ -333,10 +293,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // --- progress -----------------------------------------------------------
-    // A scan stores no durations, so this supplies one for the check only.
     let session = library.start_session(&profile.id, &first.id)?;
-    // A session opens at seek generation 0; `begin_seek` is what advances it.
+
     let saved = library.checkpoint(Checkpoint {
         session: &session,
         position_ms: 120_000,
@@ -352,8 +310,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         format!("{} item(s) in Continue watching", watching.len()),
     );
 
-    // After a seek, a report still carrying the pre-seek generation is stale: it
-    // must be dropped rather than rewinding the playhead the seek moved.
     let after_seek = library.begin_seek(&session)?;
     let stale = library.checkpoint(Checkpoint {
         session: &session,
@@ -388,9 +344,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     library.end_session(&session)?;
 
-    // --- lists and recommendations -----------------------------------------
-    // Lists are per profile: the query must name the profile whose list is asked
-    // for, which is also proof the flag is not global.
     let listed_query = |field: &str| LibraryQuery {
         profile_id: Some(profile.id.clone()),
         favorites_only: field == "favorite",
@@ -433,7 +386,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     );
 
-    // --- preferences --------------------------------------------------------
     let before = library.preferences()?;
     let mut changed = before.clone();
     changed.subtitle_scale_percent = 115;
@@ -453,7 +405,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     reopened.set_preferences(&before)?;
 
-    // --- profiles -----------------------------------------------------------
     let added = reopened.add_profile("Contract check")?;
     reopened.rename_profile(&added.id, "Contract checked")?;
     let renamed = reopened
@@ -471,7 +422,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         format!("{} profile(s) remain", reopened.profiles()?.len()),
     );
 
-    // --- backup and restore -------------------------------------------------
     let directory = TempDir::new()?;
     let backup = directory.path().join("library.json");
     let written = reopened.backup_to(&backup)?;
@@ -495,7 +445,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         format!("{restored_total} of {total} rows"),
     );
 
-    // Restoring over a library that already holds data must leave a safety copy.
     let over = restored.restore_from(&backup)?;
     checks.check(
         "restoring over data keeps a safety copy",

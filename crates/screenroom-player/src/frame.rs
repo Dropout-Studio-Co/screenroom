@@ -1,38 +1,23 @@
-//! One decoded video frame, in a renderer-neutral form.
-//!
-//! The desktop client draws this through wgpu; a future zero-copy adapter can
-//! produce the same type after importing a platform texture, so the presentation
-//! layer never learns which bridge produced the picture.
-
 use std::sync::Arc;
 
-/// One frame in tightly packed RGBA8, top row first.
 #[derive(Debug, Clone)]
 pub struct Frame {
-    /// Frame width in pixels.
     pub width: u32,
-    /// Frame height in pixels.
+
     pub height: u32,
-    /// RGBA bytes, exactly `width * height * 4` long.
-    ///
-    /// Red, green and blue are the picture. **The alpha byte is not
-    /// meaningful**: libmpv's `rgb0` render target documents it as undefined, so
-    /// a presenter must treat every frame as opaque and force alpha to 1 in its
-    /// own compositing rather than reading this byte.
+
     pub rgba: Arc<Vec<u8>>,
-    /// Monotonic frame number; the presentation layer skips re-uploads.
+
     pub generation: u64,
 }
 
 impl Frame {
-    /// True when the buffer length matches the declared size.
     pub fn is_well_formed(&self) -> bool {
         self.width > 0
             && self.height > 0
             && self.rgba.len() == self.width as usize * self.height as usize * 4
     }
 
-    /// Reads one pixel, or `None` when out of bounds.
     pub fn pixel(&self, x: u32, y: u32) -> Option<[u8; 4]> {
         if x >= self.width || y >= self.height || !self.is_well_formed() {
             return None;
@@ -46,7 +31,6 @@ impl Frame {
         ])
     }
 
-    /// True when every pixel is fully transparent black — an empty render.
     pub fn is_blank(&self) -> bool {
         let (pixels, _) = self.rgba.as_chunks::<4>();
         pixels

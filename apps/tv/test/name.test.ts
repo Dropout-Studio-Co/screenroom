@@ -9,15 +9,6 @@ import {
   parseFilename,
 } from '../src/core/name.ts'
 
-/**
- * The first nine cases below are the Rust core's own tests, restated here.
- *
- * That is the point of them: the two clients must read a filename identically, or the
- * same drive shows a different library depending on which screen is attached to it.
- * If a rule changes in `crates/screenroom-core/src/filename.rs`, one of these should
- * fail rather than the two implementations drifting quietly apart.
- */
-
 test('reads common episode names', () => {
   const parsed = parseFilename('Show.Name.S01E02.1080p.WEB-DL.mkv')
   assert.equal(parsed.kind, 'series')
@@ -44,7 +35,7 @@ test('keeps a combined episode range', () => {
 })
 
 test('rejects an absurd episode range', () => {
-  // A range of 100+ episodes is a misread, so the file keeps episode 1 only.
+
   const parsed = parseFilename('Show.S01E01E150.mkv')
   assert.equal(parsed.episode, 1)
   assert.equal(parsed.episodeEnd, 1)
@@ -67,8 +58,7 @@ test('a year before the season marker truncates the title', () => {
 })
 
 test('a year after the episode marker is release noise, not the title end', () => {
-  // The Rust rule: a year only cuts the title when it comes first. `Show.S01E04.2021`
-  // is an episode released in 2021, and truncating at the year would leave "Show S01E04".
+
   const parsed = parseFilename('Show.S01E04.2021.1080p.mkv')
   assert.equal(parsed.title, 'Show')
   assert.equal(parsed.season, 1)
@@ -95,8 +85,7 @@ test('a season folder does not become a title', () => {
 })
 
 test('the file stem keeps a leading-dot name intact', () => {
-  // `Path::file_stem` treats `.hidden` as a name, not as an extension-less empty
-  // string, and a port that split on the first dot would turn it into "".
+
   assert.equal(fileStem('.hidden'), '.hidden')
   assert.equal(fileStem('a.tar.gz'), 'a.tar')
   assert.equal(fileStem('noext'), 'noext')
@@ -129,7 +118,7 @@ test('a confident movie joins one work', () => {
   const one = parseFilename('A.Movie.2021.2160p.mkv')
   const two = parseFilename('A Movie 2021.mkv')
   assert.equal(identityKeyOf(one, source, 'a'), identityKeyOf(two, source, 'a'))
-  // A different year is a different work — the remake keeps its own progress.
+
   assert.notEqual(
     identityKeyOf(one, source, 'a'),
     identityKeyOf(parseFilename('A.Movie.1994.mkv'), source, 'a'),
@@ -137,8 +126,7 @@ test('a confident movie joins one work', () => {
 })
 
 test('an unreadable name never joins another file to itself', () => {
-  // Two files whose names cannot be read must not become one work. The unique suffix
-  // is what stops a folder of camera dumps collapsing into a single film.
+
   const source = 'source-removable1'
   const one = parseFilename('12345.mkv')
   const two = parseFilename('67890.mkv')

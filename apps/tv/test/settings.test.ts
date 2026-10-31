@@ -13,8 +13,7 @@ import {
 } from '../src/core/settings.ts'
 
 test('a television that has been told nothing starts with subtitles off', () => {
-  // Off rather than auto: turning subtitles on for somebody who did not ask is the more
-  // intrusive mistake of the two.
+
   assert.equal(DEFAULT_SETTINGS.subtitles, 'off')
   assert.equal(DEFAULT_SETTINGS.subtitleLanguage, '')
   assert.equal(DEFAULT_SETTINGS.audioLanguage, '')
@@ -42,7 +41,7 @@ test('a language code is normalised and never stored as a sentence', () => {
 test('choosing an audio track remembers its language', () => {
   const next = rememberChoice(DEFAULT_SETTINGS, { kind: 'audio', language: 'DEU' })
   assert.equal(next.audioLanguage, 'deu')
-  // An audio choice says nothing about subtitles.
+
   assert.equal(next.subtitles, 'off')
 })
 

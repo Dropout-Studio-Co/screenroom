@@ -1,9 +1,3 @@
-//! Conservative filename interpretation.
-//!
-//! This is a *hint*, not an identity: it produces a title, a shape and a
-//! confidence so the UI can show unknowns honestly instead of inventing a
-//! match. Ambiguous results stay `Unknown` and remain playable.
-
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -45,29 +39,23 @@ struct Episodic {
     end: Option<i64>,
 }
 
-/// What a filename suggests about the media it holds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedName {
-    /// Best-effort title, or the file stem when nothing could be read.
     pub title: String,
-    /// Interpreted shape.
+
     pub kind: MediaKind,
-    /// Release year, when it appears before any quality tag.
+
     pub year: Option<i64>,
-    /// Season number, for episodic names.
+
     pub season: Option<i64>,
-    /// First episode number, for episodic names.
+
     pub episode: Option<i64>,
-    /// Last episode number for combined files (`S01E01E02`).
+
     pub episode_end: Option<i64>,
-    /// Confidence in the interpretation, `0.0..=1.0`.
+
     pub confidence: f64,
 }
 
-/// Interprets a filename, optionally using its containing folder for context.
-///
-/// `folder` is a directory path or relative directory label; only its last
-/// component is consulted, and only when the filename yields no title.
 pub fn parse_filename(filename: &str, folder: Option<&str>) -> ParsedName {
     let stem = stem_of(filename);
     let mut name = stem.replace('_', ".");
@@ -106,9 +94,6 @@ pub fn parse_filename(filename: &str, folder: Option<&str>) -> ParsedName {
             matches!(before, Some(b'(' | b'[')) && matches!(after, Some(b')' | b']'))
         })
         .or_else(|| {
-            // The first bare year ends the title (`Alien.1979.Directors.Cut.2003`),
-            // unless a second year follows it directly: then the first was part of
-            // the title (`Blade.Runner.2049.2017`).
             let mut chosen = years.first()?;
             for next in &years[1..] {
                 let between = &name[chosen.end()..next.start()];
@@ -123,12 +108,7 @@ pub fn parse_filename(filename: &str, folder: Option<&str>) -> ParsedName {
     let year = year_match
         .and_then(|m| m.as_str().parse::<i64>().ok())
         .filter(|value| (1800..=2200).contains(value));
-    // A show's year lives on its folder (`From (2022)`), never in its episode
-    // names, so an episodic file with no year of its own takes the folder's.
-    // Without it every series has a null year and two shows that share a title
-    // in one source merge into a single work. Movies are left alone: a folder
-    // year there is a collection label (`Duology (2009-2011)`), not a release
-    // year, and guessing would be worse than leaving it empty.
+
     let year = year.or_else(|| {
         episodic
             .is_some()
@@ -160,8 +140,6 @@ pub fn parse_filename(filename: &str, folder: Option<&str>) -> ParsedName {
         };
     }
 
-    // A bare number is a title only beside a separate release year: `1917 (2019)`
-    // and `300 (2006)` are films, while `01.mkv` or `2019.mkv` say nothing.
     let unknown = name.is_empty() || (NUMERIC_TITLE.is_match(&name) && !has_year);
     let season = episodic.as_ref().map(|episode| episode.season);
     let episode = episodic.as_ref().map(|episode| episode.episode);
@@ -207,7 +185,6 @@ fn stem_of(filename: &str) -> String {
         .unwrap_or_else(|| filename.to_string())
 }
 
-/// The year in a folder label, if it has one.
 fn folder_year(folder: &str) -> Option<i64> {
     let label = Path::new(folder)
         .file_name()?
@@ -275,7 +252,6 @@ mod tests {
 
     #[test]
     fn rejects_absurd_episode_range() {
-        // A range of 100+ episodes is a misread, so the file keeps episode 1 only.
         let parsed = parse_filename("Show.S01E01E150.mkv", None);
         assert_eq!(parsed.episode, Some(1));
         assert_eq!(parsed.episode_end, Some(1));
@@ -342,8 +318,6 @@ mod tests {
 
     #[test]
     fn an_episode_takes_the_show_year_from_its_folder() {
-        // What a real library looks like: the year is on the show folder, and
-        // the episode files carry none at all.
         let parsed = parse_filename(
             "From (2022)/Season 02/From - s02e04.mkv",
             Some("From (2022)"),
@@ -363,8 +337,6 @@ mod tests {
 
     #[test]
     fn a_collection_folder_year_is_not_applied_to_a_movie() {
-        // `Duology (2009-2011)` names a range, not a release year. A film whose
-        // name has no year stays without one rather than borrowing 2009.
         let parsed = parse_filename(
             "Sherlock Holmes A Game Of Shadows.mkv",
             Some("Sherlock Holmes Duology (2009-2011)"),

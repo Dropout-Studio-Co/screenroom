@@ -1,21 +1,3 @@
-/**
- * Every `$name` a template names must exist on the component.
- *
- * This is a regression test for a defect that reached the television: three screens
- * kept their derived geometry on a *computed object* (`grid`, `metrics`, `layout`) and
- * referred to its members in the template as `$fieldX`, `$titleY`, `$footY` and so on.
- * A Blits template resolves `$name` against the component's state, so those were all
- * `undefined`; the nodes were still created, but with no position and no size, and the
- * screen drew one header line on an otherwise black surface. Nothing threw, no console
- * message appeared, and the TypeScript compiler cannot see inside a template string —
- * which is why the guard has to be here rather than in the type checker.
- *
- * The check is deliberately structural rather than clever: parse each screen's template
- * for `$identifier`, collect the top-level keys of its `state()`, `props` and `computed`
- * blocks plus its `:for` loop variables, and require every reference to be one of those
- * or one of the handful of members Blits itself puts on a component.
- */
-
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
@@ -24,21 +6,8 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
 
-/**
- * Every directory that holds a component with a template.
- *
- * Screens were the first; the shared rail lives in `components/` and its template has
- * the same contract, so it is checked by the same parser rather than trusted.
- */
 const DIRECTORIES = ['screens', 'components']
 
-/**
- * Members Blits provides to every component, which no screen declares.
- *
- * `$focus` (the focus ref), `$router`, `$log`, `$setTimeout`/`$clearTimeout` and
- * `$fireAncestors` are framework surface; anything else a template names has to come
- * from the component itself.
- */
 const FRAMEWORK_MEMBERS = new Set([
   'focus',
   'router',
@@ -54,7 +23,6 @@ const FRAMEWORK_MEMBERS = new Set([
   'intercept',
 ])
 
-/** The component files, in a stable order. */
 function componentFiles(): { readonly dir: string; readonly name: string }[] {
   return DIRECTORIES.flatMap((dir) =>
     readdirSync(join(ROOT, dir))
@@ -64,19 +32,16 @@ function componentFiles(): { readonly dir: string; readonly name: string }[] {
   )
 }
 
-/** The source of one component file, comments removed. */
 function sourceOf(dir: string, name: string): string {
   return withoutComments(readFileSync(join(ROOT, dir, name), 'utf8'))
 }
 
-/** The source with its comments removed, so a prose line cannot look like a key. */
 function withoutComments(source: string): string {
   return source
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/(^|[^:'"\\])\/\/[^\n]*/g, '$1')
 }
 
-/** The body of the component's `template` string literal. */
 function templateBody(source: string): string {
   const marker = 'template: `'
   const start = source.indexOf(marker)
@@ -87,7 +52,6 @@ function templateBody(source: string): string {
   return source.slice(from, end)
 }
 
-/** The index of the brace that closes the block opened at `open`. */
 function closingBrace(source: string, open: number): number {
   let depth = 0
   for (let i = open; i < source.length; i += 1) {
@@ -104,7 +68,6 @@ function closingBrace(source: string, open: number): number {
   return -1
 }
 
-/** The body of the block introduced by `signature`, or `null` when it is absent. */
 function blockBody(source: string, signature: string): string | null {
   const at = source.indexOf(signature)
   if (at === -1) {
@@ -118,7 +81,6 @@ function blockBody(source: string, signature: string): string | null {
   return close === -1 ? null : source.slice(open, close + 1)
 }
 
-/** How many brackets one line opens, ignoring brackets inside a string. */
 function bracketDelta(line: string): number {
   let delta = 0
   let quote: string | null = null
@@ -141,13 +103,6 @@ function bracketDelta(line: string): number {
   return delta
 }
 
-/**
- * The keys declared at the top level of one object or class body.
- *
- * Both spellings count: `key: value` in `state` and `props`, and `name() {}` in
- * `computed`. Anything nested (a prop's own options, a function body) sits at a deeper
- * level and is therefore not a key of the component.
- */
 function topLevelKeys(block: string): string[] {
   const keys: string[] = []
   let depth = 0
@@ -164,10 +119,9 @@ function topLevelKeys(block: string): string[] {
   return keys
 }
 
-/** The keys a component declares in `state`, `props` and `computed`. */
 function declaredKeys(source: string): Set<string> {
   const keys = new Set<string>()
-  // `state()` returns its object, so the block to read starts at that object.
+
   const stateAt = source.indexOf('state()')
   if (stateAt !== -1) {
     const returnAt = source.indexOf('return {', stateAt)
@@ -192,7 +146,6 @@ function declaredKeys(source: string): Set<string> {
   return keys
 }
 
-/** The `:for` variables a template introduces, which are written as `$name` too. */
 function loopVariables(template: string): Set<string> {
   const names = new Set<string>()
   for (const match of template.matchAll(/:?for="([A-Za-z_$][\w$]*)\s+in\b/g)) {
@@ -203,7 +156,6 @@ function loopVariables(template: string): Set<string> {
   return names
 }
 
-/** Every `$identifier` base the template refers to. */
 function references(template: string): Set<string> {
   const names = new Set<string>()
   for (const match of template.matchAll(/\$([A-Za-z_$][\w$]*)/g)) {
@@ -236,17 +188,6 @@ test('every template reference in every component resolves to something it decla
   )
 })
 
-/**
- * A `:for` variable must not be called `key`.
- *
- * This is the second regression test taken from the television. The search screen's
- * keyboard loop was written `:for="key in $keys"` with `key="$key.id"`, which reads
- * naturally and compiles to a collision: Blits assigns the loop variable to the scope
- * slot named after it, and then the `key` attribute assigns the id to the *same* slot.
- * The loop body therefore saw a string where it expected an object, every key was
- * created with an undefined size and position, and the keyboard drew nothing at all —
- * no error, no warning, an empty half-screen beside a correct header.
- */
 test('no loop variable is named key, which the compiled scope overwrites', () => {
   const problems: string[] = []
   for (const { dir, name } of componentFiles()) {
@@ -261,14 +202,13 @@ test('no loop variable is named key, which the compiled scope overwrites', () =>
 })
 
 test('the checker itself sees the state it is supposed to see', () => {
-  // A guard that silently found nothing would pass forever. `Home` declares `cards` and
-  // computes `grid`, so both must come back from the parser.
+
   const source = sourceOf('screens', 'Home.ts')
   const declared = declaredKeys(source)
   for (const key of ['cards', 'background', 'footY', 'grid']) {
     assert.ok(declared.has(key), `expected ${key} to be parsed out of Home.ts`)
   }
-  // And the template must really mention them, or the check above is vacuous.
+
   const named = references(templateBody(source))
   assert.ok(named.has('footY'), 'expected the Home template to name $footY')
   assert.deepEqual(

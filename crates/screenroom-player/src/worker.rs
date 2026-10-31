@@ -1,19 +1,3 @@
-//! The player worker: one thread owns libmpv, the client renders elsewhere.
-//!
-//! ## Why a thread
-//!
-//! `mpv_wait_event` blocks, and render-API calls must stay on the thread that
-//! created the render context. Both facts push libmpv onto its own thread; the UI
-//! only ever sends commands and reads an immutable snapshot, so a slow decoder
-//! can never freeze the window.
-//!
-//! ## What the worker publishes
-//!
-//! [`PlayerSnapshot`] is the whole observable state: lifecycle, position,
-//! duration, the latest frame, and a truthful failure when playback cannot
-//! continue. The domain layer (`screenroom-core`) remains the only place that
-//! persists progress, so a native event can never write a bogus checkpoint.
-
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -23,14 +7,12 @@ use std::time::Duration;
 use crate::render::{MAX_DIMENSION, SoftwareRenderer, UPDATE_FRAME, target_size};
 use crate::{Frame, LibMpv, Mpv, PlayerError, PlayerState, WakeSignal, event};
 
-/// True when `SCREENROOM_PLAYER_TRACE` is set: prints worker steps to stderr.
 fn tracing() -> bool {
     use std::sync::OnceLock;
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("SCREENROOM_PLAYER_TRACE").is_some())
 }
 
-/// Writes a worker trace line when diagnostics are enabled.
 macro_rules! trace {
     ($($arg:tt)*) => {
         if tracing() {
@@ -39,7 +21,6 @@ macro_rules! trace {
     };
 }
 
-/// Property observation identifiers, returned as `reply_userdata`.
 const ID_TIME_POS: u64 = 1;
 const ID_DURATION: u64 = 2;
 const ID_PAUSE: u64 = 3;
@@ -53,14 +34,12 @@ const ID_MUTE: u64 = 10;
 const ID_TRACK_LIST: u64 = 11;
 const ID_HWDEC_CURRENT: u64 = 12;
 
-/// `mpv_format` values used when observing properties (`mpv/client.h`).
 const FORMAT_FLAG: i32 = 3;
 const FORMAT_INT64: i32 = 4;
 const FORMAT_DOUBLE: i32 = 5;
 const FORMAT_NODE: i32 = 6;
 const FORMAT_STRING: i32 = 1;
 
-/// An `mpv_event_property` (`mpv/client.h`).
 #[repr(C)]
 struct RawProperty {
     name: *const std::ffi::c_char,
@@ -68,7 +47,6 @@ struct RawProperty {
     data: *mut std::ffi::c_void,
 }
 
-/// An `mpv_event_end_file` (`mpv/client.h`), read only when needed.
 #[repr(C)]
 struct RawEndFile {
     reason: i32,
@@ -76,86 +54,63 @@ struct RawEndFile {
     playlist_entry_id: i64,
 }
 
-/// An `mpv_event_start_file` (`mpv/client.h`).
 #[repr(C)]
 struct RawStartFile {
     playlist_entry_id: i64,
 }
 
-/// `MPV_END_FILE_REASON_*` (`mpv/client.h`).
 mod end_reason {
     pub const EOF: i32 = 0;
     pub const ERROR: i32 = 4;
 }
 
-/// A playback failure, phrased for the user and coded for the UI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerFailure {
-    /// Stable code, matching the core's error vocabulary where one exists.
     pub code: String,
-    /// Human-readable reason, never a silent blank screen.
+
     pub message: String,
 }
 
-/// Everything the interface may know about the player at one instant.
 #[derive(Debug, Clone)]
 pub struct PlayerSnapshot {
-    /// Monotonic identity for the load request that produced this snapshot.
     pub load_id: u64,
-    /// True after libmpv confirms the starting position with PLAYBACK_RESTART.
+
     pub position_ready: bool,
-    /// Highest seek serial confirmed by a subsequent PLAYBACK_RESTART.
+
     pub seek_serial: u64,
-    /// Lifecycle state.
+
     pub state: PlayerState,
-    /// Playhead in seconds.
+
     pub position: f64,
-    /// Media duration in seconds; `0.0` until known.
+
     pub duration: f64,
-    /// Latest decoded frame.
+
     pub frame: Option<Frame>,
-    /// Set only while the player cannot continue.
+
     pub failure: Option<PlayerFailure>,
-    /// True once the end of the media was reached.
+
     pub ended: bool,
-    /// True once a file opened successfully.
+
     pub loaded: bool,
-    /// Selectable tracks the player reported for the current file.
+
     pub tracks: Vec<MediaTrack>,
-    /// The audio output's own playhead, in seconds.
-    ///
-    /// This is the *device* clock, not the file position: libmpv advances it as
-    /// the audio output consumes samples. A stalled output freezes it, which is
-    /// what makes it usable as evidence that audio is really being played rather
-    /// than merely initialised. `None` when the file has no audio track.
+
     pub audio_pts: Option<f64>,
-    /// libmpv's own last audio/video sync difference, in seconds.
-    ///
-    /// Positive means audio leads the video. Measured by the player rather than
-    /// inferred by comparing two clocks, which is the only reason the number is
-    /// worth recording in the ledger.
+
     pub avsync: Option<f64>,
-    /// Cumulative A/V sync adjustment libmpv has applied to this file, in seconds.
+
     pub total_avsync_change: Option<f64>,
-    /// Frames libmpv dropped or duplicated to hold sync.
+
     pub mistimed_frames: Option<i64>,
-    /// Subtitle text size libmpv is actually using, as a multiple of normal.
-    ///
-    /// Read back from `sub-scale` rather than echoed from the request, so this is
-    /// evidence of what the player accepted. `None` until a style is applied.
+
     pub subtitle_scale: Option<f64>,
-    /// Subtitle position libmpv is actually using, in percent from the top.
-    ///
-    /// Read back from `sub-pos`, for the same reason as `subtitle_scale`.
+
     pub subtitle_position: Option<f64>,
-    /// Output volume libmpv is actually using, 0-100.
-    ///
-    /// Read back from `volume`, so the slider follows the player rather than the
-    /// other way round. `None` until the player reports it.
+
     pub volume: Option<f64>,
-    /// Whether output is muted, read back from libmpv's `mute`.
+
     pub muted: Option<bool>,
-    /// Hardware decoder libmpv actually engaged (`no` means software decode).
+
     pub hardware_decoder: Option<String>,
 }
 
@@ -187,7 +142,6 @@ impl Default for PlayerSnapshot {
 }
 
 impl PlayerSnapshot {
-    /// Progress in whole milliseconds, for the core's checkpoint contract.
     pub fn position_ms(&self) -> i64 {
         if !self.position.is_finite() || self.position < 0.0 {
             return 0;
@@ -195,7 +149,6 @@ impl PlayerSnapshot {
         (self.position * 1000.0).round() as i64
     }
 
-    /// Duration in whole milliseconds; `0` when the player has not reported it.
     pub fn duration_ms(&self) -> i64 {
         if !self.duration.is_finite() || self.duration <= 0.0 {
             return 0;
@@ -204,19 +157,16 @@ impl PlayerSnapshot {
     }
 }
 
-/// Which kind of stream a [`MediaTrack`] is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrackKind {
-    /// The picture.
     Video,
-    /// A sound track.
+
     Audio,
-    /// A subtitle or closed-caption track.
+
     Subtitle,
 }
 
 impl TrackKind {
-    /// libmpv's spelling of this kind, as used in `track-list/N/type`.
     pub fn as_str(self) -> &'static str {
         match self {
             TrackKind::Video => "video",
@@ -226,32 +176,24 @@ impl TrackKind {
     }
 }
 
-/// One selectable stream, as libmpv reports it in `track-list`.
-///
-/// Only facts libmpv actually states are carried: a track with no language tag
-/// has `language: None` rather than an invented `und` or a guess read out of the
-/// filename, because the interface has to be able to say "no language tag"
-/// without lying about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaTrack {
-    /// libmpv's track id, used to select the track or turn it off.
     pub id: i64,
-    /// Video, audio or subtitle.
+
     pub kind: TrackKind,
-    /// The stream's own title, when it carries one.
+
     pub title: Option<String>,
-    /// ISO language tag, when the stream carries one.
+
     pub language: Option<String>,
-    /// Codec name, for example `aac` or `subrip`.
+
     pub codec: Option<String>,
-    /// True when this is the track currently in use.
+
     pub selected: bool,
-    /// True when the track came from a different file than the media itself.
+
     pub external: bool,
 }
 
 impl MediaTrack {
-    /// The best short label for a chooser: title, then language, then codec.
     pub fn label(&self) -> String {
         let codec = self
             .codec
@@ -266,82 +208,61 @@ impl MediaTrack {
     }
 }
 
-/// Track id that means "none selected": `MPV_TRACK_ID_NONE` in `client.h`.
-///
-/// libmpv spells this one as the string `no`, so it is translated at the call
-/// site rather than sent as a number.
 pub const NO_TRACK: i64 = 0;
 
-/// A request to the player thread.
 #[derive(Debug, Clone)]
 pub enum PlayerCommand {
-    /// Open a local file and start playing it, optionally resuming at `resume`.
     Load {
-        /// Monotonic request identity returned by `Player::load_at`.
         load_id: u64,
-        /// File to play.
+
         path: PathBuf,
-        /// Position in seconds to jump to once the file is loaded.
+
         resume: Option<f64>,
     },
-    /// Seek to an absolute position in seconds.
-    Seek { seconds: f64, serial: u64 },
-    /// Pause or resume.
+
+    Seek {
+        seconds: f64,
+        serial: u64,
+    },
+
     SetPaused(bool),
-    /// Stop playback and release the file.
+
     Stop,
-    /// Choose a track by its libmpv id, or disable the kind with [`NO_TRACK`].
+
     SelectTrack {
-        /// Which family of stream to change.
         kind: TrackKind,
-        /// libmpv track id, or [`NO_TRACK`] to turn subtitles off.
+
         id: i64,
     },
-    /// Set how subtitles are drawn, independently of which track is selected.
+
     SetSubtitleStyle {
-        /// Text size as a multiple of normal, matching libmpv's `sub-scale`.
         scale: f64,
-        /// Vertical position in percent of the screen height, matching `sub-pos`.
+
         position: f64,
     },
-    /// Set the output volume, 0-100.
+
     SetVolume(f64),
-    /// Mute or unmute the output.
+
     SetMuted(bool),
-    /// Ask the worker to exit.
+
     Shutdown,
 }
 
-/// The range Screenroom keeps `sub-scale` inside, as a multiple of normal size.
-///
-/// Screenroom's own guard, not libmpv's limit: libmpv accepts a much wider range,
-/// including a scale that renders a subtitle of no readable size. Anything outside
-/// this is clamped by [`Player::set_subtitle_style`] so a bad caller cannot make the
-/// player look broken. The Settings screen offers a narrower range still.
 pub const SUB_SCALE_RANGE: (f64, f64) = (0.1, 10.0);
 
-/// The range Screenroom keeps `sub-pos` inside, in percent of the screen height.
-///
-/// Matches libmpv's documented `sub-pos` range of 0-150, where 0 is the top and 100
-/// the bottom. Screenroom's Settings screen only offers 0-100; the extra headroom is
-/// kept so a stored style from another client still means the same thing.
 pub const SUB_POSITION_RANGE: (f64, f64) = (0.0, 150.0);
 
-/// Hardware decode policy accepted by the software render bridge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HwdecMode {
-    /// Always decode on the CPU.
     No,
-    /// Request VideoToolbox and copy decoded frames back into system memory.
+
     VideoToolboxCopy,
-    /// Let mpv choose a safe copy-back hardware decoder.
+
     AutoCopy,
 }
 
 impl Default for HwdecMode {
     fn default() -> Self {
-        // Evidence was measured on macOS. Leave unmeasured platforms on the
-        // previously proven software path until their hardware gates are run.
         if cfg!(target_os = "macos") {
             Self::AutoCopy
         } else {
@@ -375,7 +296,6 @@ impl HwdecMode {
     }
 }
 
-/// The interface's handle to the player thread.
 pub struct Player {
     shared: Arc<Mutex<PlayerSnapshot>>,
     commands: Sender<PlayerCommand>,
@@ -392,15 +312,10 @@ impl std::fmt::Debug for Player {
 }
 
 impl Player {
-    /// Starts the worker thread and waits until libmpv is ready.
-    ///
-    /// Returns the reason when libmpv is missing or cannot initialise, so the
-    /// caller can show it instead of a dead video area.
     pub fn start() -> Result<Self, PlayerError> {
         Self::start_with_hwdec(HwdecMode::from_environment()?)
     }
 
-    /// Starts with a specific hardware decoding policy.
     pub fn start_with_hwdec(hwdec: HwdecMode) -> Result<Self, PlayerError> {
         let shared = Arc::new(Mutex::new(PlayerSnapshot::default()));
         let (commands, queue) = mpsc::channel();
@@ -435,7 +350,6 @@ impl Player {
         }
     }
 
-    /// Reads the latest published state.
     pub fn snapshot(&self) -> PlayerSnapshot {
         self.shared
             .lock()
@@ -443,20 +357,14 @@ impl Player {
             .unwrap_or_default()
     }
 
-    /// Number of command, libmpv-event, and render notifications since start.
-    /// Primarily useful for diagnosing the worker's idle and wake behavior.
     pub fn wake_notifications(&self) -> u64 {
         self.wake.current()
     }
 
-    /// Opens `path` and starts playback from the beginning.
     pub fn load(&self, path: impl AsRef<Path>) {
         self.load_at(path, None);
     }
 
-    /// Opens `path` and resumes at `resume` seconds once libmpv applies its per-file start.
-    ///
-    /// Returns the load identity carried by snapshots for this request.
     pub fn load_at(&self, path: impl AsRef<Path>, resume: Option<f64>) -> u64 {
         let load_id = self
             .next_load_id
@@ -470,7 +378,6 @@ impl Player {
         load_id
     }
 
-    /// Seeks to an absolute position in seconds and returns its confirmation serial.
     pub fn seek(&self, seconds: f64) -> u64 {
         let serial = self
             .next_seek_serial
@@ -480,36 +387,18 @@ impl Player {
         serial
     }
 
-    /// Pauses or resumes.
     pub fn set_paused(&self, paused: bool) {
         self.send(PlayerCommand::SetPaused(paused));
     }
 
-    /// Switches the track of `kind` to `id`, or turns that kind off.
-    ///
-    /// Turning subtitles off is a real libmpv operation (`no`), not a UI flag, so
-    /// the player's own notion of the selected track stays the single source of
-    /// truth and the next snapshot reflects it.
     pub fn select_track(&self, kind: TrackKind, id: i64) {
         self.send(PlayerCommand::SelectTrack { kind, id });
     }
 
-    /// Sets how subtitles are drawn: `scale` is a multiple of normal text size,
-    /// `position` is where they sit as a percent of the screen height from the top.
-    ///
-    /// Both are libmpv properties rather than Screenroom's own drawing, so the same
-    /// call sizes text, ASS and bitmap subtitles alike, and a value outside what
-    /// libmpv accepts is clamped rather than passed on.
-    ///
-    /// One caveat worth knowing before trusting it: a subtitle script that positions
-    /// its own lines — a styled ASS release — keeps that positioning unless
-    /// `sub-ass-override` is raised, which Screenroom leaves alone. Size is still
-    /// the player's; placement may not be.
     pub fn set_subtitle_style(&self, scale: f64, position: f64) {
         self.send(PlayerCommand::SetSubtitleStyle { scale, position });
     }
 
-    /// Sets the output volume in percent, clamped to libmpv's own 0-100 scale.
     pub fn set_volume(&self, percent: f64) {
         if !percent.is_finite() {
             return;
@@ -517,19 +406,15 @@ impl Player {
         self.send(PlayerCommand::SetVolume(percent.clamp(0.0, 100.0)));
     }
 
-    /// Mutes or unmutes the output.
     pub fn set_muted(&self, muted: bool) {
         self.send(PlayerCommand::SetMuted(muted));
     }
 
-    /// Stops playback.
     pub fn stop(&self) {
         self.send(PlayerCommand::Stop);
     }
 
     fn send(&self, command: PlayerCommand) {
-        // A closed channel means the worker already exited; the snapshot then
-        // carries the reason, so dropping the command is correct here.
         if self.commands.send(command).is_ok() {
             self.wake.notify();
         }
@@ -546,7 +431,6 @@ impl Drop for Player {
     }
 }
 
-/// Worker-thread entry point.
 fn run(
     shared: Arc<Mutex<PlayerSnapshot>>,
     commands: Receiver<PlayerCommand>,
@@ -575,12 +459,6 @@ fn run(
     runner.play_loop(&commands, &shared, &wake);
 }
 
-/// Owns libmpv for the lifetime of the thread.
-///
-/// Field order matters: libmpv requires the render context (and therefore the
-/// frames it hands out) to be released *before* the core is destroyed, and Rust
-/// drops fields in declaration order. `renderer` is declared first so that
-/// invariant holds even on an early return.
 struct Runner {
     renderer: SoftwareRenderer,
     core: Mpv,
@@ -590,27 +468,23 @@ struct Runner {
     position: f64,
     duration: f64,
     loaded: bool,
-    /// Tracks reported for the current file, in the order libmpv listed them.
+
     tracks: Vec<MediaTrack>,
-    /// The audio output's clock in seconds; `None` when no audio is playing.
+
     audio_pts: Option<f64>,
-    /// libmpv's last measured A/V sync difference, in seconds.
+
     avsync: Option<f64>,
-    /// Cumulative sync adjustment libmpv applied, in seconds.
+
     total_avsync_change: Option<f64>,
-    /// Frames dropped or duplicated for sync, per libmpv.
+
     mistimed_frames: Option<i64>,
-    /// Subtitle scale libmpv last reported, or `None` before one is applied.
-    ///
-    /// Kept across files on purpose: `sub-scale` and `sub-pos` belong to the video
-    /// output, so they outlive the file that happened to be open when they were set
-    /// — which is exactly why a new viewing inherits them.
+
     subtitle_scale: Option<f64>,
-    /// Subtitle position libmpv last reported, in percent from the top.
+
     subtitle_position: Option<f64>,
-    /// Output volume libmpv last reported, 0-100.
+
     volume: Option<f64>,
-    /// Whether output is muted, as libmpv reports it.
+
     muted: Option<bool>,
     hardware_decoder: Option<String>,
     load_id: u64,
@@ -626,28 +500,21 @@ struct Runner {
 impl Runner {
     fn new(hwdec: HwdecMode, wake: Arc<WakeSignal>) -> Result<Self, PlayerError> {
         let library = LibMpv::load()?;
-        // Every option is set before initialisation, which is the only moment
-        // libmpv accepts them.
+
         let mut options = vec![
-            // On-demand rendering through the render API.
             ("vo", "libmpv"),
-            // No playlist: Screenroom selects the file, the core plays it.
             ("idle", "yes"),
             ("keep-open", "no"),
-            // Deterministic behaviour: never read a user's mpv.conf.
             ("config", "no"),
             ("terminal", "no"),
-            // Screenroom draws its own interface.
             ("osc", "no"),
             ("input-default-bindings", "no"),
             ("input-vo-keyboard", "no"),
-            // Copy-back keeps the software renderer's CPU frame contract.
             ("hwdec", hwdec.as_option()),
             ("audio-client-name", "Screenroom"),
             ("video-sync", "audio"),
         ];
         if std::env::var_os("SCREENROOM_PLAYER_LOG").is_some() {
-            // Opt-in diagnostics: libmpv's own log on stderr, for bug reports.
             options.push(("terminal", "yes"));
             options.push(("msg-level", "all=debug"));
         }
@@ -659,16 +526,13 @@ impl Runner {
         core.observe("duration", FORMAT_DOUBLE, ID_DURATION)?;
         core.observe("pause", FORMAT_FLAG, ID_PAUSE)?;
         core.observe("eof-reached", FORMAT_FLAG, ID_EOF_REACHED)?;
-        // The audio output's own clock. Observed rather than polled so the
-        // measurement in the tests reads the same value the player acts on.
+
         core.observe("audio-pts", FORMAT_DOUBLE, ID_AUDIO_PTS)?;
-        // libmpv's own sync instruments. Inferring sync from two clocks measures the
-        // clocks; these measure the sync.
+
         core.observe("avsync", FORMAT_DOUBLE, ID_AVSYNC)?;
         core.observe("total-avsync-change", FORMAT_DOUBLE, ID_TOTAL_AVSYNC_CHANGE)?;
         core.observe("mistimed-frame-count", FORMAT_INT64, ID_MISTIMED_FRAMES)?;
-        // Output level, so the interface shows what the player is doing rather
-        // than what it last asked for.
+
         core.observe("volume", FORMAT_DOUBLE, ID_VOLUME)?;
         core.observe("mute", FORMAT_FLAG, ID_MUTE)?;
         core.observe("track-list", FORMAT_NODE, ID_TRACK_LIST)?;
@@ -711,15 +575,13 @@ impl Runner {
         wake: &Arc<WakeSignal>,
     ) {
         loop {
-            // Take the epoch before draining. Any callback that races with the
-            // drain changes it, so the wait below cannot lose that notification.
             let observed = wake.current();
             loop {
                 match commands.try_recv() {
                     Ok(PlayerCommand::Shutdown) => return,
                     Ok(command) => self.handle_command(command, shared),
                     Err(TryRecvError::Empty) => break,
-                    // The handle was dropped; nothing can observe us any more.
+
                     Err(TryRecvError::Disconnected) => return,
                 }
             }
@@ -751,8 +613,6 @@ impl Runner {
             } => self.load(load_id, &path, resume, shared),
             PlayerCommand::Seek { seconds, serial } => {
                 if self.pending_seek_serial.is_some() {
-                    // A libmpv playback-restart event carries no request ID. Keep
-                    // later seeks queued until the earlier serial is confirmed.
                     self.queued_seek = Some((seconds, serial));
                 } else {
                     self.seek(seconds, serial, shared);
@@ -810,8 +670,7 @@ impl Runner {
             snapshot.ended = false;
             snapshot.frame = None;
         });
-        // Checked up front so a missing file is reported as such, not as a
-        // generic decoder failure.
+
         if !path.is_file() {
             self.fail(
                 "file_missing",
@@ -829,8 +688,7 @@ impl Runner {
             return;
         };
         let resume = resume.filter(|seconds| seconds.is_finite() && *seconds > 0.5);
-        // Ended and Failed intentionally have no ordinary outgoing transitions;
-        // a new explicit load starts a fresh lifecycle.
+
         self.state = PlayerState::Idle;
         self.set_state(PlayerState::Resolving, shared);
         let command = if let Some(position) = resume {
@@ -849,18 +707,14 @@ impl Runner {
 
     fn seek(&mut self, seconds: f64, serial: u64, shared: &Arc<Mutex<PlayerSnapshot>>) {
         if !seconds.is_finite() || seconds < 0.0 {
-            // Nothing will move, so the request is settled now; leaving its serial
-            // unconfirmed would block every checkpoint for the rest of the viewing.
             self.confirm_seek(serial, shared);
             return;
         }
         if self.loaded && self.current_entry_id.is_none() {
-            // The file has ended and libmpv is idle; a seek has nothing to move.
             self.confirm_seek(serial, shared);
             return;
         }
         if !self.loaded {
-            // Too early to seek: run it once the file has loaded.
             self.queued_seek = Some((seconds, serial));
             return;
         }
@@ -883,7 +737,6 @@ impl Runner {
         }
     }
 
-    /// Marks a seek as settled without a playback restart to prove it.
     fn confirm_seek(&mut self, serial: u64, shared: &Arc<Mutex<PlayerSnapshot>>) {
         self.seek_serial = self.seek_serial.max(serial);
         self.publish_snapshot(shared);
@@ -894,27 +747,16 @@ impl Runner {
         if let Err(error) = self.core.command(&["set", "pause", value]) {
             self.fail("pause_failed", error.to_string(), shared);
         } else {
-            // Before a file starts, its pause change is not observed; remember it
-            // so the load lands in the state that was asked for.
             self.paused = paused;
         }
     }
 
-    /// Applies subtitle size and placement.
-    ///
-    /// Deliberately not guarded by [`Self::loaded`], unlike track selection: these
-    /// are properties of the video output, so setting them before a file is opened
-    /// is exactly how the next file should inherit them.
     fn set_subtitle_style(
         &mut self,
         scale: f64,
         position: f64,
         shared: &Arc<Mutex<PlayerSnapshot>>,
     ) {
-        // A non-finite value would survive `clamp` unchanged, and formatting it into
-        // an option string would then be rejected by libmpv with a parse error the
-        // user cannot act on. Skipped instead, so the property keeps its last good
-        // value rather than the player reporting itself broken.
         for (property, value, (low, high)) in [
             ("sub-scale", scale, SUB_SCALE_RANGE),
             ("sub-pos", position, SUB_POSITION_RANGE),
@@ -928,10 +770,7 @@ impl Runner {
                 return;
             }
         }
-        // Read back instead of storing what was asked for. libmpv resolves these
-        // through the video output and may hold a different number, and a snapshot
-        // that repeated the request would make the interface agree with itself
-        // while disagreeing with the picture.
+
         self.subtitle_scale = self
             .core
             .get_f64("sub-scale")
@@ -941,11 +780,6 @@ impl Runner {
         self.publish_snapshot(shared);
     }
 
-    /// Applies a track choice and republishes the real selected state.
-    ///
-    /// The track list is re-read from libmpv afterwards instead of being patched
-    /// locally: if libmpv refuses the switch (an id that has since disappeared),
-    /// the snapshot must show what actually happened, not what was asked for.
     fn select_track(&mut self, kind: TrackKind, id: i64, shared: &Arc<Mutex<PlayerSnapshot>>) {
         if !self.loaded {
             return;
@@ -1008,7 +842,6 @@ impl Runner {
             event::PROPERTY_CHANGE => self.apply_property(raw, shared),
             event::START_FILE => {
                 if !raw.data.is_null() {
-                    // Safety: START_FILE always carries an `mpv_event_start_file`.
                     let entry_id =
                         unsafe { (*(raw.data as *const RawStartFile)).playlist_entry_id };
                     if self
@@ -1062,7 +895,7 @@ impl Runner {
         if raw.data.is_null() {
             return;
         }
-        // Safety: libmpv guarantees the payload type for the observed property.
+
         let property = unsafe { &*(raw.data as *const RawProperty) };
         trace!(
             "property id={} present={}",
@@ -1070,7 +903,6 @@ impl Runner {
             !property.data.is_null()
         );
         if property.data.is_null() {
-            // The property is currently unavailable (before load, after stop).
             if raw.reply_userdata == ID_HWDEC_CURRENT {
                 self.hardware_decoder = None;
                 self.publish_snapshot(shared);
@@ -1113,8 +945,7 @@ impl Runner {
             }
             ID_AUDIO_PTS => {
                 let value = unsafe { *(property.data as *const f64) };
-                // A file with no audio reports the property as unavailable, which
-                // the caller distinguishes from a clock sitting at zero.
+
                 self.audio_pts = value.is_finite().then_some(value);
             }
             ID_AVSYNC => {
@@ -1138,8 +969,6 @@ impl Runner {
             }
             ID_TRACK_LIST => self.tracks = read_tracks(&self.core),
             ID_HWDEC_CURRENT => {
-                // MPV_FORMAT_STRING event data is a pointer to the stored `char *`.
-                // The event owns both levels only until the next wait_event call.
                 let value = unsafe { *(property.data.cast::<*const std::ffi::c_char>()) };
                 self.hardware_decoder = (!value.is_null()).then(|| {
                     unsafe { std::ffi::CStr::from_ptr(value) }
@@ -1152,7 +981,6 @@ impl Runner {
         self.publish_snapshot(shared);
     }
 
-    /// Sets the output volume, then reports what libmpv actually holds.
     fn set_volume(&mut self, percent: f64, shared: &Arc<Mutex<PlayerSnapshot>>) {
         let value = percent.clamp(0.0, 100.0).to_string();
         if let Err(error) = self.core.command(&["set", "volume", &value]) {
@@ -1163,7 +991,6 @@ impl Runner {
         self.publish_snapshot(shared);
     }
 
-    /// Mutes or unmutes, then reports libmpv's own flag.
     fn set_muted(&mut self, muted: bool, shared: &Arc<Mutex<PlayerSnapshot>>) {
         let value = if muted { "yes" } else { "no" };
         if let Err(error) = self.core.command(&["set", "mute", value]) {
@@ -1219,7 +1046,6 @@ impl Runner {
                 self.current_entry_id.unwrap_or_default(),
             )
         } else {
-            // Safety: END_FILE always carries an `mpv_event_end_file`.
             let end = unsafe { &*(raw.data as *const RawEndFile) };
             (end.reason, end.error, end.playlist_entry_id)
         };
@@ -1227,8 +1053,7 @@ impl Runner {
             return;
         }
         self.current_entry_id = None;
-        // A seek that ran into the end never gets a playback restart; the file is
-        // over, so every outstanding request is settled.
+
         let outstanding = self
             .pending_seek_serial
             .take()
@@ -1249,7 +1074,7 @@ impl Runner {
                 let message = self.library.message(error);
                 self.fail("decode_failed", message, shared);
             }
-            // A stop or quit was requested by this client.
+
             _ => {}
         }
         self.publish_snapshot(shared);
@@ -1361,12 +1186,6 @@ impl Runner {
     }
 }
 
-/// Reads the current `track-list` from libmpv.
-///
-/// libmpv exposes the list as indexed sub-properties, so it is walked with plain
-/// property reads rather than by parsing a node tree: `track-list/count` gives the
-/// length and `track-list/<n>/<field>` the fields. A missing field is reported as
-/// `None`; a malformed index stops the walk rather than looping forever.
 fn read_tracks(core: &Mpv) -> Vec<MediaTrack> {
     let count = core.get_i64("track-list/count").unwrap_or(0).clamp(0, 64);
     let mut tracks = Vec::new();
@@ -1380,13 +1199,10 @@ fn read_tracks(core: &Mpv) -> Vec<MediaTrack> {
             Some("video") => TrackKind::Video,
             Some("audio") => TrackKind::Audio,
             Some("sub") => TrackKind::Subtitle,
-            // An unknown stream type is not something the interface can present,
-            // and inventing a kind for it would put a dead control on screen.
+
             _ => continue,
         };
-        // Cover art is a video stream that holds one still frame (`image=yes` in
-        // `track-list`). It is not a picture to play: listing it would offer the
-        // viewer a video track that replaces the film with its own poster.
+
         if kind == TrackKind::Video && field("image").as_deref() == Some("yes") {
             continue;
         }
@@ -1410,7 +1226,6 @@ fn read_tracks(core: &Mpv) -> Vec<MediaTrack> {
     tracks
 }
 
-/// Applies `update` to the shared snapshot, ignoring a poisoned lock.
 fn publish(shared: &Arc<Mutex<PlayerSnapshot>>, update: impl FnOnce(&mut PlayerSnapshot)) {
     if let Ok(mut snapshot) = shared.lock() {
         update(&mut snapshot);
@@ -1448,8 +1263,6 @@ mod tests {
 
     #[test]
     fn a_missing_file_is_reported_without_touching_libmpv() {
-        // The runner is not built here: `load` is exercised end-to-end in the
-        // integration test, which needs a real library.
         let shared = Arc::new(Mutex::new(PlayerSnapshot::default()));
         publish(&shared, |snapshot| {
             snapshot.state = PlayerState::Failed;

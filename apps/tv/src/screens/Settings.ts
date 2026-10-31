@@ -1,23 +1,3 @@
-/**
- * Settings: what this device is, what it can do, and the two things worth pressing.
- *
- * This screen is mostly diagnostic, and that is on purpose. The gap this project has to
- * close before it can claim a TV milestone is evidence, and evidence starts with the
- * app being able to say what it is running on: the model the platform reports, which
- * playback path is live, which remote keys were actually accepted, where state is
- * stored, which drives the TV reports, and what the last scan of them actually did.
- * Every line here is read from the host at the moment the screen opens; nothing is a
- * constant that could go stale and nothing is rounded up into a claim.
- *
- * Two actions live here, and neither takes a decision on the owner's behalf:
- *
- * * **Scan for media** walks the mounted drives and catalogues what it finds. A failed
- *   walk withdraws nothing — losing the catalogue is not a reasonable price for a
- *   failed scan — and the report says which drive would not list and why.
- * * **Subtitles / audio language** are the device's own preferences, in the same
- *   document as the library. Setting one is one small write.
- */
-
 import Blits from '@lightningjs/blits'
 
 import { clampIndex } from '../core/focus.ts'
@@ -52,10 +32,8 @@ import {
 } from '../app/runtime.ts'
 import { hostSummary } from '../platform/env.ts'
 
-/** What Enter does on a row, when it does anything. */
 type Action = 'scan' | 'subtitles' | 'audio' | 'forget'
 
-/** One row: a label and what it says. */
 interface Row {
   readonly key: string
   readonly label: string
@@ -65,15 +43,14 @@ interface Row {
   readonly labelColor: string
   readonly valueColor: string
   readonly focused: boolean
-  /** True for the rows Enter acts on. */
+
   readonly actionable: boolean
-  /** What Enter does, or `null` for a row that only reports. */
+
   readonly action: Action | null
-  /** False for a row outside the visible window, which is not drawn at all. */
+
   readonly visible: boolean
 }
 
-/** One line of the row list, before it is placed. */
 interface Entry {
   readonly key: string
   readonly label: string
@@ -81,16 +58,12 @@ interface Entry {
   readonly action?: Action
 }
 
-/** How many drives and sources are listed before the list is summarised. */
 const MAX_LISTED = 4
 
-/** The route, which is also this screen's focus-memory key. */
 const ROUTE = '/settings'
 
-/** Where the list starts, just right of the rail. */
 const CONTENT_LEFT = RAIL_WIDTH + Math.round(TOKENS.spacing.shellPad * 0.6)
 
-/** Whole milliseconds as a short "how long ago", never as an invented date. */
 function sinceMs(timestampMs: number, nowMs: number): string {
   if (timestampMs <= 0) {
     return 'never'
@@ -185,9 +158,9 @@ export default Blits.Component('Settings', {
       zone: 'content' as NavZone,
       railIndex: 0,
       busy: false,
-      /** The list is scrolled in whole rows when it is longer than the screen. */
+
       scroll: 0,
-      /** How many rows fit, set by `applyLayout` from the actual type size. */
+
       visibleRows: 12,
     }
   },
@@ -214,17 +187,11 @@ export default Blits.Component('Settings', {
       this.$focus()
       this.applyLayout()
       this.reload()
-      // The drive list is re-read on open, not cached from app start: a USB stick
-      // plugged in while the app was on Home must be visible here immediately.
+
       void this.refreshDrives()
     },
   },
-  /**
-   * The remote keys, as the engine names them.
-   *
-   * Declaring them is what makes them reachable: the engine only delivers a key to a
-   * component whose `input` names it, and this block is the whole wiring.
-   */
+
   input: {
     up() {
       this.press('up')
@@ -253,7 +220,7 @@ export default Blits.Component('Settings', {
       this.visibleRows = layout.visibleRows
       this.listWidth = APP_WIDTH - CONTENT_LEFT - Math.round(TOKENS.spacing.shellPad)
     },
-    /** Reads every host fact again and rebuilds the list. */
+
     reload() {
       const capabilities = host()
       const info = device()
@@ -280,9 +247,7 @@ export default Blits.Component('Settings', {
           value: info.platformVersion ?? 'not reported by this host',
         },
         {
-          // Separate from the Tizen version on purpose: the TV's product version is a
-          // different number (3.7 on this set), and showing it as the platform version
-          // would be exactly the kind of confident-but-wrong receipt this app avoids.
+
           key: 'product',
           label: 'Product version',
           value: info.productVersion ?? 'not reported by this host',
@@ -316,8 +281,6 @@ export default Blits.Component('Settings', {
         { key: 'drives', label: 'Drives the TV reports', value: storageSummary() },
       ]
 
-      // The drives themselves, one line each: a device answer that contradicts the
-      // documentation is visible here rather than inferred from an empty library.
       const roots = mediaRoots()
       for (const root of roots.slice(0, MAX_LISTED)) {
         entries.push({
@@ -408,8 +371,7 @@ export default Blits.Component('Settings', {
 
       const layout = this.layout
       this.visibleRows = layout.visibleRows
-      // The list can shrink between reloads (a drive removed, a scan problem cleared),
-      // so the window is clamped rather than left scrolled past the end.
+
       this.scroll = Math.min(Math.max(0, entries.length - this.visibleRows), Math.max(0, this.scroll))
       this.rows = entries.map((entry, index) => {
         const focused = this.zone === 'content' && index === this.focusIndex
@@ -417,8 +379,7 @@ export default Blits.Component('Settings', {
           key: entry.key,
           label: entry.label,
           value: entry.value,
-          // Rows are placed from the top of the visible window, so a list longer than
-          // the screen scrolls rather than running off the bottom of the television.
+
           y: layout.top + (index - this.scroll) * layout.rowGap,
           fill: focused ? hex(TOKENS.palette.focusSurface) : hex(TOKENS.palette.surface1),
           labelColor: focused ? hex(TOKENS.palette.focusForeground) : hex(TOKENS.palette.foreground),
@@ -426,9 +387,7 @@ export default Blits.Component('Settings', {
           focused,
           actionable: entry.action !== undefined,
           action: entry.action ?? null,
-          // Only the rows inside the window are drawn. The list is longer than the screen
-          // by design, and a row placed below the footer would otherwise be half visible
-          // under it — which reads as a clipped list rather than a scrolled one.
+
           visible: index >= this.scroll && index < this.scroll + this.visibleRows,
         }
       })
@@ -443,7 +402,7 @@ export default Blits.Component('Settings', {
         { railCount: RAIL_ENTRIES.length, contentCount: this.rows.length, columns: 1 },
       )
     },
-    /** Rebuilds only the ink, for a cursor move. */
+
     markFocus() {
       const layout = this.layout
       this.rows = this.rows.map((row, index) => {
@@ -459,13 +418,7 @@ export default Blits.Component('Settings', {
         }
       })
     },
-    /**
-     * One press, across the rail and the list.
-     *
-     * The list is one column, so `left` from it goes to the rail — which is the only
-     * way back to the menu from a full-width row. Scrolling is kept inside the visible
-     * window here: a highlighted row nobody can see is a cursor that has been lost.
-     */
+
     press(direction: 'up' | 'down' | 'left' | 'right') {
       const next = moveNav(
         { zone: this.zone, rail: this.railIndex, content: this.focusIndex },
@@ -493,7 +446,7 @@ export default Blits.Component('Settings', {
       }
       this.markFocus()
     },
-    /** Enter: a destination on the rail, or whichever action the highlighted row names. */
+
     async enter() {
       if (this.zone === 'rail') {
         const entry = RAIL_ENTRIES[this.railIndex]
@@ -504,8 +457,7 @@ export default Blits.Component('Settings', {
           this.$router.to(entry.route)
           return
         }
-        // OK on the destination already open hands the cursor to the list, so this row
-        // is never a dead key.
+
         this.zone = 'content'
         this.focusIndex = Math.max(0, this.focusIndex)
         this.markFocus()
@@ -518,8 +470,7 @@ export default Blits.Component('Settings', {
       switch (row.action) {
         case 'scan':
           if (this.busy) {
-            // Enter during a scan stops it, because a walk that cannot be stopped is a
-            // walk that holds the drive until the app is closed.
+
             cancelScan()
             this.footer = 'Stopping after the folder it is in…'
             return
@@ -535,8 +486,7 @@ export default Blits.Component('Settings', {
           return
         }
         case 'audio': {
-          // The only honest way to "unset" a language this app learned is to leave the
-          // choice to each file again, which is what an empty preference means.
+
           saveSettings({ ...settings(), audioLanguage: '' })
           this.reload()
           this.footer = 'Audio is back to whatever each file defaults to.'
@@ -550,17 +500,17 @@ export default Blits.Component('Settings', {
         }
       }
     },
-    /** Asks the TV for its drives and walks them. */
+
     async runScan() {
       this.busy = true
       this.reload()
-      // The drive list is refreshed by the scan itself, so the screen does not race it.
+
       const report = await scanDrives()
       this.busy = false
       this.reload()
       this.footer = describeScan(report)
     },
-    /** Re-reads the drive list without scanning. Used when the screen opens. */
+
     async refreshDrives() {
       await refreshMediaRoots()
       this.reload()

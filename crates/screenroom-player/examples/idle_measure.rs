@@ -1,5 +1,3 @@
-//! Samples CPU and RSS while one offscreen Player has no media loaded.
-
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -14,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("idle sample must run for at least 30 seconds".into());
     }
     let player = Player::start()?;
-    // Keep player construction out of the steady-state sample window.
+
     std::thread::sleep(Duration::from_secs(2));
     let wake_count_at_start = player.wake_notifications();
     let started = Instant::now();

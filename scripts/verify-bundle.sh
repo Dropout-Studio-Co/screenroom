@@ -1,27 +1,5 @@
 #!/usr/bin/env bash
-# Verifies the packaged macOS app without opening it.
-#
-#   scripts/verify-bundle.sh                    # checks dist/Screenroom.app
-#   scripts/verify-bundle.sh /path/to/App.app   # checks another bundle
-#
-# Why this exists: `open`ing the app is the only way to see it, and a window on the
-# desktop belongs to whoever is using the machine. Everything here is a file
-# inspection or a process that exits by itself, so it takes no focus and never
-# interrupts the owner (see "Testing without taking over the desktop" in AGENTS.md).
-#
-# What it proves, and each item is a real check rather than a restatement:
-#
-# * the bundle has the structure macOS actually requires;
-# * `Info.plist` parses and names the executable it ships;
-# * the bundled libmpv is a real file, not a symlink into Homebrew that will break
-#   when the prefix changes;
-# * every absolute dependency of that bundled libmpv resolves on this machine;
-# * and — the one that matters — libmpv *from inside the bundle* loads and can
-#   create a core. `capability` prefers system paths, so on a development machine it
-#   would happily report Homebrew's copy; naming the bundled path is what makes this
-#   evidence about the bundle rather than about the machine.
-#
-# What it cannot prove: that a frame reaches the screen. That needs a window.
+
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -77,8 +55,7 @@ if [ ! -f "$libmpv" ]; then
   echo "  note: the bundle carries no libmpv, so playback will report itself unavailable."
   echo "        Install one with: brew install mpv, then re-run scripts/package-macos.sh"
 else
-  # `cp -L` must have followed Homebrew's symlink; a symlink here would dangle the
-  # moment the linked version is upgraded in place.
+
   if [ -L "$libmpv" ]; then
     fail "Contents/Frameworks/libmpv.2.dylib is a symlink, not a real file"
   else
@@ -92,10 +69,7 @@ else
 
   echo
   echo "==> libmpv runtime dependencies (must exist on the target machine)"
-  # These are absolute install names pointing into /opt/homebrew/opt, so the bundle
-  # runs on a machine with the same Homebrew mpv installed. Vendoring FFmpeg would
-  # remove that requirement and is a separate licensing decision, so the situation
-  # is reported rather than hidden.
+
   missing=0
   while IFS= read -r dependency; do
     if [ -e "$dependency" ]; then

@@ -1,17 +1,3 @@
-//! Bounded, cancellable, non-destructive media scanning.
-//!
-//! Guarantees:
-//!
-//! * Traversal never follows a symbolic link, never leaves the authorized root,
-//!   and stops at an entry cap and a depth cap rather than running away.
-//! * A file still being written (young mtime, zero size, or a download sidecar)
-//!   is reported and skipped, not imported in half-written form.
-//! * Failures are per-entry [`ScanIssue`] values; one unreadable folder does not
-//!   abort the walk, and the scan reports whether results are complete.
-//! * A partial scan withdraws availability only for locators confirmed missing
-//!   while the root still resolves; cancellation and bounds never withdraw rows.
-//! * Nothing on disk is modified, moved or deleted.
-
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Arc;
@@ -24,81 +10,63 @@ use crate::filename::parse_filename;
 use crate::fingerprint::media_fingerprint;
 use crate::library::{Ingest, Library};
 
-/// Container extensions the library will import.
-///
-/// A container is not a codec promise: playback compatibility is decided by the
-/// platform player for the actual stream, never by this list.
 pub const MEDIA_EXTENSIONS: &[&str] = &[
     "mkv", "mp4", "m4v", "avi", "mov", "webm", "mpeg", "mpg", "ts", "m2ts", "wmv", "flv", "ogv",
     "3gp",
 ];
 
-/// Suffixes that indicate a download is still in progress.
 const DOWNLOAD_SUFFIXES: &[&str] = &[".part", ".crdownload", ".download", ".aria2", ".!qB"];
 
-/// A cooperative cancellation flag shared with the scanning thread.
 #[derive(Debug, Clone, Default)]
 pub struct ScanToken(Arc<AtomicBool>);
 
 impl ScanToken {
-    /// A fresh, uncancelled token.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Asks the running scan to stop at the next safe point.
     pub fn cancel(&self) {
         self.0.store(true, Ordering::SeqCst);
     }
 
-    /// True once cancellation was requested.
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::SeqCst)
     }
 }
 
-/// One entry the scan could not use, with a stable code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanIssue {
-    /// Path relative to the source root, empty for source-wide issues.
     pub relative_path: String,
-    /// Stable reason code, for example `still_downloading`.
+
     pub code: &'static str,
 }
 
-/// Progress and partial results for one step of a scan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanUpdate {
-    /// Entries examined so far.
     pub visited: u64,
-    /// Files imported or refreshed so far.
+
     pub imported: u64,
-    /// Issues seen so far.
+
     pub errors: Vec<ScanIssue>,
-    /// True for the final update.
+
     pub done: bool,
-    /// True when the final update was caused by cancellation.
+
     pub cancelled: bool,
 }
 
-/// Final outcome of a scan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanSummary {
-    /// Entries examined.
     pub visited: u64,
-    /// Files imported or refreshed.
+
     pub imported: u64,
-    /// Issues seen.
+
     pub issues: Vec<ScanIssue>,
-    /// Whether cancellation was observed.
+
     pub cancelled: bool,
-    /// Whether the walk saw every entry and raised no issue.
-    ///
-    /// Complete scans withdraw every unseen file; partial scans only stat locators.
+
     pub complete: bool,
 }
 
-/// Walks one authorized source and records what it finds.
 #[derive(Debug)]
 pub struct LibraryScanner<'a> {
     library: &'a Library,
@@ -109,7 +77,6 @@ pub struct LibraryScanner<'a> {
 }
 
 impl<'a> LibraryScanner<'a> {
-    /// A scanner with production bounds: 250k entries, depth 64, 15s settle time.
     pub fn new(library: &'a Library) -> Self {
         Self {
             library,
@@ -120,7 +87,6 @@ impl<'a> LibraryScanner<'a> {
         }
     }
 
-    /// Replaces the traversal and settle bounds, mainly for tests and small devices.
     pub fn with_limits(mut self, max_entries: u64, max_depth: usize, stable_age: Duration) -> Self {
         self.max_entries = max_entries;
         self.max_depth = max_depth;
@@ -128,10 +94,6 @@ impl<'a> LibraryScanner<'a> {
         self
     }
 
-    /// Scans `source_id`, invoking `on_update` as files are imported.
-    ///
-    /// The callback runs on the scanning thread; it must not call back into the
-    /// library for writes.
     pub fn scan(
         &self,
         source_id: &str,
@@ -182,10 +144,7 @@ impl<'a> LibraryScanner<'a> {
                 });
             }
         };
-        // Compared as locations, not as strings. `canonicalize` does not return the
-        // spelling it was given — on Windows it answers with a verbatim path
-        // (`\\?\D:\Media` for `D:\Media`) — so a literal comparison rejected every
-        // healthy Windows source as a replaced symbolic link.
+
         let stored_key = self.library.path_key(Path::new(&source.root_path));
         if self.library.path_key(&root) != stored_key {
             return Err(CoreError::library(
@@ -260,7 +219,6 @@ impl<'a> LibraryScanner<'a> {
                     continue;
                 };
                 if file_type.is_symlink() {
-                    // Never follow links: they can escape the root or form loops.
                     continue;
                 }
                 if file_type.is_dir() {
@@ -367,7 +325,7 @@ impl<'a> LibraryScanner<'a> {
 
         let size = metadata.len();
         let fingerprint = media_fingerprint(&path, size)?;
-        // Re-check after hashing: a growing file must not be recorded with stale facts.
+
         let after = std::fs::metadata(&path)?;
         if after.len() != size || after.modified().ok() != metadata.modified().ok() {
             return Err(CoreError::library(
@@ -430,14 +388,6 @@ impl Drop for ScanGuard<'_> {
     }
 }
 
-/// Whether a directory entry is a dot-file or dot-folder.
-///
-/// On a volume that cannot hold resource forks — an exFAT USB drive is the
-/// common case for a media library — macOS writes an AppleDouble companion
-/// (`._Name.mkv`) beside every file. Those companions keep the media extension,
-/// so treating them as media invents titles like `._12 Angry Men - 1957`, counts
-/// every file twice and offers playback of 4 KiB of metadata. They are skipped
-/// silently: they are not a scan problem the viewer can act on.
 fn is_hidden_name(name: &std::ffi::OsStr) -> bool {
     name.to_string_lossy().starts_with('.')
 }
@@ -457,19 +407,6 @@ fn is_season_folder(name: &str) -> bool {
     !number.is_empty() && number.chars().all(|character| character.is_ascii_digit())
 }
 
-/// Which unavailability a root that will not resolve actually is.
-///
-/// The three cases have different recovery actions, so they are decided here rather
-/// than collapsed in a view: access was withdrawn needs a re-grant, a folder that is
-/// gone needs a relink, and a volume that is not attached needs plugging back in.
-/// Reporting a deleted folder as "drive not attached" tells the owner to do
-/// something that cannot work.
-///
-/// The probe is the stored root's **parent**. A parent that still exists means the
-/// volume holding the folder is mounted and the folder itself has gone; a parent
-/// that has also gone means the volume is not there. Nothing walks further up,
-/// because an unmounted mount point's own ancestors always still exist (`/Volumes`,
-/// `C:\`) and would answer "mounted" for every missing drive.
 fn unavailable_root(stored_root: &Path, kind: std::io::ErrorKind) -> (SourceState, &'static str) {
     if kind == std::io::ErrorKind::PermissionDenied {
         return (SourceState::PermissionLost, "permission_lost");
@@ -478,7 +415,7 @@ fn unavailable_root(stored_root: &Path, kind: std::io::ErrorKind) -> (SourceStat
         Some(parent) if !parent.as_os_str().is_empty() && parent.exists() => {
             (SourceState::Missing, "source_missing")
         }
-        // No parent at all is a file system root, which cannot be missing on its own.
+
         _ => (SourceState::Disconnected, "source_disconnected"),
     }
 }
@@ -490,7 +427,6 @@ fn has_download_sidecar(path: &Path) -> bool {
         .any(|suffix| Path::new(&format!("{name}{suffix}")).exists())
 }
 
-/// Bounded issue collection with an explicit truncation marker.
 struct Issues {
     entries: Vec<ScanIssue>,
     max: usize,

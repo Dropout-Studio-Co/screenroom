@@ -1,9 +1,3 @@
-//! Authorized media roots.
-//!
-//! A source carries a stable logical identity that survives a moved drive or a
-//! changed mount path. Removing a source only marks it removed; originals are
-//! never touched and history is retained.
-
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Row, params};
@@ -13,7 +7,6 @@ use crate::domain::{Source, SourceState};
 use crate::error::{CoreError, Result};
 
 impl Library {
-    /// Lists sources still in the library, ordered by label.
     pub fn sources(&self) -> Result<Vec<Source>> {
         let connection = self.connection();
         let mut statement = connection.prepare(
@@ -24,7 +17,6 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    /// Reads one source, including a removed one so recovery copy can name it.
     pub fn source(&self, id: &str) -> Result<Source> {
         let connection = self.connection();
         let mut statement = connection.prepare(
@@ -40,10 +32,6 @@ impl Library {
             })
     }
 
-    /// Grants a new media root.
-    ///
-    /// The path is canonicalised and rejected when it overlaps an existing
-    /// source, so one tree cannot be imported twice under two labels.
     pub fn add_source(&self, root: impl AsRef<Path>, label: Option<&str>) -> Result<Source> {
         let root = self.canonical_root(root)?;
         self.check_overlapping_root(&root, None)?;
@@ -57,9 +45,7 @@ impl Library {
         };
         let root_path = root.to_string_lossy().to_string();
         let connection = self.connection();
-        // Re-granting a folder the user previously removed restores the same
-        // source identity, so its works, history and lists are visible again
-        // instead of being stranded on an orphaned row.
+
         let mut statement =
             connection.prepare("SELECT id, root_path FROM sources WHERE state = 'removed'")?;
         let removed = statement
@@ -97,11 +83,6 @@ impl Library {
         Ok(source)
     }
 
-    /// Points a source at a new location after a drive letter or mount changed.
-    ///
-    /// Every file under the source becomes unavailable: a new grant does not
-    /// prove that the file at a locator is the same file. A rescan re-establishes
-    /// availability, and fingerprints decide rename candidates.
     pub fn relink_source(&self, id: &str, new_root: impl AsRef<Path>) -> Result<()> {
         let root = self.canonical_root(new_root)?;
         self.check_overlapping_root(&root, Some(id))?;
@@ -122,7 +103,6 @@ impl Library {
         Ok(())
     }
 
-    /// Renames a source label.
     pub fn rename_source(&self, id: &str, label: &str) -> Result<()> {
         let label = validated(label, 120)?.to_string();
         let changed = self.connection().execute(
@@ -138,15 +118,10 @@ impl Library {
         Ok(())
     }
 
-    /// Removes a source from the library without touching files on disk.
     pub fn remove_source(&self, id: &str) -> Result<()> {
         self.set_source_state(id, SourceState::Removed)
     }
 
-    /// Records an availability change for a source.
-    ///
-    /// Any state other than available hides its files from the library while
-    /// keeping every work, edition, progress row and list entry.
     pub fn set_source_state(&self, id: &str, state: SourceState) -> Result<()> {
         let mut connection = self.connection();
         let tx = connection.transaction()?;
@@ -167,7 +142,6 @@ impl Library {
         Ok(())
     }
 
-    /// True when `candidate` is inside, equals, or contains a listed source.
     fn check_overlapping_root(&self, candidate: &Path, except: Option<&str>) -> Result<()> {
         for source in self.sources()? {
             if Some(source.id.as_str()) == except || source.root_path.is_empty() {
@@ -217,8 +191,7 @@ mod tests {
     #[test]
     fn regrant_matches_removed_roots_by_location_key() {
         let directory = tempfile::tempdir().unwrap();
-        // Canonical first: on macOS the temp directory is reached through the
-        // `/var` symlink, and that is a different path, not a different spelling.
+
         let base = std::fs::canonicalize(directory.path()).unwrap();
         let root = base.join("media");
         std::fs::create_dir(&root).unwrap();

@@ -1,27 +1,10 @@
-//! Exports the pinned Dropout Design System semantic tokens into a Rust module.
-//!
-//! ```bash
-//! cargo run -p screenroom-desktop --example export_ds_tokens
-//! cargo run -p screenroom-desktop --example export_ds_tokens -- /path/to/tokens.json
-//! ```
-//!
-//! It writes `apps/desktop/src/design/ds_pinned.rs`, which `.gitignore` excludes,
-//! and records the design system's commit hash inside the file so drift between
-//! the pinned values and the private upstream is detectable.
-//!
-//! Only the semantic roles the desktop app consumes are exported. Values are
-//! resolved from their DTCG aliases (`{color.ink.950}`) and converted from OKLCH
-//! to the sRGB encoding iced expects. Nothing is copied into a committed file.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::Value;
 
-/// Root font size the design system's `rem` scale resolves against.
 const ROOT_PX: f64 = 16.0;
 
-/// Default private checkout, used when no path argument or env var is given.
 const DEFAULT_TOKENS: &str = "dropout-design-system/src/lib/tokens/tokens.json";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -53,8 +36,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|semantic| semantic.get("dark"))
         .ok_or("tokens.json has no `semantic.dark` group; the design system changed shape")?;
 
-    // Role → DTCG path. A missing role is an error, never a silent default, so a
-    // design-system change stops the export instead of shipping wrong colours.
     let mut palette = Vec::new();
     for (field, role) in [
         ("background", "background"),
@@ -64,9 +45,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("foreground", "foreground"),
         ("ink_muted", "inkMuted"),
         ("signal", "signal"),
-        // The design system defines no `signalForeground`. `focusForeground` is
-        // the same contrast situation — text on a near-white fill in the dark
-        // theme — so it is reused rather than invented.
         ("signal_foreground", "focusForeground"),
         ("focus_surface", "focusSurface"),
         ("focus_foreground", "focusForeground"),
@@ -158,7 +136,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// The private checkout's default location relative to the projects folder.
 fn default_tokens_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
     let path = PathBuf::from(home)
@@ -174,7 +151,6 @@ fn default_tokens_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
     .into())
 }
 
-/// The design system's commit, read from its own checkout when possible.
 fn design_system_revision(tokens_path: &Path) -> Option<String> {
     let repo = tokens_path
         .parent()?
@@ -192,13 +168,11 @@ fn design_system_revision(tokens_path: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Resolves DTCG aliases (`{color.ink.950}`) down to a concrete token.
 struct Resolver<'a> {
     tokens: &'a Value,
 }
 
 impl Resolver<'_> {
-    /// Resolves a token object (or alias string) to an sRGB quadruple.
     fn color(&self, value: &Value) -> Result<(f64, f64, f64, f64), Box<dyn std::error::Error>> {
         let resolved = self.resolve(value, 0)?;
         let object = resolved
@@ -237,7 +211,6 @@ impl Resolver<'_> {
         }
     }
 
-    /// Follows `{group.token}` references until a concrete value is reached.
     fn resolve(&self, value: &Value, depth: usize) -> Result<Value, Box<dyn std::error::Error>> {
         if depth > 8 {
             return Err("token alias chain is too deep".into());
@@ -266,7 +239,6 @@ impl Resolver<'_> {
     }
 }
 
-/// Formats one scale group as Rust field initialisers.
 fn scale(
     tokens: &Value,
     group: &str,
@@ -281,9 +253,9 @@ fn scale(
         let entry = node
             .get(field)
             .ok_or_else(|| format!("{group}.{field} is missing"))?;
-        // DTCG wraps the payload in `$value`; the shape inside is `{ value, unit }`.
+
         let entry = entry.get("$value").unwrap_or(entry);
-        // Covers both `{ value, unit }` entries and bare numbers.
+
         let value = entry.get("value").unwrap_or(entry);
         let unit = entry.get("unit").and_then(Value::as_str).unwrap_or("px");
         let number = value
@@ -294,7 +266,7 @@ fn scale(
         } else {
             number
         };
-        // A `fieldX` style name becomes `field_x`.
+
         let rust_name: String = field
             .chars()
             .map(|character| {
@@ -310,7 +282,6 @@ fn scale(
     Ok(lines.trim_end().to_string())
 }
 
-/// Converts OKLCH to gamma-encoded sRGB, clamped to the displayable gamut.
 fn oklch_to_srgb(l: f64, c: f64, h_degrees: f64) -> (f64, f64, f64) {
     let h = h_degrees.to_radians();
     let a = c * h.cos();
@@ -333,7 +304,6 @@ fn clamp01(value: f64) -> f64 {
     value.clamp(0.0, 1.0)
 }
 
-/// Linear light to sRGB transfer function.
 fn encode(value: f64) -> f64 {
     if value <= 0.003_130_8 {
         12.92 * value
