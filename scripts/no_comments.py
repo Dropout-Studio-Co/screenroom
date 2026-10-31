@@ -469,6 +469,10 @@ def lex_python(source):
     comments = []
     i = 0
     n = len(source)
+    if source.startswith("#!"):
+        i = source.find("\n")
+        if i < 0:
+            return comments
     while i < n:
         c = source[i]
         if c == "#":
