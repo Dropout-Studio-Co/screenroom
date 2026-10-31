@@ -5,15 +5,9 @@ const os = require('os');
 const { pathToFileURL } = require('url');
 const dir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
-// The same code ships as @trailhq/trail-code and as @nanonets/graft, its old name;
-// either one answers, and the newer wins. @trailhq/trail is what builds from
-// source were called before the package was published.
 const PKGS = ['@trailhq/trail-code', '@nanonets/graft', '@trailhq/trail'];
 const BINS = process.platform === 'win32' ? ['trail.cmd', 'graft.cmd'] : ['trail', 'graft'];
 
-// The dist/claude dir this machine's last init ran from, kept in the trail home
-// rather than in this committed file. Only a file we own and no one else can
-// write: it names code we import.
 function remembered() {
   try {
     const home = process.env.TRAIL_HOME ? path.resolve(process.env.TRAIL_HOME) : path.join(os.homedir(), '.trail');
@@ -25,7 +19,6 @@ function remembered() {
   } catch { return null; }
 }
 
-// The dist/claude dir of each package resolved from a base whose node_modules is searched.
 function fromPkg(base) {
   return PKGS.map((name) => {
     try {
@@ -35,20 +28,15 @@ function fromPkg(base) {
   });
 }
 
-// The dist/claude dir of the package a file belongs to: the nearest package.json
-// above it that names one of PKGS.
 function pkgAbove(file) {
   for (let d = path.dirname(file), i = 0; i < 6; d = path.dirname(d), i++) {
     try {
       if (PKGS.includes(JSON.parse(fs.readFileSync(path.join(d, 'package.json'), 'utf8')).name)) return path.join(d, 'dist', 'claude');
-    } catch { /* not this one */ }
+    } catch {  }
   }
   return null;
 }
 
-// The package behind each trail/graft command on PATH: the bin is a link into
-// the package (dist/cli.js in older releases, dist/bin/<name>.js now), and a
-// Windows .cmd sits beside the node_modules that holds it.
 function onPath() {
   const out = [];
   for (const d of (process.env.PATH || '').split(path.delimiter)) {
@@ -56,32 +44,27 @@ function onPath() {
     for (const bin of BINS) {
       const p = path.join(d, bin);
       if (!fs.existsSync(p)) continue;
-      try { out.push(pkgAbove(fs.realpathSync(p))); } catch { /* dangling link */ }
+      try { out.push(pkgAbove(fs.realpathSync(p))); } catch {  }
       out.push(...fromPkg(d));
     }
   }
   return out;
 }
 
-// The global node_modules dir per npm (handles Homebrew/Windows/volta). Queried on demand.
-// child_process is required here, not up top: loading it costs a few ms that
-// PreToolUse, which runs before every shell command, never needs to pay.
 function globalRoot() {
   try {
     const { execFileSync } = require('child_process');
     const root = execFileSync('npm', ['root', '-g'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], shell: process.platform === 'win32', windowsHide: true }).trim();
     return root || null;
-  } catch { return null; /* npm unavailable */ }
+  } catch { return null;  }
 }
 
-// The version of the package a dist/claude dir belongs to, or null if unreadable.
 function versionOf(distClaude) {
   try {
     return JSON.parse(fs.readFileSync(path.join(distClaude, '..', '..', 'package.json'), 'utf8')).version || null;
   } catch { return null; }
 }
 
-// Numeric-dotted compare of the release part; an unreadable version loses to any known one.
 function newer(a, b) {
   if (!a) return false;
   if (!b) return true;
@@ -94,7 +77,6 @@ function newer(a, b) {
   return false;
 }
 
-// The highest-versioned dir in `dirs` that actually contains `name`, or null.
 function best(dirs, name) {
   let bestDir = null, bestVer = null;
   for (const d of dirs) {
@@ -106,21 +88,19 @@ function best(dirs, name) {
 }
 
 function entry(name, cheapOnly) {
-  // Cheap candidates first, and only shell out to npm when every one of them misses.
+  
   const cheap = [remembered(), ...fromPkg(dir), ...fromPkg(path.join(path.dirname(process.execPath), '..', 'lib')), ...onPath()];
   const hit = best(cheap, name);
   if (hit) return path.join(hit, name);
   const gr = cheapOnly ? null : globalRoot();
   const global = gr && best(PKGS.map((p) => path.join(gr, ...p.split('/'), 'dist', 'claude')), name);
   if (global) return path.join(global, name);
-  return path.join(dir, 'dist', 'claude', name); // last-ditch; import will no-op if absent
+  return path.join(dir, 'dist', 'claude', name); 
 }
 
-// PreToolUse (pre-bash) runs before every shell command: its own small module,
-// found without a subprocess (never npm root -g), or nothing at all.
 const FAST = process.argv[2] === 'pre-bash';
 const target = entry(FAST ? 'pre-bash.js' : "hooks.js", FAST);
-if (fs.existsSync(target)) import(pathToFileURL(target).href).then((m) => m.main(process.argv[2])).catch(() => { /* trail unavailable — no-op */ });
+if (fs.existsSync(target)) import(pathToFileURL(target).href).then((m) => m.main(process.argv[2])).catch(() => {  });
 else if (process.argv[2] === 'session-start') offerTrail();
 
 function offerTrail() {
@@ -132,8 +112,8 @@ function offerTrail() {
   const field = (text, key, max) => {
     const line = text.split('\n').find((l) => l.startsWith(key + ':'));
     let value = line ? line.slice(key.length + 1).trim() : '';
-    // trail writes a value with odd characters in double quotes, JSON-escaped;
-    // a repo's Prettier may have rewritten them to single quotes.
+    
+    
     if (value.length > 1 && value[0] === "'" && value[value.length - 1] === "'") {
       value = value.slice(1, -1).replace(/''/g, "'");
     } else if (value.length > 1 && value[0] === '"' && value[value.length - 1] === '"') {
@@ -160,9 +140,6 @@ function offerTrail() {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context } }));
 }
 
-// The learnings that still hold, in the order given: not retired, held or
-// replaced, and none a newer learning replaces (trail's liveLearnings rule, for
-// a repo's own learnings). Only the front matter is read for it.
 function liveFiles(learnings, files) {
   const crypto = require('crypto');
   const all = files.slice(0, 500).map((f) => {
@@ -176,7 +153,7 @@ function liveFiles(learnings, files) {
     };
     const id = /^l-[0-9a-f]{6,16}$/.test(get('id')) ? get('id') : 'l-' + crypto.createHash('sha1').update(f).digest('hex').slice(0, 6);
     const status = ['held', 'replaced', 'retired'].includes(get('status')) ? get('status') : 'active';
-    // A file with no date: is dated by its name, as trail names them (2026-10-17-...).
+    
     const date = get('date') || (/^\d{4}-\d{2}-\d{2}/.exec(f) || [''])[0];
     return { f, id, date, status, replaces: get('replaces') };
   });
