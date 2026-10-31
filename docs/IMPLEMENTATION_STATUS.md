@@ -3,7 +3,7 @@
 Live record of what exists, what was actually verified, and what is blocked.
 Future sessions resume from here instead of repeating completed work.
 
-Last updated: **2026-10-29**, host **macOS ARM64 (Apple silicon), Command Line
+Last updated: **2026-11-01**, host **macOS ARM64 (Apple silicon), Command Line
 Tools only, no full Xcode**.
 
 **Scope (2026-10-26, [ADR-003](ADR-003_DESKTOP_AND_TV_SCOPE.md)):** desktop/laptop
@@ -833,8 +833,8 @@ cargo clippy --workspace --all-targets
 cargo fmt --all --check
 ```
 
-**264 tests, 0 failures** (2026-10-29, after the audit and final review), clippy
-with no first-party warnings, formatting clean:
+**280 tests, 0 failures** (2026-11-01, after the acceptance work below; 264 on
+2026-10-29), clippy with no first-party warnings, formatting clean:
 
 | Suite | Tests |
 | --- | --- |
@@ -848,6 +848,8 @@ with no first-party warnings, formatting clean:
 | `player/tests/worker.rs` (real decode, audio, tracks, seeks, resume, software fallback) | 22 |
 | `player/tests/libmpv_smoke.rs` | 2 |
 | `screenroom-desktop` unit (journeys, detail, up next, containment, fullscreen read-back) | 91 |
+| `desktop/src/app/acceptance.rs` (the 15 checklist steps, real media, real player) | 15 |
+| `desktop` focus regression (the episode-list step) | 1 |
 | `desktop/tests/playback.rs` | 6 |
 | `desktop/tests/artwork.rs` | 3 |
 
@@ -865,6 +867,47 @@ Headless scripts, which are not part of `cargo test`:
 | `scripts/check-quit-routing.sh` | the running app re-pointed the menu bar's Quit — hidden window, no focus taken |
 | `scripts/verify-bundle.sh` | the packaged bundle's structure, plist, bundled libmpv and all 20 of its dependencies |
 | `scripts/foreground-guard.sh` | sourced by every foreground script; refuses without `SCREENROOM_ALLOW_FOREGROUND=1` |
+
+---
+
+## Owner session — automated half (2026-11-01)
+
+**Status: 7 of the 15 macOS acceptance steps now pass automatically; 7 have
+their objective half closed with one human observation left; 1 needs the owner
+and the hardware.** Full receipt, per-step observations, the two defects found
+and the reduced manual pass: [`MACOS_ACCEPTANCE_EVIDENCE.md`](MACOS_ACCEPTANCE_EVIDENCE.md).
+
+`apps/desktop/src/app/acceptance.rs` drives the real `App` — its update loop, scan
+thread, libmpv worker, checkpoint policy and SQLite file — against FFmpeg-generated
+media in a temporary folder. `cargo test -p screenroom-desktop --lib acceptance`.
+
+| Step | Outcome |
+| --- | --- |
+| 1 first-run scan | **PASS** — 1,200 files, row counts up, cards on screen mid-walk, `Scan finished` |
+| 2 grid, posters, runtimes, one card per series | **PARTIAL** — all asserted; "looks right" is the owner's |
+| 3 ↓ to episode 3, Enter | **PASS** — after fixing a real defect (below) |
+| 4 Space and ←/→ | **PASS** for the mechanism; the listening half is the owner's |
+| 5 audio and subtitle pickers | **PARTIAL** — selection read back from the player; audible change is the owner's |
+| 6 fullscreen | **PARTIAL** — mode, platform exit, Escape order, header return; the fill is the owner's |
+| 7 anamorphic | **PARTIAL** — a 2:1 fixture arrives as 1920×960, not 1.78:1 |
+| 8 4K HEVC on battery | **HUMAN REQUIRED / open defect** — still 19.4 of 24 fps |
+| 9 up next | **PASS** — offer, cancel, replay, Play now |
+| 10 ⌘Q and reopen | **PASS** — stored and resumed within 1 s |
+| 11 Home mid-film | **PASS** — session closed, audio clock stopped, place kept |
+| 12 drive away and back | **PARTIAL** — folder-away and rescan asserted; the cable is the owner's |
+| 13 backup and restore | **PASS** — change undone, safety copy named |
+| 14 second profile | **PASS** — reopens on it; removal asks twice |
+| 15 keyboard journey | **PARTIAL** — the journey runs on key events; readability is the owner's |
+
+### Defects found by the acceptance work, and fixed
+
+| Severity | Defect | Fix / regression test |
+| --- | --- | --- |
+| High | ↑/↓ stepped by the card grid's **column count on every screen**. Detail draws its episodes in one column, so on a 1,280-wide window the step was 4 and **↓ did nothing at all on a three-episode season** — acceptance step 3 was unreachable from the keyboard, and Enter played the episode the screen opened on | the Detail list steps one row, grids step by their columns; `down_the_episode_list_moves_one_episode_not_one_grid_row` |
+| Medium | The catalogue was only reloaded when a scan **ended**, so a grid stayed empty for the whole walk and then filled in one jump — step 1 asks for cards before it finishes | Home and Browse refresh part-way through a walk, at most every 500 ms so a 250,000-entry scan cannot flood the database; `step_1_a_first_run_scan_fills_the_grid_before_it_finishes`, `step_1_a_mid_scan_report_refreshes_the_catalogue_before_the_walk_ends` |
+
+Neither was found by inspection. Nothing was hidden to make a step pass: the
+4K limit is unchanged and unclaimed, and no macOS permission was granted.
 
 ---
 
@@ -1160,7 +1203,7 @@ What is left before macOS acceptance, exactly (updated 2026-10-29, after the aud
 
 | # | Remaining | Why it cannot be closed here |
 | --- | --- | --- |
-| 1 | The owner's 15-step session in [`MACOS_ACCEPTANCE_CHECKLIST.md`](MACOS_ACCEPTANCE_CHECKLIST.md): resume after ⌘Q, fullscreen, keyboard journey, listening, anamorphic on screen, 4K on battery, drive unplug, backup/restore, profiles | needs a visible window, ears and a drive in hand; background-first testing forbids taking the screen unasked |
+| 1 | The owner's 15-step session in [`MACOS_ACCEPTANCE_CHECKLIST.md`](MACOS_ACCEPTANCE_CHECKLIST.md): listening, fullscreen fill, anamorphic look, 4K on battery, drive unplug, keyboard-card readability | needs ears, a visible screen and a cable in hand. The mechanisms behind all 15 are now asserted (above); these are the observations left. Calendar date, resume and profiles no longer need a person |
 | 2 | Real-time 4K above ~3K wide | needs a GPU (zero-copy) render bridge; copy-back decode alone reaches ~19 of 24 fps on the hardest file |
 | 3 | The genre filter on real data | no genres until enrichment exists; the control is hidden rather than dead |
 | 4 | An offline check with networking actually off, and a battery measurement | changes this Mac's network and power state, which this session should not do unasked |

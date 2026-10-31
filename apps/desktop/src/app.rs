@@ -404,6 +404,12 @@ struct UpNext {
     starts_at: std::time::Instant,
 }
 
+/// Shortest gap between two catalogue refreshes during one scan.
+///
+/// Long enough that a large folder cannot flood the database with reloads, short
+/// enough that a first run visibly fills in while the walk is still going.
+const SCAN_REFRESH_INTERVAL_MS: i64 = 500;
+
 /// How long a finished episode waits before the next one starts.
 ///
 /// Long enough to read the title and reach Cancel, short enough not to feel like
@@ -545,6 +551,13 @@ pub struct App {
     scan_imported: u64,
     /// When the running scan started, in Unix milliseconds.
     scan_started_ms: Option<i64>,
+    /// When the catalogue was last refreshed part-way through a scan.
+    ///
+    /// A scan is the slowest thing the app does on a folder it has never seen, and
+    /// waiting for it to end before drawing anything made a first run look stalled.
+    /// Zero means "refresh at the next report", which is what makes the first
+    /// cards appear as soon as the walk has imported anything.
+    scan_refresh_ms: i64,
     status: Option<String>,
     error: Option<String>,
 
@@ -909,6 +922,7 @@ impl App {
             scan_visited: 0,
             scan_imported: 0,
             scan_started_ms: None,
+            scan_refresh_ms: 0,
             status: None,
             error,
             // Only a launch arms this; see the field's own note.
@@ -2474,6 +2488,8 @@ impl App {
         self.scan_visited = 0;
         self.scan_imported = 0;
         self.scan_started_ms = Some(now_ms());
+        // Due at once: the first report is the one that puts cards on screen.
+        self.scan_refresh_ms = 0;
         self.status = Some("Scanning…".to_string());
         let (sender, receiver) = std::sync::mpsc::channel();
         self.scan_events = Some(receiver);
@@ -2516,6 +2532,7 @@ impl App {
         let mut finished = false;
         let mut failure = None;
         let mut status = None;
+        let mut refresh = false;
         loop {
             match receiver.try_recv() {
                 Ok(ScanEvent::Progress {
@@ -2539,6 +2556,14 @@ impl App {
                         });
                     } else {
                         status = Some(format!("Scanning… {visited} entries, {imported} imported"));
+                        // Cards while the walk is still going: the acceptance
+                        // checklist promises the library fills as it goes, not only
+                        // when it ends. Bounded by wall clock, because a 250,000-entry
+                        // walk must not turn into 250,000 catalogue reloads.
+                        if now_ms() - self.scan_refresh_ms >= SCAN_REFRESH_INTERVAL_MS {
+                            self.scan_refresh_ms = now_ms();
+                            refresh = true;
+                        }
                     }
                 }
                 Ok(ScanEvent::Failed(message)) => {
@@ -2557,6 +2582,12 @@ impl App {
         }
         if let Some(failure) = failure {
             self.error = Some(failure);
+        }
+        // A refresh part-way through, so the grid tracks the walk. The finishing
+        // tick reloads everything itself, so it is not done twice.
+        if refresh && !finished {
+            self.reload_home();
+            self.reload_browse();
         }
         if finished {
             self.scan_events = None;
@@ -2889,7 +2920,15 @@ impl App {
         // Up and Down move by a whole row, so the step has to be the column count the
         // grid was actually drawn with: a fixed step would land on the wrong card as
         // soon as the window is wide enough to change the layout.
-        let step = self.columns();
+        //
+        // The Detail screen's episodes are one column, so a row there is one
+        // episode. Stepping by the grid's column count made Down do nothing at all
+        // on a series shorter than one row of cards, which made the third episode
+        // of a three-episode season unreachable from the keyboard.
+        let step = match self.screen {
+            Screen::Detail => 1,
+            _ => self.columns(),
+        };
         let next = match direction {
             Focus::Left => current.checked_sub(1),
             Focus::Right => (current + 1 < len).then_some(current + 1),
@@ -4844,6 +4883,9 @@ pub fn clock(seconds: f64) -> String {
 }
 
 #[cfg(test)]
+mod acceptance;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use screenroom_core::{Checkpoint, Ingest, parse_filename};
@@ -5452,6 +5494,51 @@ mod tests {
         }
         assert!(app.focus < app.visible_len());
         assert_eq!(app.focus, app.visible_len() - 1);
+    }
+
+    #[test]
+    fn down_the_episode_list_moves_one_episode_not_one_grid_row() {
+        // Detail draws its episodes as a single column, so an arrow press has to
+        // move one episode. It used the grid's column count, which on a window four
+        // cards wide made Down do nothing at all on a short season — so the third
+        // episode of a three-episode show could not be reached from the keyboard
+        // at all, which is what acceptance step 3 asks for.
+        // Eight titles, so the grid has more than one row: with only a page of
+        // cards that all fit on one row, Down could not move there either and the
+        // grid half of this test would pass for the wrong reason.
+        let (mut app, _directory) = app_with(8);
+        let episodes = app.browse.items[..3].to_vec();
+        app.detail = Some(Detail {
+            item: episodes[0].clone(),
+            episodes,
+            seasons: Vec::new(),
+            origin: (Screen::Browse, 0),
+        });
+        app.screen = Screen::Detail;
+        app.focus = 0;
+        assert!(
+            app.columns() > 1,
+            "this test only means something when the grid is wider than the list"
+        );
+
+        app.move_focus(Focus::Down);
+        assert_eq!(app.focus, 1, "one arrow press moves one episode");
+        app.move_focus(Focus::Down);
+        assert_eq!(app.focus, 2, "so the third episode is reachable");
+        app.move_focus(Focus::Down);
+        assert_eq!(app.focus, 2, "and the list stops at its last episode");
+        app.move_focus(Focus::Up);
+        assert_eq!(app.focus, 1, "and comes back one");
+
+        // The grid is unchanged: one row is still one row of cards.
+        app.screen = Screen::Browse;
+        app.focus = 0;
+        app.move_focus(Focus::Down);
+        assert_eq!(
+            app.focus,
+            app.columns(),
+            "a grid still moves by the columns it was drawn with"
+        );
     }
 
     #[test]
