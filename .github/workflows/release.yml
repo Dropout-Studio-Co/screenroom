@@ -1,0 +1,206 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
+  macos:
+    name: macOS package
+    needs: ci
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 90
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Put the owner's toolchains on PATH
+        run: |
+          for directory in /opt/homebrew/bin /usr/local/bin "$HOME/.cargo/bin"; do
+            if [ -d "$directory" ]; then
+              printf '%s\n' "$directory" >>"$GITHUB_PATH"
+            fi
+          done
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build the application and its manifest fragment
+        run: scripts/release.sh macos --out artifacts
+
+      - name: Install on this Mac without launching it
+        if: vars.SCREENROOM_DEPLOY_MACOS != 'false'
+        run: scripts/release.sh install --install "$HOME/Applications"
+
+      - name: Keep the artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: Windows package
+    needs: ci
+    if: vars.SCREENROOM_WINDOWS_RUNNER == 'true'
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 90
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build the release binary
+        run: cargo build --release -p screenroom-desktop
+
+      - name: Stage the artefact and its manifest fragment
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $inside = $false
+          $version = $null
+          foreach ($line in Get-Content Cargo.toml) {
+            if ($line -match '^\[workspace\.package\]') { $inside = $true; continue }
+            if ($line -match '^\[') { $inside = $false }
+            if ($inside -and $line -match '^version\s*=\s*"(.+)"') { $version = $Matches[1]; break }
+          }
+          if (-not $version) { throw "could not read the workspace version from Cargo.toml" }
+          $stage = "dist/windows"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          New-Item -ItemType Directory -Force -Path "artifacts" | Out-Null
+          Copy-Item "target/release/screenroom-desktop.exe" "$stage/"
+          Get-ChildItem "target/release" -Filter "*.dll" -File |
+            Where-Object { $_.Name -match '^(libmpv|mpv|avcodec|avformat|avutil|avfilter|swscale|swresample|ffmpeg)' } |
+            Copy-Item -Destination $stage
+          $name = "Screenroom-$version-windows-x64.zip"
+          $zip = "artifacts/$name"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path "$stage/*" -DestinationPath $zip
+          $digest = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          $size = (Get-Item $zip).Length
+          $fragment = @{
+            artifacts = @(
+              @{
+                platform = "windows"
+                arch = "x64"
+                version = $version
+                filename = $name
+                sha256 = $digest
+                size = $size
+              }
+            )
+          }
+          $json = $fragment | ConvertTo-Json -Depth 6
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::WriteAllText((Join-Path $PWD "artifacts/manifest-windows-x64.json"), $json, $utf8)
+          Write-Output "artefact $zip"
+          Write-Output "sha256 $digest"
+
+      - name: Keep the artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+  tv:
+    name: Samsung TV package
+    needs: ci
+    if: vars.SCREENROOM_DEPLOY_TV == 'true'
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Put the owner's toolchains on PATH
+        run: |
+          for directory in /opt/homebrew/bin /usr/local/bin "$HOME/.cargo/bin"; do
+            if [ -d "$directory" ]; then
+              printf '%s\n' "$directory" >>"$GITHUB_PATH"
+            fi
+          done
+
+      - name: Build, sign and install only when the set is reachable
+        env:
+          SCREENROOM_SHIP_STRICT: "1"
+        run: scripts/ship.sh --only tv
+
+  publish:
+    name: Publish the release
+    needs: [macos, windows]
+    if: always() && needs.macos.result == 'success' && (needs.windows.result == 'success' || needs.windows.result == 'skipped')
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Collect the artefacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Put the owner's toolchains on PATH
+        run: |
+          for directory in /opt/homebrew/bin /usr/local/bin "$HOME/.cargo/bin"; do
+            if [ -d "$directory" ]; then
+              printf '%s\n' "$directory" >>"$GITHUB_PATH"
+            fi
+          done
+
+      - name: Merge and sign the manifest
+        env:
+          SIGNING_KEY: ${{ secrets.SCREENROOM_ED25519_KEY }}
+        run: |
+          if [ -n "${SIGNING_KEY:-}" ]; then
+            key_file="$RUNNER_TEMP/screenroom-ed25519"
+            printf '%s\n' "$SIGNING_KEY" >"$key_file"
+            chmod 600 "$key_file"
+            SCREENROOM_SIGNING_KEY_FILE="$key_file" scripts/release.sh manifest --out artifacts
+            rm -f "$key_file"
+          else
+            scripts/release.sh manifest --out artifacts
+          fi
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(scripts/release.sh version)"
+          tag="v$version"
+          files=()
+          for candidate in artifacts/*.zip artifacts/manifest.json artifacts/manifest.json.sig; do
+            if [ -f "$candidate" ]; then
+              files+=("$candidate")
+            fi
+          done
+          notes="Screenroom $version, built from $GITHUB_SHA on $GITHUB_REF_NAME."
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${files[@]}" --clobber
+          else
+            gh release create "$tag" "${files[@]}" --title "Screenroom $version" --notes "$notes" --target "$GITHUB_SHA"
+          fi
