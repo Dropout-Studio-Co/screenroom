@@ -121,6 +121,32 @@ The three things that keep it from being *finished* are the 4K cost, an HDR
 switch that has not yet been looked at on the panel, and the advanced features
 that need something the machine does not have.
 
+### The interface rebuild (2026-11-02)
+
+The five screens were rebuilt as a view-layer change, and the detail — the shell,
+each screen, the breakpoint table and the verification commands — is in
+[`UI_REBUILD.md`](UI_REBUILD.md). In one paragraph: a 76 px bar over the content
+instead of a 110 px control panel, Home a hero over horizontal rails, Library a
+poster grid with filter chips and an honest source line, Detail a title page with
+one action that names what it does, a player whose chrome recedes after 2.5 s of
+no input while playing and never while paused, and Settings as sections with
+hairline rows. The layout reads one breakpoint table (Narrow < 900, Compact
+900–1099, Standard 1100–1439, Wide 1440–1759, Ultra ≥ 1760); the navigation drops
+its labels and shortens the wordmark below Standard, and the grid runs from two
+columns to seven.
+
+**No requirement changed state.** F09, F11, F17, F21 and F22 are the rows whose
+screens moved, and each still rests on the same acceptance steps and the same
+automated checks it did before; the screens' geometry gained 54 unit tests in
+`apps/desktop/src/ui/`, and the desktop library suite is 276 tests. Home and
+Detail draw retained posters, Detail's primary action is real rather than a label,
+and Settings keeps its keyboard action strip.
+
+**What is not proven:** the interface has not been looked at by the owner, and the
+session's own window captures at 900, 1280, 1440 and 3440 live in `.artifacts/`
+(Git-ignored, absent from a checkout), so nobody else can re-inspect them. The
+player's chrome receding has not been watched in a window. That is P2-06 below.
+
 ---
 
 ## 4. Requirement-by-requirement status
@@ -623,6 +649,29 @@ than reclassified.
   **Work:** re-run `library_bench` after any query change and record the numbers.
   **Acceptance:** first page under 100 ms at 10k.
 
+#### P2-06 · Look at the rebuilt interface at five widths — **PENDING the owner**
+
+- **Requirement:** Q03, Q08, and the "does it look right" halves of acceptance
+  steps 2, 6 and 15.
+- **Status:** PENDING. The geometry is unit-tested at all five breakpoints
+  ([`UI_REBUILD.md`](UI_REBUILD.md)), and captures were taken at 900, 1280, 1440
+  and 3440 during the rebuild, but they are Git-ignored local artefacts and no
+  owner look has happened.
+- **What is missing:** eyes, and a window that may be resized while it is visible.
+  There is no environment variable for the window size; it opens at 1280×800.
+- **Where:** `apps/desktop/src/ui/` (all of it), `scripts/capture-window.sh`.
+- **Why it matters:** the rebuild exists because the previous composition read as
+  a control panel. "Reads as a media application" is a judgement no test makes.
+- **Work:** launch the packaged build, resize from 900 to 3440, and look at Home,
+  Library, Detail, the player's chrome and Settings. Capture what is wrong in
+  words rather than a screenshot of anything else on the display.
+- **Acceptance:** each screen reads correctly at Narrow, Standard and Ultra; focus
+  is unmistakable without a ring; no card clips its own title; no screen ends in a
+  dead band.
+- **Automated verification:** `cargo test -p screenroom-desktop --lib ui::` — but
+  it cannot settle the question.
+- **Human verification:** the owner, once.
+
 ---
 
 ## 6. What was completed in this session
@@ -737,6 +786,15 @@ and the application reports 24.51 fps at 14.27 % mean CPU with zero uploads on
 the HDR10 fixture. The remaining HDR step is the owner's look, and the switch is
 still off by default.
 
+**2026-11-02, the interface and the pipeline.** The desktop's five screens are
+rebuilt as a view-layer change ([`UI_REBUILD.md`](UI_REBUILD.md)), and the
+repository now carries GitHub Actions workflows on a self-hosted runner, a
+release script and `scripts/ship.sh` ([`RELEASE_PIPELINE.md`](RELEASE_PIPELINE.md)).
+**No GitHub Actions run has happened**: the runner is not installed, so the
+workflows are written and parsed, not proven. The Windows job is declared and
+disabled, so the Windows gate stays BLOCKED; no Tizen install was part of the
+rebuild either.
+
 **2026-11-01, end of the second session.** HEAD was `1deff6d`, the tree was
 clean, 521 tests passed (three consecutive full runs), and `cargo fmt --check`,
 `cargo clippy -D warnings`, `python3 scripts/no_comments.py check`,
@@ -761,7 +819,8 @@ What a next session should pick up, in this order:
    `library_bench` after any query change and keep the numbers in this document.
 5. **Owner-gated, and only the owner can close them:** P1-04 (the eight
    observations), P1-11 (the SSD and the real 3240×2160 Main10 file), P1-12 (Wi-Fi
-   off), and the live provider calls in P1-06/P1-07.
+   off), P2-06 (the rebuilt interface at five widths), and the live provider calls
+   in P1-06/P1-07.
 
 Nothing in this list is speculative, and nothing above has been relabelled to make
 the counts look better than they are.
