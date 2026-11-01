@@ -1,7 +1,7 @@
 use crate::app::{Message, Screen};
 use crate::design;
 use crate::ui::icons::{self, Icon};
-use crate::ui::theme::{self, Breakpoint, Gap};
+use crate::ui::theme::{self, Breakpoint, Gap, Radius};
 use iced::widget::canvas::{self, Canvas, Program};
 use iced::widget::{Space, button, column, container, row, stack, text};
 use iced::{
@@ -10,6 +10,10 @@ use iced::{
 };
 
 pub const BAR_HEIGHT: f32 = 76.0;
+
+pub const BAR_FADE_HEIGHT: f32 = 36.0;
+
+const NAV_GLYPH_SIZE: f32 = 16.0;
 
 pub const WORDMARK: &str = "SCREENROOM";
 
@@ -27,7 +31,7 @@ pub struct Destination {
 
     pub label: &'static str,
 
-    pub compact: &'static str,
+    pub icon: Icon,
 
     pub message: Message,
 }
@@ -36,19 +40,19 @@ pub const DESTINATIONS: [Destination; 3] = [
     Destination {
         screen: Screen::Home,
         label: "Home",
-        compact: "Home",
+        icon: Icon::Home,
         message: Message::GoHome,
     },
     Destination {
         screen: Screen::Browse,
         label: "Library",
-        compact: "Lib",
+        icon: Icon::Library,
         message: Message::GoBrowse,
     },
     Destination {
         screen: Screen::Settings,
         label: "Settings",
-        compact: "Prefs",
+        icon: Icon::Settings,
         message: Message::GoSettings,
     },
 ];
@@ -67,11 +71,8 @@ pub fn wordmark(breakpoint: Breakpoint) -> &'static str {
     }
 }
 
-pub fn destination_label(destination: &Destination, labels: NavLabels) -> &'static str {
-    match labels {
-        NavLabels::Full => destination.label,
-        NavLabels::Compact => destination.compact,
-    }
+pub fn destination_label(destination: &Destination, _labels: NavLabels) -> &'static str {
+    destination.label
 }
 
 fn nav_item<'a>(
@@ -81,30 +82,35 @@ fn nav_item<'a>(
 ) -> Element<'a, Message> {
     let tokens = design::tokens();
     let current = active == Some(destination.screen);
+    let ink = if current {
+        theme::ink()
+    } else {
+        theme::muted()
+    };
 
-    button(
-        text(destination_label(destination, labels))
+    let content: Element<'a, Message> = match labels {
+        NavLabels::Full => text(destination_label(destination, labels))
             .size(tokens.type_scale.label)
             .font(if current {
                 theme::medium()
             } else {
                 theme::regular()
             })
-            .color(if current {
-                theme::ink()
-            } else {
-                theme::muted()
-            }),
-    )
-    .on_press(destination.message.clone())
-    .padding(Padding {
-        top: 6.0,
-        bottom: 6.0,
-        left: 0.0,
-        right: 0.0,
-    })
-    .style(quiet_button)
-    .into()
+            .color(ink)
+            .into(),
+        NavLabels::Compact => icons::icon(destination.icon, NAV_GLYPH_SIZE, ink),
+    };
+
+    button(content)
+        .on_press(destination.message.clone())
+        .padding(Padding {
+            top: 6.0,
+            bottom: 6.0,
+            left: 6.0,
+            right: 6.0,
+        })
+        .style(quiet_button)
+        .into()
 }
 
 pub fn nav_bar<'a>(active: Option<Screen>, width: f32) -> Element<'a, Message> {
@@ -226,7 +232,11 @@ pub fn frame<'a>(
         .style(move |_theme| bar_style(hero));
 
     let mut shell: Element<'a, Message> = if hero {
-        stack![body, bar].into()
+        let scrim = column![bar, bar_fade()]
+            .width(Length::Fill)
+            .height(Length::Fixed(BAR_HEIGHT + BAR_FADE_HEIGHT));
+
+        stack![body, scrim].into()
     } else {
         column![bar, body]
             .width(Length::Fill)
@@ -251,15 +261,49 @@ pub fn frame<'a>(
         .into()
 }
 
+const SCRIM_INK: Color = design::color(0.039, 0.039, 0.039, 1.0);
+
+fn scrim_ink(alpha: f32) -> Color {
+    Color {
+        a: alpha,
+        ..SCRIM_INK
+    }
+}
+
+fn scrim_gradient() -> iced::Gradient {
+    iced::Gradient::Linear(
+        iced::gradient::Linear::new(iced::Radians(std::f32::consts::FRAC_PI_2))
+            .add_stop(0.0, scrim_ink(0.97))
+            .add_stop(0.45, scrim_ink(0.9))
+            .add_stop(0.78, scrim_ink(0.62))
+            .add_stop(1.0, scrim_ink(0.28)),
+    )
+}
+
+fn fade_gradient() -> iced::Gradient {
+    iced::Gradient::Linear(
+        iced::gradient::Linear::new(iced::Radians(std::f32::consts::FRAC_PI_2))
+            .add_stop(0.0, scrim_ink(0.28))
+            .add_stop(0.32, scrim_ink(0.16))
+            .add_stop(0.7, scrim_ink(0.05))
+            .add_stop(1.0, scrim_ink(0.0)),
+    )
+}
+
+fn bar_fade<'a>() -> Element<'a, Message> {
+    container(Space::new())
+        .width(Length::Fill)
+        .height(Length::Fixed(BAR_FADE_HEIGHT))
+        .style(|_theme| container::Style {
+            background: Some(Background::Gradient(fade_gradient())),
+            ..container::Style::default()
+        })
+        .into()
+}
+
 fn bar_style(hero: bool) -> container::Style {
     let background = if hero {
-        Some(Background::Gradient(iced::Gradient::Linear(
-            iced::gradient::Linear::new(iced::Radians(std::f32::consts::FRAC_PI_2))
-                .add_stop(0.0, Color::from_rgba(0.039, 0.039, 0.039, 0.97))
-                .add_stop(0.45, Color::from_rgba(0.039, 0.039, 0.039, 0.9))
-                .add_stop(0.78, Color::from_rgba(0.039, 0.039, 0.039, 0.62))
-                .add_stop(1.0, Color::from_rgba(0.039, 0.039, 0.039, 0.28)),
-        )))
+        Some(Background::Gradient(scrim_gradient()))
     } else {
         Some(Background::Color(theme::ground()))
     };
@@ -270,11 +314,16 @@ fn bar_style(hero: bool) -> container::Style {
     }
 }
 
-fn quiet_button(_theme: &Theme, _status: button::Status) -> button::Style {
+fn quiet_button(_theme: &Theme, status: button::Status) -> button::Style {
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+
     button::Style {
-        background: None,
+        background: hovered.then(|| Background::Color(theme::surface(1))),
         text_color: theme::ink(),
-        border: Border::default(),
+        border: Border {
+            radius: theme::radius(Radius::Small).into(),
+            ..Border::default()
+        },
         shadow: Shadow::default(),
         snap: false,
     }
@@ -342,6 +391,7 @@ impl Program<Message> for Avatar {
 #[cfg(test)]
 mod tests {
     use crate::app::Screen;
+    use crate::ui::icons::Icon;
     use crate::ui::shell;
     use crate::ui::shell::NavLabels;
     use crate::ui::theme::Breakpoint;
@@ -405,7 +455,7 @@ mod tests {
     }
 
     #[test]
-    fn every_destination_survives_the_collapse_as_a_distinct_short_word() {
+    fn every_destination_keeps_its_name_and_its_own_glyph_when_the_bar_collapses() {
         assert_eq!(
             shell::DESTINATIONS.map(|destination| destination.screen),
             [Screen::Home, Screen::Browse, Screen::Settings]
@@ -416,24 +466,69 @@ mod tests {
             let compact = shell::destination_label(destination, NavLabels::Compact);
 
             assert_eq!(full, destination.label);
-            assert!(!compact.is_empty(), "{full} lost its label when collapsed");
-            assert!(
-                compact.chars().count() <= full.chars().count(),
-                "{full} grew when collapsed"
+            assert_eq!(
+                compact, full,
+                "{full} must keep its name when the bar collapses"
             );
             assert!(
                 !shell::DESTINATIONS[..index]
                     .iter()
-                    .any(
-                        |earlier| shell::destination_label(earlier, NavLabels::Compact) == compact
-                    ),
-                "{compact} does not identify one destination"
+                    .any(|earlier| earlier.icon == destination.icon),
+                "{:?} is drawn for more than one destination",
+                destination.icon
             );
         }
 
         assert_eq!(
             shell::DESTINATIONS.map(|destination| destination.label),
             ["Home", "Library", "Settings"]
+        );
+        assert_eq!(
+            shell::DESTINATIONS.map(|destination| destination.icon),
+            [Icon::Home, Icon::Library, Icon::Settings]
+        );
+    }
+
+    fn alpha_stops(gradient: iced::Gradient) -> Vec<(f32, f32)> {
+        match gradient {
+            iced::Gradient::Linear(linear) => linear
+                .stops
+                .iter()
+                .flatten()
+                .map(|stop| (stop.offset, stop.color.a))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn the_hero_scrim_reaches_transparency_below_the_bar_without_a_visible_edge() {
+        const {
+            assert!(shell::BAR_FADE_HEIGHT > 0.0);
+            assert!(shell::BAR_FADE_HEIGHT < shell::BAR_HEIGHT);
+        }
+
+        let bar = alpha_stops(shell::scrim_gradient());
+        let fade = alpha_stops(shell::fade_gradient());
+
+        let bar_bottom = bar.last().copied().expect("the bar keeps a scrim");
+        let fade_top = fade
+            .first()
+            .copied()
+            .expect("the fade starts under the bar");
+        let fade_bottom = fade.last().copied().expect("the fade ends below the bar");
+
+        assert_eq!(bar_bottom.0, 1.0);
+        assert!(bar_bottom.1 > 0.0, "the bar must keep its near-solid scrim");
+        assert_eq!(fade_top.0, 0.0);
+        assert_eq!(
+            fade_top.1, bar_bottom.1,
+            "the bar and the fade must meet without a step in alpha"
+        );
+        assert_eq!(fade_bottom.0, 1.0);
+        assert_eq!(fade_bottom.1, 0.0, "the fade must reach transparency");
+        assert!(
+            fade.windows(2).all(|pair| pair[1].1 <= pair[0].1),
+            "the fade may only darken the artwork less as it descends"
         );
     }
 

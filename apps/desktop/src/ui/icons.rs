@@ -28,6 +28,12 @@ pub enum Icon {
     Plus,
 
     Check,
+
+    Home,
+
+    Library,
+
+    Settings,
 }
 
 impl Icon {
@@ -43,6 +49,9 @@ impl Icon {
         Icon::Search,
         Icon::Plus,
         Icon::Check,
+        Icon::Home,
+        Icon::Library,
+        Icon::Settings,
     ];
 
     fn index(self) -> usize {
@@ -58,6 +67,9 @@ impl Icon {
             Icon::Search => 8,
             Icon::Plus => 9,
             Icon::Check => 10,
+            Icon::Home => 11,
+            Icon::Library => 12,
+            Icon::Settings => 13,
         }
     }
 }
@@ -76,7 +88,7 @@ fn shape(points: &[(f32, f32)]) -> Segment {
     )
 }
 
-fn build() -> [Vec<Segment>; 11] {
+fn build() -> [Vec<Segment>; 14] {
     let search_ring = [
         (15.5, 10.5),
         (14.83, 13.0),
@@ -136,10 +148,34 @@ fn build() -> [Vec<Segment>; 11] {
             line(&[(5.0, 12.0), (19.0, 12.0)]),
         ],
         vec![line(&[(5.0, 12.0), (10.0, 17.0), (19.0, 7.0)])],
+        vec![
+            shape(&[
+                (4.0, 11.0),
+                (12.0, 4.0),
+                (20.0, 11.0),
+                (20.0, 20.0),
+                (4.0, 20.0),
+            ]),
+            line(&[(9.0, 20.0), (9.0, 14.5), (15.0, 14.5), (15.0, 20.0)]),
+        ],
+        vec![
+            shape(&[(4.0, 4.0), (10.5, 4.0), (10.5, 10.5), (4.0, 10.5)]),
+            shape(&[(13.5, 4.0), (20.0, 4.0), (20.0, 10.5), (13.5, 10.5)]),
+            shape(&[(4.0, 13.5), (10.5, 13.5), (10.5, 20.0), (4.0, 20.0)]),
+            shape(&[(13.5, 13.5), (20.0, 13.5), (20.0, 20.0), (13.5, 20.0)]),
+        ],
+        vec![
+            line(&[(4.0, 7.0), (20.0, 7.0)]),
+            line(&[(9.0, 4.5), (9.0, 9.5)]),
+            line(&[(4.0, 12.0), (20.0, 12.0)]),
+            line(&[(15.0, 9.5), (15.0, 14.5)]),
+            line(&[(4.0, 17.0), (20.0, 17.0)]),
+            line(&[(11.0, 14.5), (11.0, 19.5)]),
+        ],
     ]
 }
 
-static PATHS: LazyLock<[Vec<Segment>; 11]> = LazyLock::new(build);
+static PATHS: LazyLock<[Vec<Segment>; 14]> = LazyLock::new(build);
 
 pub fn path(icon: Icon) -> &'static [Segment] {
     &PATHS[icon.index()]
@@ -235,7 +271,24 @@ mod tests {
     }
 
     #[test]
-    fn the_icon_set_covers_every_control_the_player_draws() {
-        assert_eq!(Icon::ALL.len(), 11);
+    fn the_icon_set_covers_every_glyph_the_ui_draws() {
+        assert_eq!(Icon::ALL.len(), 14);
+    }
+
+    #[test]
+    fn the_navigation_glyphs_are_distinct_and_fit_the_set_weight() {
+        let navigation = [Icon::Home, Icon::Library, Icon::Settings];
+
+        for (index, icon) in navigation.iter().enumerate() {
+            assert_ne!(
+                *icon,
+                Icon::Search,
+                "{icon:?} must not reuse the search glyph"
+            );
+            assert!(
+                !navigation[..index].contains(icon),
+                "{icon:?} is drawn for two destinations"
+            );
+        }
     }
 }
