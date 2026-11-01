@@ -107,6 +107,10 @@ impl Preview {
         self.player.snapshot()
     }
 
+    pub fn frame_ticks(&self) -> screenroom_player::FrameTicks {
+        self.player.frame_ticks()
+    }
+
     pub fn expired(&self) -> bool {
         self.started.elapsed() >= PREVIEW_MAX
     }

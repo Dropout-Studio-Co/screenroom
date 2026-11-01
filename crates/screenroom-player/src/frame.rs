@@ -10,36 +10,45 @@ pub struct Frame {
 
     pub rgba: Arc<Vec<u8>>,
 
+    pub offset: usize,
+
     pub generation: u64,
 }
 
 impl Frame {
+    pub fn bytes(&self) -> &[u8] {
+        let start = self.offset.min(self.rgba.len());
+        &self.rgba[start..]
+    }
+
     pub fn is_well_formed(&self) -> bool {
         self.width > 0
             && self.height > 0
             && self.stride as usize >= self.width as usize * 4
-            && self.rgba.len() == self.stride as usize * self.height as usize
+            && self.rgba.len() >= self.offset + self.stride as usize * self.height as usize
     }
 
     pub fn pixel(&self, x: u32, y: u32) -> Option<[u8; 4]> {
         if x >= self.width || y >= self.height || !self.is_well_formed() {
             return None;
         }
+        let bytes = self.bytes();
         let offset = y as usize * self.stride as usize + x as usize * 4;
         Some([
-            self.rgba[offset],
-            self.rgba[offset + 1],
-            self.rgba[offset + 2],
-            self.rgba[offset + 3],
+            bytes[offset],
+            bytes[offset + 1],
+            bytes[offset + 2],
+            bytes[offset + 3],
         ])
     }
 
     pub fn is_blank(&self) -> bool {
         let row_bytes = self.width as usize * 4;
         let stride = self.stride as usize;
+        let bytes = self.bytes();
         (0..self.height as usize).all(|y| {
             let start = y * stride;
-            self.rgba.get(start..start + row_bytes).is_some_and(|row| {
+            bytes.get(start..start + row_bytes).is_some_and(|row| {
                 row.as_chunks::<4>()
                     .0
                     .iter()
@@ -54,9 +63,10 @@ impl Frame {
         if !self.is_well_formed() {
             return out;
         }
+        let bytes = self.bytes();
         for (y, row) in out.chunks_exact_mut(row_bytes).enumerate() {
             let start = y * self.stride as usize;
-            row.copy_from_slice(&self.rgba[start..start + row_bytes]);
+            row.copy_from_slice(&bytes[start..start + row_bytes]);
         }
         out
     }
@@ -72,6 +82,7 @@ mod tests {
             height,
             stride: width * 4,
             rgba: Arc::new(bytes),
+            offset: 0,
             generation: 1,
         }
     }
@@ -89,6 +100,7 @@ mod tests {
             height,
             stride,
             rgba: Arc::new(bytes),
+            offset: 0,
             generation: 2,
         }
     }
@@ -104,12 +116,45 @@ mod tests {
             height: 2,
             stride: 4,
             rgba: Arc::new(vec![0; 8]),
+            offset: 0,
             generation: 3,
         };
         assert!(
             !narrow.is_well_formed(),
             "a row narrower than its pixels is invalid"
         );
+    }
+
+    #[test]
+    fn an_alignment_prefix_is_outside_the_pixels_and_still_valid() {
+        let mut bytes = vec![0xEEu8; 64];
+        bytes.extend_from_slice(&[10, 20, 30, 255].repeat(4));
+        let frame = Frame {
+            width: 2,
+            height: 2,
+            stride: 8,
+            rgba: Arc::new(bytes),
+            offset: 64,
+            generation: 4,
+        };
+        assert!(frame.is_well_formed());
+        assert_eq!(frame.pixel(0, 0), Some([10, 20, 30, 255]));
+        assert_eq!(frame.tight_pixels(), [10, 20, 30, 255].repeat(4));
+        assert_eq!(frame.bytes().len(), 16);
+    }
+
+    #[test]
+    fn an_offset_past_the_buffer_is_not_well_formed() {
+        let frame = Frame {
+            width: 2,
+            height: 2,
+            stride: 8,
+            rgba: Arc::new(vec![0; 64]),
+            offset: 60,
+            generation: 5,
+        };
+        assert!(!frame.is_well_formed());
+        assert_eq!(frame.pixel(0, 0), None);
     }
 
     #[test]

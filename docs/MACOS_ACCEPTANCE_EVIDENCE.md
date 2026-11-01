@@ -187,6 +187,42 @@ in `.artifacts/evidence/walk/`. The window did hold focus for the duration — t
 what was asked for — and the frontmost application was `Finder` afterwards rather than
 the application that had it before.
 
+## Redundant work removed, and the 4K ceiling located (2026-11-01)
+
+Two changes, each measured on its own, with the software renderer kept as the path.
+
+**One copy fewer per frame.** `screenroom-player` used to ask libmpv to draw into its
+own buffer and then copy that buffer into a pooled frame buffer — 33.2 MB of memcpy for
+every 3840×2160 frame. libmpv now draws directly into the pooled buffer. The pool is
+allocated with 64 bytes of slack and the frame records the alignment offset, because
+`render.h` requires the `SW_POINTER` to be 64-byte aligned for its fast path; every
+pooled pointer measured offset 0, so the fast path is the one taken. `Frame` gained
+`offset` and a `bytes()` accessor, the texture upload starts at that offset, and a
+release run still uploads exactly one texture per delivered frame.
+
+**No redraw without a new picture.** iced redraws a window whenever any message
+arrives, and the application ticked every 16 ms while a player existed — so it drew at
+51.5/s for a 24 fps source. The tick now watches `Player::frame_ticks()`, an atomic the
+worker bumps when it publishes a frame, and only produces a message on a new frame or
+every 250 ms of idle. Interleaved release runs: **4K drawn 13.7–14.1/s** (delivered
+11.9–12.4), **1080p drawn 29.9/s** (delivered 28.7). Playback, seeking, resume and the
+mini-player were exercised by the existing 354-test suite plus the bundle walkthrough.
+
+**The limit is mpv's CPU colour conversion.** `SCREENROOM_PLAYER_TRACE` puts
+`mpv_render_context_render` at **41.0–41.2 ms** for a 3840×2160 frame, identical with
+`SCREENROOM_HWDEC=no` and `auto-copy`, inside a 42 ms frame budget. mpv 0.41.0
+documents the software API as CPU, single-threaded colour conversion, and accepts a
+non-RGB `SW_FORMAT` only when it has one plane, so the conversion cannot be moved or
+narrowed from this side. Removing the second copy therefore did not raise delivery
+(interleaved A/B contained within noise) — it removed 33 MB of per-frame memory traffic
+and left the pipeline with one copy, which is what the code now does.
+
+**Not attempted, and recorded as the obstacle:** a GPU render path. There is no Metal
+render API in libmpv; the only GPU option on macOS is `MPV_RENDER_API_TYPE_OPENGL`,
+which needs an OpenGL context and an IOSurface-backed FBO, while iced presents through
+wgpu/Metal. Bridging those requires a custom compositor, which is an architectural
+change rather than a fix; no prototype was built and no speedup is claimed.
+
 ## The smallest remaining manual session
 
 Ordered so the owner can stop early. Time is dominated by waiting, not by work.

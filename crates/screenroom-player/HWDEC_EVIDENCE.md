@@ -2,9 +2,10 @@
 
 Run on the owner's Apple M4 MacBook Air with mpv/libmpv 0.41.0 (client API
 2.5). Audio was muted. The three files were opened read-only, one process at a
-time. Each playback row covers 20 seconds after the first non-blank frame. The
-render bridge downsizes large frames to a 1920-pixel maximum dimension; reported
-dimensions are the delivered RGBA frame dimensions.
+time. Each playback row covers 20 seconds after the first non-blank frame. Frames
+were delivered at native resolution up to a 3840-pixel maximum dimension after the
+2026-11-01 change; the rows below were recorded before it, when the smaller 1920-pixel
+cap was still in place, and their dimensions are the delivered RGBA sizes of that day.
 
 | Sample | Mode requested | First frame (ms) | Delivered fps | Worst gap (ms) | CPU mean / max (%) | RSS mean / max (MiB) | `hwdec-current` | Non-blank | Mean luma |
 |---|---:|---:|---:|---:|---:|---:|---|---|---:|

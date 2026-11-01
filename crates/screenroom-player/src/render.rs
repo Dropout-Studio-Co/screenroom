@@ -10,6 +10,7 @@ pub const UPDATE_FRAME: u64 = 1;
 pub const MAX_DIMENSION: u32 = 3840;
 const FRAME_BUFFER_POOL_SIZE: usize = 3;
 const STRIDE_ALIGNMENT: usize = 256;
+const POINTER_ALIGNMENT: usize = 64;
 
 const PARAM_API_TYPE: c_int = 1;
 const PARAM_SW_SIZE: c_int = 17;
@@ -41,6 +42,10 @@ fn row_stride(width: u32) -> usize {
     bytes.div_ceil(STRIDE_ALIGNMENT) * STRIDE_ALIGNMENT
 }
 
+pub fn pointer_offset(base: usize) -> usize {
+    (POINTER_ALIGNMENT - (base % POINTER_ALIGNMENT)) % POINTER_ALIGNMENT
+}
+
 pub struct SoftwareRenderer {
     library: Arc<LibMpv>,
     context: NonNull<c_void>,
@@ -49,8 +54,6 @@ pub struct SoftwareRenderer {
     width: u32,
     height: u32,
     stride: usize,
-    buffer: Vec<u8>,
-    offset: usize,
     packed_buffers: Vec<Arc<Vec<u8>>>,
     generation: u64,
 }
@@ -133,8 +136,6 @@ impl SoftwareRenderer {
             width: 0,
             height: 0,
             stride: 0,
-            buffer: Vec::new(),
-            offset: 0,
             packed_buffers: std::iter::repeat_with(|| Arc::new(Vec::new()))
                 .take(FRAME_BUFFER_POOL_SIZE)
                 .collect(),
@@ -160,18 +161,12 @@ impl SoftwareRenderer {
         self.width = width;
         self.height = height;
         self.stride = row_stride(width);
-        let needed = self.stride * height as usize + 64;
-        if self.buffer.len() != needed {
-            self.buffer = vec![0u8; needed];
-        }
-        let base = self.buffer.as_ptr() as usize;
-        self.offset = (64 - (base % 64)) % 64;
         let frame_bytes = self.stride * height as usize;
         for buffer in &mut self.packed_buffers {
             if let Some(buffer) = Arc::get_mut(buffer)
-                && buffer.len() != frame_bytes
+                && buffer.len() != frame_bytes + POINTER_ALIGNMENT
             {
-                buffer.resize(frame_bytes, 0);
+                buffer.resize(frame_bytes + POINTER_ALIGNMENT, 0);
             }
         }
     }
@@ -186,7 +181,29 @@ impl SoftwareRenderer {
         let format = c"rgb0";
         let stride = self.stride;
 
-        let pointer = self.aligned_ptr();
+        self.generation += 1;
+        let needed = stride * self.height as usize;
+        let mut overflow: Option<Vec<u8>> = None;
+        let (pointer, slot, offset) = match reusable_buffer_index(&self.packed_buffers) {
+            Some(index) => {
+                let buffer = Arc::get_mut(&mut self.packed_buffers[index])
+                    .expect("the selected frame buffer is uniquely owned");
+                if buffer.len() < needed + POINTER_ALIGNMENT {
+                    buffer.resize(needed + POINTER_ALIGNMENT, 0);
+                }
+                let base = buffer.as_mut_ptr();
+                let offset = pointer_offset(base as usize);
+                (unsafe { base.add(offset) }, Some(index), offset)
+            }
+            None => {
+                let mut fresh = vec![0u8; needed + POINTER_ALIGNMENT];
+                let base = fresh.as_mut_ptr();
+                let offset = pointer_offset(base as usize);
+                let pointer = unsafe { base.add(offset) };
+                overflow = Some(fresh);
+                (pointer, None, offset)
+            }
+        };
         let mut params = [
             RenderParam {
                 kind: PARAM_SW_SIZE,
@@ -221,21 +238,29 @@ impl SoftwareRenderer {
             });
         }
 
-        self.generation += 1;
-        let began = std::time::Instant::now();
-        let frame = self.pack(pointer);
+        let rgba = match (slot, overflow.take()) {
+            (Some(index), _) => Arc::clone(&self.packed_buffers[index]),
+            (None, Some(fresh)) => Arc::new(fresh),
+            (None, None) => {
+                return Err(PlayerError::Unavailable(
+                    "the frame buffer was released while it was being drawn into".to_string(),
+                ));
+            }
+        };
         if std::env::var_os("SCREENROOM_PLAYER_TRACE").is_some() {
             eprintln!(
-                "[render] {}x{} stride {} align {} — libmpv {:?}, pack {:?}",
-                self.width,
-                self.height,
-                self.stride,
-                (pointer as usize) % 64,
-                drawn,
-                began.elapsed()
+                "[render] {}x{} stride {} offset {} — libmpv {:?}, no pack copy",
+                self.width, self.height, self.stride, offset, drawn
             );
         }
-        Ok(Some(frame))
+        Ok(Some(Frame {
+            width: self.width,
+            height: self.height,
+            stride: stride as u32,
+            rgba,
+            offset,
+            generation: self.generation,
+        }))
     }
 
     #[allow(dead_code)]
@@ -250,41 +275,6 @@ impl SoftwareRenderer {
                 self.library.path()
             ))
         })
-    }
-
-    fn aligned_ptr(&mut self) -> *mut u8 {
-        unsafe { self.buffer.as_mut_ptr().add(self.offset) }
-    }
-
-    fn pack(&mut self, _pointer: *mut u8) -> Frame {
-        let height = self.height as usize;
-        let stride = self.stride;
-        let needed = stride * height;
-        let start = self.offset;
-        let source = &self.buffer[start..start + needed];
-        let output_index = reusable_buffer_index(&self.packed_buffers);
-        let mut overflow = output_index.is_none().then(|| Arc::new(Vec::new()));
-        {
-            let rgba = match output_index {
-                Some(index) => Arc::get_mut(&mut self.packed_buffers[index])
-                    .expect("the selected frame buffer is uniquely owned"),
-                None => Arc::get_mut(overflow.as_mut().expect("overflow buffer exists"))
-                    .expect("the overflow frame buffer is uniquely owned"),
-            };
-            rgba.resize(needed, 0);
-            rgba.as_mut_slice().copy_from_slice(source);
-        }
-        let rgba = output_index
-            .map(|index| Arc::clone(&self.packed_buffers[index]))
-            .unwrap_or_else(|| overflow.take().expect("overflow buffer exists"));
-
-        Frame {
-            width: self.width,
-            height: self.height,
-            stride: stride as u32,
-            rgba,
-            generation: self.generation,
-        }
     }
 }
 

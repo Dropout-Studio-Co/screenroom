@@ -60,9 +60,39 @@ texture write per frame. An interleaved A/B against the previous commit, same ma
 and same load, put both builds inside each other's noise, so the earlier attribution
 of a ~2 fps gap to the upload path is not supported: there is no spare frame there.
 The 21.8–22.0 fps recorded earlier stands as a measurement taken under a quieter
-machine, not as a target. A faster 4K path needs the GPU (zero-copy) render bridge, a
-design change rather than a tuning fix. G3's presentation is now measured on macOS;
-G4's quality pass on the owner's own 4K files is still open.
+machine, not as a target.
+
+**Where the 4K time actually goes (2026-11-01).** `SCREENROOM_PLAYER_TRACE` timestamps
+`mpv_render_context_render` per frame: at 3840×2160 it costs **41.0–41.2 ms**, and the
+figure is the same with `SCREENROOM_HWDEC=no` (41.04 ms) and `auto-copy` (41.16 ms), so
+the copy-back is not the cost. mpv 0.41.0's own header is explicit that the software
+render API does colour conversion, scaling and OSD **on the CPU, single-threaded**, and
+that it accepts an alternative `SW_FORMAT` only when that format is RGB with exactly
+one plane — so no planar/nv12 target can be requested to shrink the conversion. With a
+41 ms render inside a 42 ms frame budget, delivery cannot reach 24 fps until that
+conversion leaves the CPU.
+
+**What was removed instead (2026-11-01).** The renderer wrote libmpv's output into one
+buffer and then copied it into a pooled frame buffer: a second **33.2 MB memcpy per 4K
+frame**. libmpv now renders straight into the pooled buffer, which is allocated with 64
+bytes of slack so the pointer handed to mpv is 64-byte aligned as `render.h` requires
+(`SW_STRIDE`/`SW_POINTER`); the frame carries that offset so the texture upload starts
+at the first pixel. The application also stopped redrawing when no new picture exists:
+the tick subscription wakes on the player's published-frame counter instead of firing
+every 16 ms, so draws fell from **51.5/s to 13.7–14.1/s at 4K** and to **29.9/s against
+28.7 delivered at 1080p**. Delivery itself is unchanged (interleaved A/B: 4K
+11.9–12.4 vs 12.4–14.9 fps, 1080p 28.7 vs 27.9, all under load 10–14), which is
+consistent with the render step, not the copies, being the limit.
+
+**The GPU path is not available in this stack as it stands.** macOS offers no Metal
+render API for libmpv; the only GPU render API in the 0.41.0 headers is
+`MPV_RENDER_API_TYPE_OPENGL`, which needs a live OpenGL context and an IOSurface-backed
+FBO, and iced presents through wgpu's Metal backend. Sharing those frames would mean a
+GL context alongside iced, an IOSurface bridge into a `wgpu` texture, and a custom
+compositor replacing iced's surface — an architectural change, not a tuning fix, and
+not something this session attempted. It is recorded here as the open obstacle rather
+than as a claim. G3's presentation is measured on macOS; G4's quality pass on the
+owner's own 4K files is still open.
 
 ### Local installation (supporting check, not a gate)
 

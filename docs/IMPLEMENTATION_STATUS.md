@@ -384,7 +384,7 @@ Everything below ran on this macOS host against libmpv 0.41 / client API 2.5.
 | Area | What exists | Verification |
 | --- | --- | --- |
 | Player worker (`screenroom-player/src/worker.rs`) | One thread owns libmpv; commands in, immutable `PlayerSnapshot` out; lifecycle mapped onto `PlayerState` | `tests/worker.rs` — 10 tests |
-| Software render bridge (`src/render.rs`) | mpv `sw` renderer → packed RGBA `Frame`, 256-byte aligned stride for a direct texture upload, native size up to 3840 px | real frames asserted non-blank with colour; `target_size`/`row_stride` unit tests; frame-rate assertion |
+| Software render bridge (`src/render.rs`) | mpv `sw` renderer straight into a pooled `Frame` (no second copy), 256-byte aligned stride and a 64-byte aligned pointer recorded as the frame's offset, native size up to 3840 px | real frames asserted non-blank with colour; `target_size`/`row_stride`/`pointer_offset` unit tests; frame-rate assertion |
 | Seek / pause / resume-at-load | `seek`, `set_paused`, `load_at(path, Some(seconds))` | position moves after seek, holds while paused, resumes after load |
 | Audio and A/V sync | `audio-pts`, mpv's own `avsync` and `total-avsync-change` in `PlayerSnapshot` | source volume measured, the audio clock advances in real time (0.982× wall), libmpv `avsync` 0.0 ms with a 12 ms cumulative adjustment |
 | Tracks | track list with language/title/selected read from libmpv; `set_audio_track`, `set_subtitle_track` | two audio and two subtitle tracks enumerated and switched; selection read back rather than assumed |
@@ -482,12 +482,19 @@ cargo test --release -p screenroom-player --test worker -- --nocapture
 | CPU after playback ended | ~3 % |
 | RSS after playback ended | 108 MB |
 
-The release figure is the one that ships. The software bridge is still a full-frame
-CPU copy per frame by design (decode is copy-back on macOS since 2026-10-29).
-Measured on 2026-11-01, that copy is **not** what limits 4K: native 3840×2160
-delivery costs 5.97 ms p50 for HEVC Main10 against a 41.7 ms frame budget. What is
-left is mpv's own CPU colour conversion, which only a GPU render API can remove,
-and HDR tone mapping, which this path does not do.
+The release figure is the one that ships. The software bridge is one full-frame CPU
+write per frame (decode is copy-back on macOS since 2026-10-29), and since 2026-11-01
+the second copy into the frame pool is gone: libmpv draws into the pooled buffer
+directly, with the 64-byte pointer alignment `render.h` asks for recorded on the frame.
+Measured on 2026-11-01, that copy was **not** what limits 4K: native 3840×2160 delivery
+costs 5.97 ms p50 for HEVC Main10, while `mpv_render_context_render` itself costs
+**41.0–41.2 ms** at that size — the same with `hwdec=no` and `auto-copy`. mpv documents
+that renderer as single-threaded CPU colour conversion and accepts only single-plane
+RGB as an alternative output format, so the conversion cannot be narrowed here. What is
+left is a GPU render API, which libmpv offers on macOS only as OpenGL (no Metal) and
+would need an IOSurface bridge into iced's wgpu surface, and HDR tone mapping, which
+this path does not do. The same change stopped redrawing when no new picture exists:
+draws fell from 51.5/s to 13.7–14.1/s at 4K and to 29.9/s for 28.7 delivered at 1080p.
 
 Two libmpv contract bugs were found and fixed while proving the above, and are
 worth remembering: `MPV_RENDER_PARAM_SW_POINTER` takes the pixel buffer address

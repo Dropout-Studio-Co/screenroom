@@ -17,6 +17,37 @@ pub use worker::{
 
 pub const DEFAULT_EVENT_TIMEOUT: f64 = 5.0;
 
+#[derive(Clone, Debug)]
+pub struct FrameTicks(Arc<std::sync::atomic::AtomicU64>);
+
+impl FrameTicks {
+    pub(crate) fn new() -> Self {
+        Self(Arc::new(std::sync::atomic::AtomicU64::new(0)))
+    }
+
+    pub fn current(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub(crate) fn bump(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+}
+
+impl PartialEq for FrameTicks {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for FrameTicks {}
+
+impl std::hash::Hash for FrameTicks {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        Arc::as_ptr(&self.0).hash(state);
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PlayerError {
     #[error("libmpv is not available on this device: {0}")]

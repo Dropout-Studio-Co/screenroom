@@ -736,18 +736,49 @@ pub enum Focus {
     Down,
 }
 
-fn ticks(interval: Duration) -> Subscription<Message> {
+#[derive(Clone, Hash)]
+struct TickKey {
+    poll: Duration,
+    idle: Duration,
+    signals: Vec<screenroom_player::FrameTicks>,
+}
+
+fn ticks(
+    poll: Duration,
+    idle: Duration,
+    signals: Vec<screenroom_player::FrameTicks>,
+) -> Subscription<Message> {
     use iced::futures::StreamExt;
     use iced::futures::channel::mpsc;
 
-    Subscription::run_with(interval, |interval| {
-        let interval = *interval;
+    let key = TickKey {
+        poll,
+        idle,
+        signals,
+    };
+    Subscription::run_with(key, |key| {
+        let key = key.clone();
         let (sender, receiver) = mpsc::unbounded::<()>();
         std::thread::spawn(move || {
+            let mut seen: Vec<u64> = key.signals.iter().map(|signal| signal.current()).collect();
+            let mut last = std::time::Instant::now();
             loop {
-                std::thread::sleep(interval);
-                if sender.unbounded_send(()).is_err() {
-                    break;
+                std::thread::sleep(key.poll);
+                let advanced = key
+                    .signals
+                    .iter()
+                    .zip(seen.iter_mut())
+                    .any(|(signal, seen)| {
+                        let now = signal.current();
+                        let advanced = now != *seen;
+                        *seen = now;
+                        advanced
+                    });
+                if advanced || last.elapsed() >= key.idle {
+                    last = std::time::Instant::now();
+                    if sender.unbounded_send(()).is_err() {
+                        break;
+                    }
                 }
             }
         });
@@ -3630,8 +3661,21 @@ impl App {
         } else {
             STATUS_TICK
         };
-        subscriptions.push(ticks(interval));
+        subscriptions.push(ticks(interval, STATUS_TICK, self.frame_signals()));
         Subscription::batch(subscriptions)
+    }
+
+    fn frame_signals(&self) -> Vec<screenroom_player::FrameTicks> {
+        let mut signals = Vec::new();
+        if let Some(player) = &self.player
+            && (self.screen == Screen::Player || self.mini)
+        {
+            signals.push(player.frame_ticks());
+        }
+        if let Some(preview) = &self.preview {
+            signals.push(preview.frame_ticks());
+        }
+        signals
     }
 
     fn theme(&self) -> iced::Theme {

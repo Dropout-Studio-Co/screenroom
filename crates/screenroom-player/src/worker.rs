@@ -314,6 +314,7 @@ pub struct Player {
     commands: Sender<PlayerCommand>,
     thread: Option<JoinHandle<()>>,
     wake: Arc<WakeSignal>,
+    ticks: crate::FrameTicks,
     next_load_id: std::sync::atomic::AtomicU64,
     next_seek_serial: std::sync::atomic::AtomicU64,
 }
@@ -344,6 +345,8 @@ impl Player {
         let wake = Arc::new(WakeSignal::new());
         let thread_wake = Arc::clone(&wake);
         let thread_shared = Arc::clone(&shared);
+        let ticks = crate::FrameTicks::new();
+        let thread_ticks = ticks.clone();
 
         let handle = thread::Builder::new()
             .name("screenroom-player".to_string())
@@ -353,6 +356,7 @@ impl Player {
                     queue,
                     ready_sender,
                     thread_wake,
+                    thread_ticks,
                     hwdec,
                     max_dimension,
                 )
@@ -367,6 +371,7 @@ impl Player {
                 commands,
                 thread: Some(handle),
                 wake,
+                ticks,
                 next_load_id: std::sync::atomic::AtomicU64::new(0),
                 next_seek_serial: std::sync::atomic::AtomicU64::new(0),
             }),
@@ -389,6 +394,10 @@ impl Player {
 
     pub fn wake_notifications(&self) -> u64 {
         self.wake.current()
+    }
+
+    pub fn frame_ticks(&self) -> crate::FrameTicks {
+        self.ticks.clone()
     }
 
     pub fn load(&self, path: impl AsRef<Path>) {
@@ -472,10 +481,11 @@ fn run(
     commands: Receiver<PlayerCommand>,
     ready: Sender<Result<(), PlayerError>>,
     wake: Arc<WakeSignal>,
+    ticks: crate::FrameTicks,
     hwdec: HwdecMode,
     max_dimension: u32,
 ) {
-    let mut runner = match Runner::new(hwdec, Arc::clone(&wake), max_dimension) {
+    let mut runner = match Runner::new(hwdec, Arc::clone(&wake), ticks, max_dimension) {
         Ok(runner) => {
             let _ = ready.send(Ok(()));
             runner
@@ -538,12 +548,14 @@ struct Runner {
     last_time_pos: Option<f64>,
     awaiting_position: bool,
     metadata_dirty: bool,
+    ticks: crate::FrameTicks,
 }
 
 impl Runner {
     fn new(
         hwdec: HwdecMode,
         wake: Arc<WakeSignal>,
+        ticks: crate::FrameTicks,
         max_dimension: u32,
     ) -> Result<Self, PlayerError> {
         let library = LibMpv::load()?;
@@ -620,6 +632,7 @@ impl Runner {
             last_time_pos: None,
             awaiting_position: false,
             metadata_dirty: false,
+            ticks,
         })
     }
 
@@ -1256,7 +1269,8 @@ impl Runner {
                 publish(shared, |snapshot| {
                     snapshot.load_id = load_id;
                     snapshot.frame = Some(frame);
-                })
+                });
+                self.ticks.bump();
             }
             Ok(None) => {}
             Err(error) => self.fail("render_failed", error.to_string(), shared),

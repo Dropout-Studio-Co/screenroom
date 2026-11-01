@@ -134,7 +134,7 @@ impl Primitive for VideoPrimitive {
                 },
                 &frame.rgba,
                 wgpu::TexelCopyBufferLayout {
-                    offset: 0,
+                    offset: frame.offset as u64,
                     bytes_per_row: Some(frame.stride),
                     rows_per_image: Some(frame.height),
                 },
@@ -445,6 +445,7 @@ mod tests {
             height: 2,
             stride: 8,
             rgba: std::sync::Arc::new(vec![7; 16]),
+            offset: 0,
             generation: 3,
         };
         assert!(frame.is_well_formed());
