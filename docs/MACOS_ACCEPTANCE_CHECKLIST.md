@@ -51,16 +51,16 @@ fix, never a row to delete.
 ## Two steps worth doing in the same sitting
 
 **HDR.** The extended-range path is built and measured (16-bit PQ surface, float
-swapchain, EDR layer, target peak read from the panel at 406 nits), and it is
-**opt-in** so nothing changes unless you ask. To see it: quit the app, then
+swapchain, EDR layer, target peak read from the panel at 406 nits). It is a real
+setting now, not an environment variable: Settings → *Show HDR films as HDR*, then
+restart, because the window picks its surface when it opens. Play an HDR10 film and
+look at the highlights; turn it back off and look at the same film again. The two
+should differ in the highlights, and that difference is the whole point.
 
-```bash
-SCREENROOM_HDR=extended cargo run --release -p screenroom-desktop
-```
-
-and play an HDR10 film. If it looks right, say so and it becomes the default for HDR
-files instead of a switch. Do it without the variable first with the same film: the
-two should look different in the highlights, and that difference is the whole point.
+Verified without any environment variable: with the setting on the app reports
+`picture_surface Rgba16Float` at 23.9 fps and 13.35 % CPU; with it off,
+`Bgra8Unorm`. What no measurement can answer is whether it *looks* right on your
+panel, which is why this is still your step.
 
 **VoiceOver.** ⌘F5, then VO+Right through the header, the heading and the cards, and
 VO+Space on a card. The tree is built and verified headlessly (0 controls before,
