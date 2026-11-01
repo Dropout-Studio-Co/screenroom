@@ -77,3 +77,41 @@ and samples process CPU/RSS once per second.
 
 Online manual sections: [Video options (`--hwdec`, `--hwdec-codecs`)](https://mpv.io/manual/stable/#video)
 and [Properties (`hwdec-current`)](https://mpv.io/manual/stable/#properties).
+
+## Where the 4K frame time actually goes (2026-11-01)
+
+Offscreen, `render_bench 3240x2160` (H.264 fixture, `SCREENROOM_PLAYER_TRACE=1`,
+Apple M4, 1920×1280 delivered, stride 7680):
+
+| Stage | Per frame | Share |
+|---|---:|---:|
+| `mpv_render_context_render` (swscale YUV→RGB and the 3240→1920 downscale) | **39.5–45.9 ms** | ~98% |
+| `SoftwareRenderer::pack` (row copy into the pooled buffer) | 0.27–1.12 ms | ~1–2% |
+| `queue.write_texture` upload in the iced/wgpu surface | not measured offscreen | — |
+
+Delivery was 162 frames in 7.00 s (23.1 fps) for the whole run, so the offscreen
+ceiling at this size is already below the 24 fps target before any on-screen
+presentation cost is added.
+
+`--sws-scaler` is **not** the lever. The same run repeated with `bilinear`
+measured 39.5 ms mean per frame over 177 frames (24.0 fps delivered) and with
+`bicublin` 39.6 ms over 171 frames (23.1 fps), against 39.5–45.9 ms for the
+default. The cost is the format conversion of a 3240×2160 10-bit YUV frame, not
+the resampling filter, so no filter choice recovers real time. The option is
+also unsafe to expose as an env knob: an empty or unknown value fails
+`mpv_set_option_string` and aborts player startup, so the trial plumbing was
+reverted rather than shipped.
+
+Consequences for the next attempt:
+
+- The Rust side is not the bottleneck; `pack` and the pooled buffers are already
+  ~1 ms per frame and cannot yield a 24% improvement.
+- The software render API offers only RGB output formats (`rgb0`, `bgra`, …), so
+  the CPU conversion cannot be skipped inside it.
+- Reaching 24 fps at 1920×1280 therefore needs a zero-copy GPU path
+  (`MPV_RENDER_API_TYPE_OPENGL`, or a Metal/IOSurface import) so that mpv
+  converts on the GPU. That is an architecture change and was deliberately not
+  attempted here.
+- The measured trade-off if real time is preferred over resolution: cost tracks
+  output pixels, so a smaller delivered size buys frames directly. It was not
+  adopted because it lowers picture quality silently.
