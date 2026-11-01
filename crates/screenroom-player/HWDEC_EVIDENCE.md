@@ -359,3 +359,20 @@ Checked against the installed crates rather than assumed:
 
 That path is unexercised end to end. It is the next task, and the software renderer
 stays the shipped default until it is measured in the application itself.
+
+### Subtitles and OSD survive the GPU path
+
+One question had to be settled before that path could replace anything: does the
+OpenGL renderer still draw the OSD and the subtitles, or would a GPU renderer lose
+them? It draws both. Against a black fixture with an imported Bengali cue
+(`sub-add … select`, which is what the application calls), the rendered surface
+contains the cue at the bottom of the frame; the same run with an
+`osd-playing-msg` shows the message too. The application's own software path renders
+the same cue — `a_bengali_subtitle_is_drawn_into_the_picture` in
+`apps/desktop/src/app/acceptance.rs` lights 173 pixels in the subtitle band against
+none without it, and the frame shows real Bengali glyphs rather than boxes.
+
+Two traps for the next measurement: libmpv auto-loads a sidecar named after the
+video (`<name>.bn.srt`), so a control run needs a differently named file, and
+`--sub-file` as a startup option did not take effect in these probes where
+`sub-add … select` did.

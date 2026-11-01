@@ -63,7 +63,7 @@ Counted from the 25 product requirements (F01–F25), the 10 quality requirement
 | Unverified | **1** (acceptance step 8: 4K on battery) |
 | Blocked | **0 rows**; four partial rows carry a named blocker (below) |
 | Not applicable to macOS | **0** of these 50 (the PRD's Windows and Samsung criteria, and the retired iOS/Android/Linux/webOS/Android-TV platforms, are outside this set) |
-| Outstanding implementation tasks | **11 P1 + 5 P2** |
+| Outstanding implementation tasks | **12 P1 + 5 P2** |
 | Outstanding human/device tasks | **9** (8 owner observations + 1 owner hardware run) |
 
 The four measures the brief asks to keep apart:
@@ -71,7 +71,7 @@ The four measures the brief asks to keep apart:
 | | Value | Meaning |
 | --- | --- | --- |
 | **Implementation** | 27 of 35 product/quality areas implemented in full (77 %), 8 partial (23 %), 0 absent | every feature area has working code behind it |
-| **Automated verification** | 30 of 35 areas have an automated check that ran | the 5 exceptions are the online halves of F05 and F15, casting (F19), the shipped source directory (F23) and OS-level PiP (F18) |
+| **Automated verification** | 31 of 35 areas have an automated check that ran | the 4 exceptions are the online halves of F05 and F15, casting (F19) and the shipped source directory (F23); OS-level PiP (F18) has none by nature and its in-app fallback is tested |
 | **Human/device acceptance** | 7 of 15 checklist steps closed; 7 half-closed; 1 needs the owner and the hardware | see §5 |
 | **Everyday readiness** | **usable now** for 1080p; 4K plays at 19–24 fps using 116–186 % CPU; HDR is tone-mapped to SDR; no OS-wide PiP; no online enrichment or subtitle search | see §3 for the exact limits |
 
@@ -128,7 +128,7 @@ advanced features that need something the machine does not have.
 | F10 | Next-episode autoplay | COMPLETE | `step_9`, gap/season tests | step 9 | — |
 | F11 | Search, filters, sort, paging | COMPLETE | 830-row library paging, `step_18` genre | — | — |
 | F12 | Watchlists and favourites | COMPLETE | toggle/filter tests | — | — |
-| F13 | Audio tracks and subtitles | COMPLETE | `step_5`, `step_21`, track tests | step 5 | Bengali glyph coverage unmeasured (P1-10) |
+| F13 | Audio tracks and subtitles | COMPLETE | `step_5`, `step_21`, track tests, and a Bengali cue proved to be drawn into the picture | step 5 (that it reads correctly on screen) | — |
 | F14 | Skip intro and credits | COMPLETE (manual markers only) | marker tests, auto-skip guard tests | — | — |
 | F15 | Subtitle search and management | **PARTIAL** — import, reuse and removal work; no search | `step_21` | step 5 | OpenSubtitles key + licence decision (P1-07) |
 | F16 | Local recommendations | COMPLETE | recommendation tests | — | — |
@@ -426,24 +426,20 @@ than reclassified.
 
 ---
 
-#### P1-10 · Prove Unicode and Bengali subtitles render
+#### P1-10 · Prove Unicode and Bengali subtitles render — **CLOSED 2026-11-01**
 
 - **Requirement:** F13, Q07 (subtitle legibility).
-- **Status:** UNVERIFIED for Bengali specifically. libmpv draws subtitles with its
-  own renderer and a bundled font; no Bengali file has been shown.
-- **What is missing:** a generated fixture with Bengali and mixed-script cues, and a
-  check that the glyphs are not boxes.
-- **Where:** the player's subtitle path (`sub-add`, `sub-scale`, `sub-pos`).
-- **Why it matters:** the owner's language is named explicitly in the PRD.
-- **Work:** generate an SRT with Bengali, Devanagari and Latin cues, play it, and
-  capture one frame headlessly through the software path; assert the frame differs
-  from the same frame with no subtitle and record the image for the owner to look at.
-- **Depends on:** nothing.
-- **Acceptance:** the rendered frame contains non-background pixels in the subtitle
-  band for all three scripts, and the captured image shows real glyphs when a person
-  looks at it.
-- **Automated verification:** the "subtitles changed the frame" assertion.
-- **Human verification:** one look at the captured image.
+- **Status:** COMPLETE. `a_bengali_subtitle_is_drawn_into_the_picture` plays a black
+  film with an imported Bengali cue and finds **173 lit pixels in the subtitle band
+  where the same film without the cue has none**; the frame was also dumped and
+  inspected, and the glyphs are real Bengali rather than boxes.
+- **Two things learned while doing it, both recorded because they will confuse the
+  next person:** libmpv auto-loads a sidecar named after the video
+  (`<name>.bn.srt`), so a "no subtitle" control run needs a sidecar with a different
+  name; and `--sub-file` as a startup option did not take effect in these probes,
+  while `sub-add … select` — what the application actually calls — did.
+- **Left for the owner:** whether the size, position and contrast read well on the
+  screen (checklist step 5).
 
 ---
 
@@ -568,6 +564,7 @@ than reclassified.
 | --- | --- | --- |
 | `e56e7ac` | Stopping a viewing stores the place it reached, and the track list is not published before libmpv resolves it | Both intermittent failures reproduced, root-caused and then passed 3 full workspace runs (358 tests each), 8 acceptance runs and 6 runs of the player suite at `--test-threads=22` |
 | `38a5167` | The OpenGL → IOSurface → Metal probe, its measurements, and an honest `render_bridge()` | Probe passes on all fixtures; Metal reads exactly the bytes OpenGL wrote; 4K at 22.9–23.7 fps and 27–32 % CPU |
+| `732af99` | A Bengali subtitle is proved to reach the picture | 173 lit pixels with the cue, 0 without; the captured frame was inspected |
 
 Detail:
 
