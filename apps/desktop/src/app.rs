@@ -920,6 +920,21 @@ fn epoch_ms() -> i64 {
         .unwrap_or_default()
 }
 
+fn ago_phrase(count: i64, singular: &str, plural: &str) -> String {
+    let count = count.max(1);
+    let unit = if count == 1 { singular } else { plural };
+    format!("{count} {unit} ago")
+}
+
+fn scan_recency_phrase(elapsed_seconds: i64) -> String {
+    match elapsed_seconds.max(0) {
+        0..=90 => "just now".to_string(),
+        seconds if seconds < 3_600 => ago_phrase(seconds / 60, "minute", "minutes"),
+        seconds if seconds < 86_400 => ago_phrase(seconds / 3_600, "hour", "hours"),
+        seconds => ago_phrase(seconds / 86_400, "day", "days"),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CastAction {
     Pause,
@@ -4902,12 +4917,7 @@ impl App {
             .filter_map(|source| source.last_scan_ms)
             .max()?;
         let elapsed = (epoch_ms() - newest).max(0) / 1_000;
-        Some(match elapsed {
-            0..=90 => "just now".to_string(),
-            seconds if seconds < 3_600 => format!("{} minutes ago", (seconds / 60).max(1)),
-            seconds if seconds < 86_400 => format!("{} hours ago", seconds / 3_600),
-            seconds => format!("{} days ago", seconds / 86_400),
-        })
+        Some(scan_recency_phrase(elapsed))
     }
 
     fn detail_screen(&self) -> Element<'_, Message> {
@@ -6197,6 +6207,45 @@ mod tests {
         assert_eq!(clock(3_661.0), "1:01:01");
         assert_eq!(clock(-4.0), "0:00");
         assert_eq!(clock(f64::NAN), "0:00");
+    }
+
+    #[test]
+    fn a_single_unit_never_reads_as_a_plural() {
+        assert_eq!(scan_recency_phrase(0), "just now");
+        assert_eq!(scan_recency_phrase(90), "just now");
+        assert_eq!(scan_recency_phrase(91), "1 minute ago");
+        assert_eq!(scan_recency_phrase(120), "2 minutes ago");
+        assert_eq!(scan_recency_phrase(3_599), "59 minutes ago");
+        assert_eq!(scan_recency_phrase(3_600), "1 hour ago");
+        assert_eq!(scan_recency_phrase(7_200), "2 hours ago");
+        assert_eq!(scan_recency_phrase(86_399), "23 hours ago");
+        assert_eq!(scan_recency_phrase(86_400), "1 day ago");
+        assert_eq!(scan_recency_phrase(172_800), "2 days ago");
+        assert_eq!(scan_recency_phrase(-5), "just now");
+    }
+
+    #[test]
+    fn every_unit_phrases_both_of_its_counts() {
+        let units = [
+            (91_i64, 120_i64, "minute"),
+            (3_600, 7_200, "hour"),
+            (86_400, 172_800, "day"),
+        ];
+
+        for (one, two, unit) in units {
+            assert_eq!(scan_recency_phrase(one), format!("1 {unit} ago"));
+            assert_eq!(scan_recency_phrase(two), format!("2 {unit}s ago"));
+        }
+
+        for seconds in 0..200_000 {
+            let phrase = scan_recency_phrase(seconds);
+            for unit in ["minute", "hour", "day"] {
+                assert!(
+                    !phrase.starts_with(&format!("1 {unit}s")),
+                    "{phrase} at {seconds}s"
+                );
+            }
+        }
     }
 
     #[test]
