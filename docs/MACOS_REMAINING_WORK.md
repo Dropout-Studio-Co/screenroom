@@ -61,14 +61,14 @@ accessibility is documented as blocked upstream with evidence.
 | Measure | Result |
 | --- | --- |
 | Applicable macOS requirements | **50** (25 functional + 10 quality + 15 acceptance steps) |
-| Complete | **41** |
-| Partial | **8** |
+| Complete | **45** |
+| Partial | **4** |
 | Missing | **0** |
 | Broken | **0** |
 | Unverified | **1** (acceptance step 8: 4K on battery) |
 | Blocked | **4 rows carry a named blocker** (F05 live, F15 live, F18 native PiP, F23) |
 | Not applicable to macOS | **0** of these 50 |
-| Outstanding implementation tasks | **3 P1** (P1-03 EDR window, P1-05 PiP, P1-09 accessibility) and **0 P2**; P1-12's mechanism is complete and only its execution needs the owner |
+| Outstanding implementation tasks | **2 P1** (P1-05 PiP, P1-09 accessibility) and **0 P2**; P1-03 is implemented and needs one owner look; P1-12's mechanism is complete and only its execution needs the owner |
 | Outstanding human/device tasks | **9** (8 owner observations + 1 owner hardware run) |
 
 The four measures the brief asks to keep apart:
@@ -78,7 +78,7 @@ The four measures the brief asks to keep apart:
 | **Implementation** | 31 of 35 product/quality areas implemented in full (89 %), 4 partial (11 %), 0 absent | every feature area has working code behind it |
 | **Automated verification** | 33 of 35 areas have an automated check that ran | the 2 exceptions are the live provider calls (F05, F15), which need an owner key, and OS-level PiP (F18) |
 | **Human/device acceptance** | 7 of 15 checklist steps closed; 7 half-closed; 1 needs the owner and the hardware | see §5 |
-| **Everyday readiness** | **usable now** for 1080p and 4K at the source frame rate: 24.4 fps at 13.95 % mean CPU on 4K HEVC Main10 through the OpenGL path, against 24.2 fps at 89.8 % on the old one | HDR is still tone-mapped to SDR; no OS-wide PiP; no online enrichment or subtitle search without an owner key |
+| **Everyday readiness** | **usable now** for 1080p and 4K at the source frame rate: 24.4 fps at 13.95 % mean CPU on 4K HEVC Main10 through the OpenGL path, against 24.2 fps at 89.8 % on the old one | HDR10 reaches an extended-range swapchain and needs one owner look; no OS-wide PiP; no online enrichment or subtitle search without an owner key |
 
 **What changed in the second session, measured rather than asserted.** The
 application's own `SCREENROOM_PLAY_CHECK`, same 4K HEVC Main10 fixture, 24 fps
@@ -117,8 +117,9 @@ OpenGL path meets all three on this machine.
    saved sources with an honest external handoff, receiver discovery, and an action
    strip that runs every one of those from the keyboard.
 
-The three things that keep it from being *finished* are the 4K cost, HDR, and the
-advanced features that need something the machine does not have.
+The three things that keep it from being *finished* are the 4K cost, an HDR
+switch that has not yet been looked at on the panel, and the advanced features
+that need something the machine does not have.
 
 ---
 
@@ -134,7 +135,7 @@ advanced features that need something the machine does not have.
 | F04 | Identity matching: filename/folder, local NFO, manual match, protected override | COMPLETE (local only) | parsing tests, `step_18` (NFO), manual-match tests | step 2 | online IDs absent (F05) |
 | F05 | Whole-library enrichment | **COMPLETE (core) / BLOCKED (live)** — TMDB-shaped provider, durable queue, rate limits, backoff, reconciliation precedence, artwork retention gate; nothing is fetched until a key is configured | `tests/providers.rs` (28), `tests/providers_http.rs` (5), drain tests | step 2 | owner key + TLS transport + retention decision |
 | F06 | Offline artwork bytes | COMPLETE | 21 posters re-decoded by ffprobe, 200 candidates readable, `a_retained_poster_is_cached_for_its_card` | step 2 | — |
-| F07 | Video playback | **COMPLETE (SDR) / HDR surface only** — 1080p and 4K at the source frame rate (24.4 fps, 13.95 % CPU, zero uploads); a 16-bit PQ surface exists and is measured, but nothing can be presented as HDR through iced 0.14 | `SCREENROOM_PLAY_CHECK`, `gl_render_check`, `hdr_check` | steps 4, 6, 7, 8 | EDR window (P1-03) |
+| F07 | Video playback | **COMPLETE (SDR) / HDR complete and opt-in** — 1080p and 4K at the source frame rate (24.4 fps, 13.95 % CPU, zero uploads); with `SCREENROOM_HDR=extended` a PQ file is tone mapped to the measured display peak (2.0 × 203 nits) and presented through a `Rgba16Float` swapchain on an extended-range layer (24.79 fps, 14.62 % CPU, zero uploads, hidden-window run) | `SCREENROOM_PLAY_CHECK`, `gl_render_check`, `hdr_check`, `metal_extended_range` | step 4 and the owner's look (P1-03) | wide-gamut saturation is BT.709; the switch stays off until the owner looks |
 | F08 | Profiles and progress | COMPLETE | `step_10`, `step_14`, checkpoint tests | steps 10, 14 | — |
 | F09 | Home and Continue Watching | COMPLETE | `step_11`, `step_13` | step 11 | — |
 | F10 | Next-episode autoplay | COMPLETE | `step_9`, gap/season tests | step 9 | — |
@@ -161,12 +162,12 @@ advanced features that need something the machine does not have.
 | Q00 | Installed local app, no browser, no server, no localhost runtime | COMPLETE | bundle walked end to end; `verify-bundle.sh` | — |
 | Q00B | Dropout Design System, pinned, private | COMPLETE | `ds_pinned.rs` generated at a pinned commit; theme string visible; neutral fallback | the DS sync is machine-local; a clean checkout builds without it |
 | Q01 | Offline: library, profiles, artwork, resume, playback with the network off | COMPLETE by construction (no network code at all; only the browser handoff and an opt-in SSDP probe) | not yet *executed* with Wi-Fi off (P1-12) | execution pending |
-| Q02 | Performance: startup, first frame, 4K, memory, no runaway jobs | **COMPLETE (SDR)** | startup ~1.2 s; 4K 24.4 fps at 13.95 % mean CPU with zero uploads; paging 13.7 ms first page and 78 ms grouped last page at 10k rows; backups and restores run off the UI thread | HDR (P1-03) |
+| Q02 | Performance: startup, first frame, 4K, memory, no runaway jobs | **COMPLETE (SDR and HDR)** | startup ~1.2 s; 4K 24.4 fps at 13.95 % mean CPU with zero uploads; the extended-range path measured 24.79 fps at 14.62 % in the same hidden-window check; paging 13.7 ms first page and 78 ms grouped last page at 10k rows; backups and restores run off the UI thread | single-run CPU samples; the 16F swapchain costs GPU memory (P1-03) |
 | Q03 | Fidelity: aspect, anamorphic, timebase, honest codec claims | COMPLETE | `step_7`, `anamorphic_video_renders_at_its_display_aspect_without_letterbox_rows` | the *look* of step 7 is the owner's |
 | Q04 | Portability: one monorepo, isolated platform adapters | COMPLETE | layout, `cfg` boundaries | — |
 | Q05 | Security and privacy | COMPLETE | argument vectors (no shell), root canonicalisation, `contained_media_path` tests, no credentials anywhere | — |
 | Q06 | Durability: migrations, transactions, no silent resets | COMPLETE | migration tests, integrity check after migrate, backup/restore | — |
-| Q07 | Accessibility and design quality | **PARTIAL / BLOCKED** | keyboard journey, Settings action strip, contrast tokens | iced 0.14 ships no accessibility tree at all and `Cargo.lock` has no `accesskit`; verified and recorded as ADR-017 (P1-09) |
+| Q07 | Accessibility and design quality | **COMPLETE (bridge) / PENDING (VoiceOver pass)** | keyboard journey, Settings action strip, contrast tokens, and a real `NSAccessibility` tree — verified headlessly at 0 controls before and 13 after, with labels and focus matching the app and `AXPress` reaching the message loop | the owner's VoiceOver pass; per-widget frames need layout geometry iced does not expose (ADR-017) |
 | Q08 | Honest reporting | COMPLETE | this document set; `preferred_bridge()` corrected this session | — |
 
 ### 4.3 macOS acceptance steps (1–15)
@@ -277,48 +278,58 @@ than reclassified.
 
 ---
 
-#### P1-03 · Show HDR10 at its mastered luminance — **surface CLOSED, display BLOCKED**
+#### P1-03 · Show HDR10 at its mastered luminance — **IMPLEMENTED; owner look PENDING**
 
 - **Requirement:** F07, Q03, Q02.
-- **Status:** PARTIAL, and the boundary is now exact. A 16-bit half-float
-  (`GL_RGBA16F`) `IOSurface` is created and measured, libmpv is told the target
-  depth and asked to pass the master through rather than compress it, and the
-  frame states its own format. What does not exist is an EDR **window**: nothing has
-  been presented, so no panel has received anything.
-- **What was measured, headless, on the HDR10 fixture**
-  (`examples/hdr_check.rs`, no window, media read-only): the surface reads back as
-  CoreVideo `'RGhA'` `0x52476841` with 8 bytes per pixel and a 30 720-byte row at
-  3840, the FBO is `0x881a`, and the delivered surface has **4 509 distinct green
-  values against 256 for eight bits, with 13 codes above 1.0** and a peak of
-  **1.076** in code space. The `float8` control — the same surface with HDR
-  *options* off — has 2 105 distinct values and **zero** codes above 1.0, which is
-  what proves the "off the eight-bit grid" claim alone is not HDR; the 16-bit
-  container alone is not either. Changing only `target-peak` to 100 nits moves the
-  peak to 0.580078 (176.4 nits), so the options are live. The SDR fixture still
-  reports `BGRA`/`0x8058`/256 distinct/zero off-grid, unchanged.
-- **Why the display is blocked, checked in the installed crates rather than
-  recalled:** `wgpu-hal 27.0.4` (`metal/surface.rs:168-173`) already sets
-  `wantsExtendedDynamicRangeContent` when the surface format is `Rgba16Float`, and
-  lists that format in `metal/adapter.rs:362-366` — but `iced_wgpu 0.14.0`
-  (`window/compositor.rs:107-121`) picks the first `is_srgb()` format
-  (`Bgra8UnormSrgb`) and `iced_wgpu::Settings` has no format field. The swapchain
-  iced creates therefore can never be an extended-range one, and no amount of
-  application code changes that. wgpu also flips only the EDR flag, never the
-  colours space, so `kCGColorSpaceITUR_2100_PQ` would still have to be set on the
-  layer.
-- **What this session wired anyway**, so the picture cannot be wrong when it is
-  switched on: `video_surface` now maps `PixelFormat` to the matching Metal pixel
-  format and wgpu texture format (`RGBA16Float` rather than an sRGB view of a PQ
-  surface), and Settings prints `PlayerSnapshot.output.label()`, so the application
-  states what the surface carries instead of implying HDR.
-- **Still open:** a patched or vendored `iced_wgpu` format choice, or an
-  application-owned `CAMetalLayer`; then `SCREENROOM_HDR=extended`; then an owner
-  look at an HDR film on the XDR panel. Do **not** enable the switch before the
-  first of those exists.
-- **Also unproven and labelled as such:** the nits in the receipt are the PQ EOTF
-  applied to delivered codes, not a display measurement, and the fixture is
-  generated noise tagged PQ rather than a graded master. HLG deliberately stays on
-  the SDR path.
+- **Status:** IMPLEMENTED and measured headlessly, opt-in. The 16-bit surface, the
+  extended-range swapchain and the extended-range layer now exist, and a PQ file is
+  tone mapped into the panel's measured peak instead of into SDR. What is left is
+  the one thing no agent may do: look at an HDR film on the built-in panel and say
+  it is right. Decision and alternatives:
+  [`ADR-019_HDR_PRESENTATION.md`](ADR-019_HDR_PRESENTATION.md).
+- **What the panel reports** (Swift probe, no window): macOS 27.0.1 on Apple M4,
+  built-in display in a 2940×1912 mode at scale 2.0,
+  `maximumPotentialExtendedDynamicRangeColorComponentValue` **2.0**,
+  `maximumExtendedDynamicRangeColorComponentValue` **1.0** (nothing EDR on screen),
+  `maximumReferenceExtendedDynamicRangeColorComponentValue` 0.0, no reference
+  preset engaged. `rgba16Float` is renderable on the device.
+- **What was measured, headless** (`examples/hdr_check.rs`): the surface reads back
+  `'RGhA'` `0x52476841`, 8 bytes per pixel, 30 720-byte row at 3840, FBO `0x881a`,
+  **1 237 distinct green values against 246 for eight bits**, 137 822 samples off
+  the 8-bit grid, peak luma **380.6 nits = 1.875× the 203-nit reference white**
+  against a display ceiling of 2.0, and **84 628 of 169 641** sampled pixels above
+  reference white. The `float8` control (2 105 distinct, zero codes above 1.0)
+  keeps "off the eight-bit grid" from being confused with HDR. The SDR fixture is
+  unchanged: `BGRA`/`0x8058`/256 distinct/zero off-grid.
+- **The layer, read back from a real `CAMetalLayer`**
+  (`vendor/iced_wgpu/examples/metal_extended_range.rs`): half float swapchain →
+  `MTLPixelFormatRGBA16Float` (115), `wantsExtendedDynamicRangeContent` **true**,
+  colour space **`kCGColorSpaceExtendedSRGB`**; the eight-bit control stays at 81,
+  false, `kCGColorSpaceSRGB`.
+- **The whole application, hidden, release build:** `SCREENROOM_HDR=extended`
+  reports its own swapchain as `Rgba16Float` and delivers **24.789 fps at
+  14.62 % mean CPU** with zero uploads, against 24.634 fps at 14.14 % for the SDR
+  control — the same picture rate as the recorded baseline (24.4 fps, 13.95 %).
+- **How it works, in one line:** a vendored `iced_wgpu` (semantic diff in
+  `window/compositor.rs` only) selects `Rgba16Float` and re-tags the layer
+  extended sRGB; libmpv tone maps and gamut maps to `203 × headroom` nits; the
+  picture shader converts PQ to nits, scales by reference white and applies the
+  sRGB transfer function, so highlights above 1.0 are the extended range.
+- **A defect found and fixed on the way:** the picture was imported through an
+  sRGB view and the decoded value written into a non-sRGB target, so a mid-grey
+  code of 128 reached the display as 55. The UI was unaffected; the picture was
+  visibly too dark. The import is now non-sRGB and a test asserts 128 → 128. This
+  is a deliberate, measured change to the shipped SDR picture and is recorded in
+  ADR-019.
+- **Still open:** (1) the owner's look at an HDR10 film — the delivered headroom
+  cannot be read headlessly, because `maximumExtendedDynamicRangeColorComponentValue`
+  only rises while EDR content is on screen; (2) gamut is BT.709, because the
+  drawable is shared with the UI and has one colour space; lifting that needs the
+  picture's own layer, which ADR-019 rejects for now. `SCREENROOM_HDR` stays off
+  by default until (1). HLG deliberately stays on the SDR path.
+- **Also unproven and labelled as such:** the nits are the ST 2084 EOTF applied to
+  delivered codes, not a display measurement, and the fixture is generated noise
+  tagged PQ rather than a graded master.
 
 #### P1-04 · Close the remaining owner acceptance session
 
@@ -371,7 +382,7 @@ than reclassified.
 #### P1-06 · Whole-library online metadata enrichment (F05) — **core CLOSED, live blocked**
 
 - **Requirement:** F05.
-- **Status:** COMPLETE (provider-independent core) / BLOCKED (live calls). A TMDB-shaped provider, a durable `enrichment_queue` on schema 9, per-minute rate limiting, `Retry-After` handling, exponential backoff, a bounded transport with an overall deadline and a hostile-chunk guard, reconciliation precedence (manual beats NFO beats provider, and NFO only yields when the owner asks), and an artwork-retention gate that defaults to *do not store*. An unconfigured provider reports itself as not configured and makes zero requests. 33 integration tests. Settings has an *Online metadata* panel and a keyboard action for it.
+- **Status:** COMPLETE (core and transport) / BLOCKED only on an owner key. A TMDB-shaped provider, a durable `enrichment_queue` on schema 9, per-minute rate limiting, `Retry-After` handling, exponential backoff, a bounded transport with an overall deadline and a hostile-chunk guard, reconciliation precedence (manual beats NFO beats provider, and NFO only yields when the owner asks), and an artwork-retention gate that defaults to *do not store*. An unconfigured provider reports itself as not configured and makes zero requests. 33 integration tests, plus a real TLS transport (`rustls` + `webpki-roots`) that was proved against the live hosts without a key: `https://api.themoviedb.org/3/movie/550` answered **401** and `https://api.opensubtitles.com/api/v1/subtitles` answered **403**, which is the handshake, the request and the response all working and the provider correctly refusing an unauthenticated call. Redirects are capped at 3, only same-scheme same-host same-port, and an `https`→`http` redirect is refused. Settings has an *Online metadata* panel and a keyboard action for it.
 - **What is missing:** the online half. The offline half (local NFO) is complete.
 - **Where:** `crates/screenroom-core/src/nfo.rs` (the origin column and
   `metadata_origin` are where a provider lands), `apps/desktop/src/app.rs` Settings.
@@ -381,8 +392,8 @@ than reclassified.
   caching terms are the open question the PRD names); then a keyed, rate-limited,
   queued client with visible/recent items first, `metadata_origin = provider`, manual
   matches never overwritten, and bytes stored offline like posters today.
-- **Depends on:** **owner action** — provider choice, account/key, and a decision on
-  retaining provider images.
+- **Depends on:** **owner action** — a TMDB key, and a decision on retaining
+  provider images (the app defaults to *do not store*).
 - **Acceptance:** a scan of a folder of badly named files enriches titles, years,
   overviews and posters while offline reading still works; a manual match survives a
   re-enrichment.
@@ -395,7 +406,7 @@ than reclassified.
 #### P1-07 · Online subtitle search and download (F15) — **core CLOSED, live blocked**
 
 - **Requirement:** F15.
-- **Status:** COMPLETE (provider-independent core) / BLOCKED (live calls). OpenSubtitles-shaped search and download with Bengali (`bn`/`ben`), distinct quota (406), login (407) and rate-limit (429) states, a host allowlist that refuses a download link to loopback or an unrelated host, and an import into the existing bounded subtitle store that never touches the media file. 19 integration tests. Settings has a *Subtitle search* panel that lists language, release and format and a *Download and use* action; both are also in the keyboard action strip.
+- **Status:** COMPLETE (provider-independent core) / BLOCKED (live calls). OpenSubtitles-shaped search and download with Bengali (`bn`/`ben`), distinct quota (406), login (407) and rate-limit (429) states, a host allowlist that refuses a download link to loopback or an unrelated host, and an import into the existing bounded subtitle store that never touches the media file. 19 integration tests, and the same TLS transport; the live endpoint answered **403** without a key. Settings has a *Subtitle search* panel that lists language, release and format and a *Download and use* action; both are also in the keyboard action strip.
 - **What is missing:** search by title/release/hash/language, quota handling, and a
   user-triggered save into the existing imported-subtitle store.
 - **Where:** the `subtitles` table and `use_subtitle` path already accept a stored
@@ -405,7 +416,7 @@ than reclassified.
 - **Work:** owner registers and accepts the API terms; then a keyed client with
   quota/backoff, results showing language/release/format, and a *Download and use*
   action that writes into the existing bounded store.
-- **Depends on:** **owner action** — an OpenSubtitles account and key.
+- **Depends on:** **owner action** — an OpenSubtitles key.
 - **Acceptance:** search returns matches for a known film, a chosen subtitle is
   stored, handed to libmpv and reused offline; a quota error is reported, not
   swallowed.
@@ -417,7 +428,17 @@ than reclassified.
 #### P1-08 · Casting session with a real receiver (F19) — **session CLOSED, device unverified**
 
 - **Requirement:** F19.
-- **Status:** COMPLETE (session) / UNVERIFIED (no device). Description fetching and parsing, `AVTransport`/`RenderingControl` resolution with relative-URL handling, a session-scoped HTTP endpoint that serves one opaque token with correct `Range`/`206`/`416` responses, a hard lifetime, one-client accounting, `SetAVTransportURI`/`Play`/`Pause`/`Seek`/`Stop`/`GetTransportInfo` SOAP control reading the receiver's own state back, disconnect recovery, and a `Drop` that closes the listener. 36 tests drive the whole session against an in-process fake receiver, including a byte-exact `Range` fetch and a receiver that refuses `Play`. **No media has ever been played on real hardware** and the capability text says so.
+- **Status:** COMPLETE (session) / BLOCKED (no device on this network). A LAN survey on
+  2026-11-02 found **no MediaRenderer anywhere**: an mDNS service enumeration showed
+  only this Mac (AirPlay/RAOP, `model=Mac16,12`), a /24 sweep found six hosts of which
+  every non-router host exposes no media port and no mDNS name, and the owner's
+  Samsung TV did not advertise at all — it was not powered on. The app's own
+  `discover()` also could not *send* its search from a terminal-launched binary
+  (`EHOSTUNREACH 65`, macOS attributing local-network access to the terminal bundle),
+  which is why the failure message now says plainly that nothing was looked for
+  rather than reporting an empty network, and why the packaged app now carries
+  `NSLocalNetworkUsageDescription`. **No receiver has ever received a byte from
+  Screenroom.** Description fetching and parsing, `AVTransport`/`RenderingControl` resolution with relative-URL handling, a session-scoped HTTP endpoint that serves one opaque token with correct `Range`/`206`/`416` responses, a hard lifetime, one-client accounting, `SetAVTransportURI`/`Play`/`Pause`/`Seek`/`Stop`/`GetTransportInfo` SOAP control reading the receiver's own state back, disconnect recovery, and a `Drop` that closes the listener. 36 tests drive the whole session against an in-process fake receiver, including a byte-exact `Range` fetch and a receiver that refuses `Play`. **No media has ever been played on real hardware** and the capability text says so.
 - **What is missing:** a reachable permitted stream, DESCRIBE/SetAVTransport control,
   codec compatibility, disconnect recovery — and a receiver to test against.
 - **Where:** `apps/desktop/src/casting.rs`.
@@ -437,26 +458,33 @@ than reclassified.
 
 ---
 
-#### P1-09 · Accessibility beyond the keyboard (Q07)
+#### P1-09 · Accessibility beyond the keyboard (Q07) — **CLOSED, awaiting a VoiceOver pass**
 
 - **Requirement:** Q07.
-- **Status:** BLOCKED with evidence, as ADR-017. Verified rather than recalled: `grep -rn "accessib"` over `iced-0.14.0`, `iced_core-0.14.0` and `iced_winit-0.14.0` finds only an unrelated `Inaccessible(io::Error)` image variant; `Cargo.lock` contains no `accesskit` package at all; and iced 0.14.0's own changelog has no accessibility entry. There is no widget-level role/label surface and no tree to publish, so VoiceOver sees one opaque surface. Keyboard operation is not screen-reader support and is not presented as such.
-- **What is missing:** named controls, roles and values for assistive technology.
-- **Where:** the whole view layer (`apps/desktop/src/app.rs` view functions,
-  `design/`).
-- **Why it matters:** the PRD applies WCAG 2.2 AA, and "keyboard-reachable" is not
-  the same as "screen-reader-usable".
-- **Work:** check iced 0.14's accessibility status against its current
-  documentation; if there is no supported path, record the limit with the version
-  checked and a recovery route (a high-contrast/large-text mode is *not* a
-  substitute and must not be presented as one).
-- **Depends on:** an upstream capability that does not exist today.
-- **Acceptance:** either VoiceOver announces every control, or the limitation is
-  documented with evidence and a named alternative.
-- **Automated verification:** none today; the keyboard journey tests remain.
-- **Human verification:** VoiceOver walk-through, if it becomes possible.
-
----
+- **Status:** IMPLEMENTED and verified headlessly; the only thing left is the owner
+  listening to it. It was recorded as blocked because iced exposes nothing; it is
+  not blocked, because AppKit can be answered without iced's help.
+- **What was built.** `apps/desktop/src/accessibility.rs` publishes an immutable
+  snapshot of the current screen — role, label, value, enabled, focused and the
+  action each control performs — once per `view()`, and serves `NSAccessibility`
+  from it by setting `accessibilityChildren` on the window's content view. No class
+  swizzling, nothing winit owns is mutated, and `AXPress` pushes exactly one action
+  onto a bounded queue that the app drains into the same `Message` the pointer and
+  keyboard produce, so an accessibility press can never do something a click cannot.
+- **Verified, headlessly, window never shown, on a populated library**
+  (`SCREENROOM_AX_CHECK`): **0 controls before the bridge attaches, 13 after**, with
+  `labels_match true` (every element's label compared against the app's own
+  snapshot), `focus_match true` (`focused_label "Northern Lights"` is the card the
+  app's cursor is on), `pressed true / queued 1`, and an empty tree after shutdown.
+  Home, Library, Detail and Settings were each checked.
+- **What is not covered, stated rather than faked:** elements carry the window's
+  frame, not per-widget geometry, because iced gives the application no layout
+  geometry — so the VoiceOver cursor highlights the window rather than one card.
+  The kind/sort/watch/genre pick-lists are not bridged (an iced `pick_list` exposes
+  no per-option identity to press); text entry is not editable through AX, though
+  the Settings actions move real keyboard focus into the field.
+- **Owner step (about three minutes):** open the app, ⌘F5 for VoiceOver, VO+Right
+  through the header, heading and cards, and VO+Space on a card.
 
 #### P1-10 · Prove Unicode and Bengali subtitles render — **CLOSED 2026-11-01**
 
@@ -475,47 +503,57 @@ than reclassified.
 
 ---
 
-#### P1-11 · Re-measure the owner's real 4K HEVC Main10 file
+#### P1-11 · Re-measure the owner's real media — **CLOSED, and the row was wrong**
 
 - **Requirement:** F07, Q02, acceptance step 8.
-- **Status:** BLOCKED — `/Volumes` held only `mothership` and `Recovery` on
-  2026-11-01, so the 3240×2160 Main10 sample was unreachable.
-- **What is missing:** the number that matters. The recorded **19.449 fps** was
-  measured *before* native 4K delivery and *before* the post-load hold was fixed, so
-  it is stale in both directions: it discarded 4K detail and it lost ~6 frames per
-  load.
-- **Where:** `crates/screenroom-player/examples/frame_stall.rs`,
-  `SCREENROOM_PLAY_CHECK`.
-- **Why it matters:** every 4K claim in this repository currently rests on generated
-  fixtures.
-- **Work:** with the SSD mounted, run `frame_stall auto-copy <file> 20 150` and
-  `SCREENROOM_PLAY_CHECK` on the same file, and record both.
-- **Depends on:** **owner hardware** — the external SSD mounted.
-- **Acceptance:** both figures recorded in `HWDEC_EVIDENCE.md` with the file's real
-  dimensions.
-- **Automated verification:** the numbers themselves.
-- **Human verification:** step 8's five-minute battery observation.
+- **Status:** COMPLETE for what the drive actually holds, and the premise is
+  corrected rather than quietly satisfied. **There is no 3240×2160 file on the
+  SSD.** `find` over the whole volume at any depth finds no 4K-named file, and a
+  bounded ffprobe pass over the library reports no stream wider than 1920. The
+  library is 1080p: mostly HEVC 10-bit, with a large anamorphic group (1920×960 =
+  2:1, 1920×1040, 1920×800, 1920×804). The recorded "3240×2160 sample" is no
+  longer on this machine.
+- **What was measured instead, on the owner's real films through the application**
+  (release build, `SCREENROOM_PLAY_CHECK`, 12-second window):
 
----
+  | file | source | bridge | fps | mean CPU | uploads |
+  | --- | --- | --- | ---: | ---: | ---: |
+  | A Bronx Tale (HEVC 10-bit 1920×1080) | 23.976 fps | OpenGL | 22.58 | **13.11 %** | 0 |
+  | A Bronx Tale | 23.976 fps | software | 22.81 | 41.91 % | 260 |
+  | Green Book (HEVC 10-bit, 2:1 anamorphic) | 23.976 fps | OpenGL | 22.96 | **11.39 %** | 0 |
 
-#### P1-12 · Prove offline behaviour with the network actually off
+  On the material the owner actually watches, the GPU path delivers the source
+  rate at roughly a third of the CPU, and the 2:1 film is presented at 1920×960 —
+  its own display aspect ratio — rather than letterboxed.
+- **The whole library scans clean.** `prepare_library` over the real folder: 937
+  files visited, 775 imported, complete, **0 issues**, producing 300 movies, 18
+  series and 475 episodes with no work left untitled, 983 GB of media, every item
+  resolving in 0 ms.
+- **Poster extraction works on real media**: 1280×720 for a 16:9 film, **1440×720**
+  for the 2:1 film, 1330×720 for a 1.85:1 film — each at its own aspect.
+- **Still the owner's:** step 8's five-minute battery observation, which needs a
+  4K file this library does not contain. If a 4K sample is wanted, it has to be
+  provided.
+
+#### P1-12 · Prove offline behaviour — **mechanism proven, Wi-Fi-off run deferred by the owner**
 
 - **Requirement:** Q01, PRD acceptance criterion G.
-- **Status:** COMPLETE by construction and still not executed with Wi-Fi disabled. What changed: there is now a real network path, so "no network code" is no longer the argument — the argument is that every network call is behind an explicit owner action (an enrichment pass, a subtitle search, a cast session) and that an unconfigured provider makes zero requests, which 33 tests assert. The execution with Wi-Fi off remains the owner's step.
-- **What is missing:** the execution.
-- **Where:** nothing to change.
-- **Why it matters:** the PRD asks for this to be *proven*, and "no code calls the
-  network" is a reading, not a receipt.
-- **Work:** with the owner's agreement, turn Wi-Fi off, launch `dist/Screenroom.app`,
-  browse, play, quit, reopen, resume; note that nothing hangs or shows a spinner.
-- **Depends on:** **owner** (Wi-Fi is theirs). Can also be checked by the owner in
-  the same session as P1-04.
-- **Acceptance:** the full journey completes with no network and no error state.
-- **Automated verification:** a static assertion already exists that no HTTP client
-  is linked; that is weaker and must not be reported as the proof.
-- **Human verification:** yes.
-
----
+- **Status:** PARTIAL. The owner asked that Wi-Fi stay up while other work runs, so
+  the switch-off run is **deferred to the owner and still open**. What replaced the
+  old "there is no network code" argument is a measurement:
+  `scripts/check-no-network.sh` plays a file for eight seconds and samples every
+  socket the process holds, 5 times a second. Result: **37 samples, 0 samples
+  holding any socket at all** — no TCP, no UDP, not even a listener — while the
+  report confirms frames were delivered. Every network call the app can make
+  (an enrichment pass, a subtitle search, a cast session, receiver discovery) is
+  behind an explicit press, and 33 provider tests assert that an unconfigured
+  provider issues zero requests.
+- **What this does not prove:** behaviour when the *system* is offline, which is
+  what the PRD asks for. That remains the owner's run.
+- **The owner's step:** with the app packaged and a library already built, turn
+  Wi-Fi off, browse, play, quit, reopen and resume; nothing should hang, spin or
+  show an error. Record the result under "Owner session" in
+  `IMPLEMENTATION_STATUS.md`.
 
 #### P1-13 · A verified source directory (F23)
 
@@ -654,7 +692,7 @@ check that actually ran; `Action` is what is still owed and by whom.
 | Q00 | Installed local app | COMPLETE | bundle walk, `verify-bundle.sh` | — | — |
 | Q00B | Design system | COMPLETE | `ds_pinned.rs` at a pinned commit, visible theme string | machine-local sync | — |
 | Q01 | Offline | COMPLETE by construction | 33 provider tests assert zero requests when unconfigured | execute with Wi-Fi off | owner |
-| Q02 | Performance | COMPLETE (SDR) | 4K 24.39 fps / 13.95 % CPU; paging; startup ~1.2 s | EDR window (P1-03) | owner decision |
+| Q02 | Performance | COMPLETE (SDR and HDR) | 4K 24.39 fps / 13.95 % CPU; extended range 24.79 fps / 14.62 %; paging; startup ~1.2 s | the owner's look at HDR (P1-03) | owner |
 | Q03 | Fidelity | COMPLETE | `step_7`, anamorphic test | the look | owner |
 | Q04 | Portability | COMPLETE | layout, `cfg` boundaries, `cargo check` for the Windows target | real Windows build | owner |
 | Q05 | Security and privacy | COMPLETE | argument vectors, root canonicalisation, credential redaction tests, cast host allowlist | — | — |
@@ -691,21 +729,28 @@ cd crates/screenroom-player/examples/gl-path-probe && \
 
 ## 8. Continuation point
 
-**Updated 2026-11-01, end of the second session.** HEAD is `1deff6d`, the tree is
-clean, 521 tests pass (three consecutive full runs), and `cargo fmt --check`,
+**Updated 2026-11-02.** The second session's note below is kept as written; the
+HDR half of item 1 has since been implemented (ADR-019): the swapchain is
+`Rgba16Float` behind a vendored `iced_wgpu`, the layer is tagged extended sRGB and
+asks for extended range, libmpv tone maps into the measured 406-nit display peak,
+and the application reports 24.789 fps at 14.62 % mean CPU with zero uploads on
+the HDR10 fixture. The remaining HDR step is the owner's look, and the switch is
+still off by default.
+
+**2026-11-01, end of the second session.** HEAD was `1deff6d`, the tree was
+clean, 521 tests passed (three consecutive full runs), and `cargo fmt --check`,
 `cargo clippy -D warnings`, `python3 scripts/no_comments.py check`,
 `scripts/package-macos.sh`, `scripts/verify-bundle.sh`,
-`scripts/check-quit-routing.sh` and `scripts/check-terminate-routing.sh` all pass.
+`scripts/check-quit-routing.sh` and `scripts/check-terminate-routing.sh` all passed.
 
 What a next session should pick up, in this order:
 
-1. **P1-03's display half.** The 16F surface and the passthrough exist and are
-   measured; `iced_wgpu 0.14` cannot select an extended-range swapchain. Either
-   vendor/patch iced's format choice or give the application its own
-   `CAMetalLayer` with `wantsExtendedDynamicRangeContent` and
-   `kCGColorSpaceITUR_2100_PQ`, then enable `SCREENROOM_HDR=extended` and look at a
-   film. Do not enable the switch before that exists — the desktop layer would
-   import a PQ surface through an sRGB view.
+1. **P1-03's display half — done 2026-11-02, one look outstanding.** A vendored
+   `iced_wgpu` selects `Rgba16Float` and tags the layer `kCGColorSpaceExtendedSRGB`;
+   libmpv tone maps into the measured display peak. What remains is
+   `SCREENROOM_HDR=extended` plus an owner look at a film, then flipping the
+   default. See ADR-019 for why a PQ-coloured layer and a shared drawable cannot
+   both be right.
 2. **P1-05 native PiP.** ADR-016 records the constraint. The missing piece is an
    `AVSampleBufferDisplayLayer` fed from `SurfaceFrame`s as `CVPixelBuffer`s; the
    surfaces now exist, so this is a bounded project rather than a guess.
@@ -756,7 +801,7 @@ check that actually ran; `Action` is what is still owed and by whom.
 | Q00 | Installed local app | COMPLETE | bundle walk, `verify-bundle.sh` | — | — |
 | Q00B | Design system | COMPLETE | `ds_pinned.rs` at a pinned commit, visible theme string | machine-local sync | — |
 | Q01 | Offline | COMPLETE by construction | 33 provider tests assert zero requests when unconfigured | execute with Wi-Fi off | owner |
-| Q02 | Performance | COMPLETE (SDR) | 4K 24.39 fps / 13.95 % CPU; paging; startup ~1.2 s | EDR window (P1-03) | owner decision |
+| Q02 | Performance | COMPLETE (SDR and HDR) | 4K 24.39 fps / 13.95 % CPU; extended range 24.79 fps / 14.62 %; paging; startup ~1.2 s | the owner's look at HDR (P1-03) | owner |
 | Q03 | Fidelity | COMPLETE | `step_7`, anamorphic test | the look | owner |
 | Q04 | Portability | COMPLETE | layout, `cfg` boundaries, `cargo check` for the Windows target | real Windows build | owner |
 | Q05 | Security and privacy | COMPLETE | argument vectors, root canonicalisation, credential redaction tests, cast host allowlist | — | — |

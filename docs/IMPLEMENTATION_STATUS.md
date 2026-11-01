@@ -1875,3 +1875,110 @@ cannot carry https. No media has been played on a real cast receiver. No VoiceOv
 pass is possible on iced 0.14, which ships no accessibility tree at all — recorded
 as ADR-017 with the exact evidence. And the owner's own 4K sample and five-minute
 battery observation still need the external SSD and the owner.
+
+## The owner's real library, and the real media measurements (2026-11-02)
+
+The external SSD was connected for this session, so the checks that had been
+waiting on it ran against the owner's actual media instead of generated fixtures.
+Everything below is read-only: the media folder was scanned in place, no file was
+written, moved or converted, and the library database lives in a temporary
+directory.
+
+**The recorded 3240×2160 sample is not on the drive.** `find` over the whole volume
+finds no file at any 4K resolution, and a bounded ffprobe pass over the library
+reports no stream wider than 1920. The library is **1080p**: mostly HEVC 10-bit,
+with a large anamorphic group (1920×960 = 2:1, 1920×1040, 1920×800, 1920×804).
+What is written below is therefore real-media evidence at 1080p, not the 4K
+re-measurement the backlog had planned; that row is corrected rather than quietly
+satisfied.
+
+**Scan of the whole library.** `prepare_library` over
+`/Volumes/bleh/movies & shows`: **937 files visited, 775 imported, complete, 0
+issues**, producing **300 movies, 18 series and 475 episodes without a single work
+left untitled**, 983 GB of media, and every item resolving in 0 ms with
+`available = true`. Episode ordering from real folder names is right
+(`Adolescence · S01E01` … `S01E04`).
+
+**Playback of real media through the application**, release build, 12-second
+window, by `SCREENROOM_PLAY_CHECK`:
+
+| file | source | bridge | fps | mean CPU | uploads |
+| --- | --- | --- | ---: | ---: | ---: |
+| A Bronx Tale (HEVC 10-bit 1920×1080) | 23.976 fps | OpenGL | 22.58 | **13.11 %** | 0 |
+| A Bronx Tale | 23.976 fps | software | 22.81 | 41.91 % | 260 |
+| Green Book (HEVC 10-bit, 2:1 anamorphic) | 23.976 fps | OpenGL | 22.96 | **11.39 %** | 0 |
+
+So on the material the owner actually watches, the GPU path delivers the source
+frame rate at roughly a third of the CPU, and the 2:1 film is presented at
+1920×960 — its own display aspect ratio — rather than letterboxed into 16:9.
+
+**Poster extraction from real media.** One frame from three real films, at the
+app's own scaling: `A Bronx Tale` → 1280×720 JPEG, `Green Book` → **1440×720**
+(correct for 2:1), `28 Days Later` → 1330×720 (1.85:1). Aspect is preserved per
+film rather than forced to a single poster shape.
+
+## The providers can actually reach the internet now (2026-11-02)
+
+Until this session the online halves of F05 and F15 were complete except for one
+thing that made them unreachable: the only transport spoke plain HTTP and refused
+`https`, and both providers default to an HTTPS base URL. That is fixed.
+
+**The transport decision.** `rustls 0.23` with the `ring` provider and the
+`webpki-roots` trust set, recorded as ADR-018. The platform HTTP client
+(`NSURLSession`, WinHTTP) would give better OS trust-store and proxy behaviour, and
+it was rejected for a reason worth writing down: neither accepts a caller-supplied
+trust anchor, so the requirement that certificate validation is *real* could only be
+demonstrated by weakening it. With `rustls` a test can inject a self-signed root and
+also prove that an untrusted certificate **and** a correctly-trusted certificate
+issued for the wrong name are both refused.
+
+**What the transport guarantees.** One deadline spanning connect, handshake, write,
+read and every redirect hop; every socket timeout re-armed from the remaining budget;
+a response cap where a declared `Content-Length` over the cap is refused before any
+body is read; redirects capped at 3, same scheme, same host, same port, GET only,
+with an `https`→`http` redirect refused outright so a key can never be replayed to a
+plaintext origin. There is no "insecure" mode at all; the only way to bypass
+validation is a `#[cfg(test)]` constructor.
+
+**It was proved against the real services, without a key.** On this machine:
+
+```
+https://api.themoviedb.org/3/movie/550            -> 401  "The provider rejected the configured key."
+https://api.opensubtitles.com/api/v1/subtitles    -> 403  "The provider rejected the configured key."
+```
+
+A 401/403 from the real host is the handshake, the request and the response all
+working, with the provider correctly refusing an unauthenticated call. What remains
+is only a key.
+
+**Consequence.** `capability()` now reports *configured* for both providers when a
+key is present, instead of failing closed on a scheme it could not carry. Settings →
+*Online metadata* and *Subtitle search* are live the moment a key exists.
+
+**Licensing.** `webpki-roots` is the first CDLA-Permissive-2.0 component in this
+graph — a data licence over a certificate list, permissive, recorded in
+`docs/LICENSING.md` because a release notice should name it.
+
+### What the real library revealed (2026-11-02)
+
+Scanning the owner's actual folder, not a fixture, produced three findings worth
+keeping.
+
+**The scanner is correct on a real exFAT drive.** The folder holds **162 macOS
+AppleDouble files** (`._22 Jump Street - 2014.mp4` and so on) that look like media by
+extension. The scan visited 937 entries, imported **775**, and the database contains
+**zero** files whose path starts with `._` and **zero** hidden files: only `.mp4` and
+`.mkv` are present. Importing those 162 stubs would have produced unplayable cards,
+and it does not happen.
+
+**Two of the owner's films are genuinely unreadable.** A decode probe over every
+file found `10 Cloverfield Lane - 2016.mp4` and `Cloverfield - 2008.mp4` fail with
+`moov atom not found` — truncated or unfinished downloads, not an application fault.
+The application does the right thing: `artwork_check` reported *"10 Cloverfield Lane
+has no usable picture: the file cannot be decoded at all (the app records it and
+stops asking)"*, so they appear as unplayable rather than as blank cards, and the
+scanner does not retry them forever. **The owner may want to re-download those two.**
+
+**Poster extraction works on real media at real aspect ratios**: 1280×720 for a 16:9
+film, 1440×720 for the 2:1 film, 1330×720 for the 1.85:1 film, each stored and
+re-decoded by ffprobe.

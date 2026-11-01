@@ -644,3 +644,247 @@ transcript is not mistaken for a regression in this change.
 concurrently (surface pool to 16, `previous_surface`, a `cfg(macos)` on
 `report_swap`). This change is additive on top of that work and keeps it; the
 extended-range format is a separate axis from the surface pool.
+
+## HDR10 on screen: the extended-range layer, measured (2026-11-02)
+
+Decision and rationale: [`docs/ADR-019_HDR_PRESENTATION.md`](../../docs/ADR-019_HDR_PRESENTATION.md).
+This section supersedes the "one thing that blocks HDR on screen" conclusion of
+the 2026-11-01 section: the swapchain can be half float, and it now is.
+
+### The hardware, read rather than assumed
+
+`sw_vers` reports **macOS 27.0.1 (26A434)**, `Darwin 27.0.0`, `arm64`. A Swift
+probe using `NSScreen`, `MTLCreateSystemDefaultDevice` and `CGDisplayCopyDisplayMode`
+(no window, nothing raised) reports:
+
+| Fact | Value |
+|---|---|
+| GPU | `Apple M4`, registry 4294968222, recommended working set 12.7 GB |
+| Metal families | apple1 … apple9, `metal3`, `metal4` |
+| `rgba16Float` | **renderable** (a 64×64 render-target texture is created) |
+| `bgra8Unorm_srgb`, `rgba8Unorm_srgb`, `rgba32Float`, `bgr10a2Unorm`, `rgba16Unorm` | renderable |
+| Display | built-in, display id 1, scale 2.0, mode 1470×956 pt = **2940×1912 px** at 60 Hz |
+| Display colour space | ICC-based `Color LCD` (no reference/HDR preset engaged) |
+| `maximumPotentialExtendedDynamicRangeColorComponentValue` | **2.0** |
+| `maximumExtendedDynamicRangeColorComponentValue` | **1.0** |
+| `maximumReferenceExtendedDynamicRangeColorComponentValue` | 0.0 |
+
+`2.0` is the panel advertising that an EDR window on it may drive up to twice SDR
+white; `1.0` is what it currently offers because no EDR content is on screen.
+Both are the OS's answer, not a brightness measurement — this session did not
+measure panel nits and does not claim to.
+
+Lockfile versions used for every statement below: `iced 0.14.0`,
+`iced_wgpu 0.14.0`, `iced_winit 0.14.1`, `wgpu 27.0.1`, `wgpu-core 27.0.3`,
+`wgpu-hal 27.0.4`, `libmpv` 0.41.0 (client API 2.5).
+
+### The constraint, re-checked in the installed sources
+
+- `wgpu-hal-27.0.4/src/metal/surface.rs:170–173` still sets
+  `wantsExtendedDynamicRangeContent` exactly when the surface format is
+  `Rgba16Float`, and `src/metal/adapter.rs:362–366` still offers
+  `[Bgra8Unorm, Bgra8UnormSrgb, Rgba16Float, Rgb10a2Unorm?]` as surface formats.
+- `iced_wgpu-0.14.0/src/window/compositor.rs` still chooses the format itself and
+  `src/settings.rs` still has no format field. The escape hatches were checked
+  again and are not usable as-is:
+  - `iced_graphics::compositor::Compositor` is a trait, and `iced_winit` selects
+    it through `<P::Renderer as compositor::Default>::Compositor`, so a custom
+    compositor requires a custom `Renderer` type. `iced::Element` is fixed to
+    `iced_renderer::Renderer`, which means that route rewrites every signature in
+    `apps/desktop`.
+  - `iced::application(...)` exposes no renderer settings beyond
+    `graphics::Settings` (vsync, font, text size, antialiasing).
+  - `iced_graphics::color::GAMMA_CORRECTION` and its `web-colors` feature are
+    compile-time; enabling or disabling one changes the whole UI's colour
+    packing, not the surface format.
+
+**One new fact, and it decides the colour handling:** `iced`'s default features
+include `web-colors`, so `color::GAMMA_CORRECTION` is **false** and
+`color::pack` writes authored sRGB components. The compositor consequently
+selects the *non-sRGB* `Bgra8Unorm`, and the layer carries
+`kCGColorSpaceSRGB`. Measured in a hidden-window run, not inferred:
+
+```
+compositor: selected Bgra8Unorm alpha PostMultiplied gamma_correction false
+```
+
+So the renderer's convention is "the drawable holds sRGB-encoded values". The
+picture has to arrive in that same encoding, and the extended layer has to use an
+extended space with the **same transfer function**, which is
+`kCGColorSpaceExtendedSRGB` — not `kCGColorSpaceITUR_2100_PQ` (a PQ layer would
+be right only if the picture had the drawable to itself) and not
+`kCGColorSpaceExtendedLinearSRGB` (which is what CoreAnimation picks by default
+and what would make the UI, packed as sRGB codes, display wrong).
+
+### What was implemented
+
+- `vendor/iced_wgpu`: the published `iced_wgpu 0.14.0` with a semantic diff
+  confined to `src/window/compositor.rs` — `select_format` (upstream's
+  expression, plus `Rgba16Float` when `SCREENROOM_HDR=extended` and the surface
+  offers it), the layer colour-space override, a layer-state reader, and five
+  unit tests — plus the dependencies and the receipt example in `Cargo.toml`.
+  It is wired in with `[patch.crates-io]` and excluded from the workspace so its
+  upstream formatting is not rewritten; its own tests and example run with
+  `--manifest-path`.
+- `crates/screenroom-player/src/display.rs`: the presentation contract. The
+  ST 2084 inverse EOTF and its inverse, the 203-nit reference white, and
+  `DisplayTarget` (headroom, peak nits, and whether the peak was measured or
+  assumed). The headroom is read once, on the main thread, from
+  `NSScreen.mainScreen`.
+- `gl_render.rs`: the extended options became a tone map into the display's real
+  peak — `target-prim=bt.709`, `target-trc=pq`, `target-peak=<peak>`,
+  `tone-mapping=bt.2390`, `hdr-compute-peak=no`. The previous pass-through
+  (`tone-mapping=clip`, `target-peak` = the file's own tag) is only correct for a
+  PQ-coloured layer, which this is not; with it, 168 970 of 169 641 sampled
+  pixels were above SDR white and everything above the panel's ceiling would have
+  clipped.
+- `apps/desktop/src/video_surface.rs`: the picture shader now converts a PQ code
+  to nits, scales by the reference white, and applies the sRGB transfer function
+  — so the value 1.0 is reference white and values above it are the extended
+  range, in the same encoding as the UI. The PQ constants are generated into the
+  WGSL from the crate's constants, so the receipt and the shader cannot drift.
+  The `IOSurface` is imported **without** an sRGB view.
+- `apps/desktop/src/video_surface.rs`, unrelated to HDR but found by the
+  measurement below: the sRGB view was decoding the surface and the decoded value
+  was written into a non-sRGB target, so a mid-grey code of 128 reached the
+  buffer as **55**. That is a visible gamma error in the shipped eight-bit path;
+  it is fixed, and a test asserts `128 → 128` through the real
+  `texture_from_surface` path.
+
+### The layer, read back from a real `CAMetalLayer`
+
+`vendor/iced_wgpu/examples/metal_extended_range.rs`, unmodified crate, offscreen
+32×18 `NSView`, `wgpu` 27, no window:
+
+```
+[hardware] metal_device Apple M4
+[capability] potential_edr_headroom 2
+[sdr] swapchain_format Bgra8UnormSrgb
+[sdr] layer_pixel_format 81
+[sdr] layer_wants_extended_dynamic_range false
+[sdr] layer_colorspace_wgpu kCGColorSpaceSRGB
+[sdr] layer_colorspace_fork kCGColorSpaceSRGB
+[extended] swapchain_format Rgba16Float
+[extended] layer_pixel_format 115
+[extended] layer_wants_extended_dynamic_range true
+[extended] layer_colorspace_wgpu kCGColorSpaceExtendedLinearSRGB
+[extended] layer_colorspace_fork kCGColorSpaceExtendedSRGB
+[receipt] ok
+```
+
+`81` is `MTLPixelFormatBGRA8Unorm_sRGB` and `115` is `MTLPixelFormatRGBA16Float`.
+Two facts here are worth stating plainly: wgpu flips the EDR flag for the half
+float swapchain and nothing else, and CoreAnimation's own default colour space
+for an EDR layer is extended **linear** sRGB — which is why the fork overrides it.
+The eight-bit control is left exactly as it was.
+
+### The delivered range, headless
+
+```
+cargo run -p screenroom-player --example hdr_check -- .artifacts/media/bench-4k-hdr10.mp4 2 all
+```
+
+| Measurement | `sdr` | `float8` (control) | `extended` |
+|---|---:|---:|---:|
+| Surface fourcc | `BGRA` `0x42475241` | `RGhA` `0x52476841` | `RGhA` `0x52476841` |
+| Bits per channel | 8 | 16 | 16 |
+| `GL` internal format | `0x8058` | `0x881a` | `0x881a` |
+| `MPV_RENDER_PARAM_DEPTH` | 0 | 16 | 16 |
+| Extended range requested | no | no | **yes** |
+| Distinct green values | 246 | 2 105 | **1 237** |
+| Samples off the 8-bit grid | 0 | 113 558 | **137 822** |
+| Peak green code | 1.000000 | 1.000000 | 0.653809 |
+| Mean luma | — | — | 182.2 nits |
+| Peak luma | — | — | **380.6 nits** |
+| Peak vs reference white | — | — | **1.875×** |
+| Samples above reference white | — | — | **84 628 of 169 641** |
+| Delivered peak, extended linear | — | — | **1.875** (green channel 1.993) |
+| Display ceiling, extended linear | — | — | 2.000 |
+
+The extended pass now reports its own target in the output description:
+
+```
+[extended] output 16 bits per channel, pq/bt.709, tone mapping bt.2390, target peak 406 nits
+[extended] display 406 nits peak (2 x 203 nits reference white, measured)
+[extended] display_assumption measured
+```
+
+Three things in that table are the evidence, and one is a correction:
+
+1. **The panel's headroom is what bounds the picture, and it is reached.**
+   `peak_luma_code 0.647256` is 380.6 nits, `1.875×` the 203-nit reference white,
+   against a ceiling of `2.0`. Half the sampled pixels (84 628 of 169 641) are
+   above reference white. On the eight-bit path the ceiling is 1.000000 by
+   construction.
+2. **More than eight bits survived** — 1 237 distinct green values against 246,
+   with 137 822 samples off the 8-bit grid. The `float8` control (2 105 distinct,
+   also off-grid) is why "off the grid" alone is not claimed as HDR.
+3. **Nothing exceeds the display.** The tone map is asked for 406 nits and
+   delivers 380.6; `above_one` is 0 by design, because the whole point of
+   tone mapping into a bounded target is that the master's 9 407-nit codes become
+   displayable ones instead of being clipped by the compositor.
+4. **The previous pass-through is no longer claimed.** The 2026-11-01 receipt's
+   "0.653 vs 1.076 peak code, 9 407 nits" measured what a *layer* would clip; it
+   described the surface, not a display. This one is bounded by the display and
+   says so.
+
+The SDR control is unchanged on the SDR fixture:
+
+```
+cargo run -p screenroom-player --example hdr_check -- .artifacts/media/bench-4k-hevc-10bit.mp4 2 sdr
+→ surface_fourcc BGRA number 0x42475241, 8 bits, 15360 bytes per row
+→ fbo_internal_format 0x8058, distinct_green 256, off_grid 0, above_one 0
+```
+
+And per file, with the switch on: an SDR file still reaches an eight-bit surface,
+and the shipped default still reaches one for an HDR file.
+
+```
+… bench-4k-hdr10.mp4 0.2 player      → 16 bits, pq/bt.709, bt.2390, 406 nits, RGBA16Float, 8 B/px
+… bench-4k-hevc-10bit.mp4 0.2 player → 8 bits, srgb, mpv default, BGRA8, 4 B/px
+… bench-4k-hdr10.mp4 0.2 player-sdr  → 8 bits, srgb, mpv default, BGRA8, 4 B/px
+```
+
+### The whole application, end to end, hidden
+
+`SCREENROOM_WINDOW=hidden` with the play check (never raised, never activated),
+release build, 10-second sample, four-corner 3840×2160 HEVC Main10 HDR10 fixture:
+
+| Run | Swapchain | Delivered fps | Drawn fps | Uploaded fps | CPU mean / max (%) | RSS mean (KiB) | Startup (ms) |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `SCREENROOM_HDR=extended` | `Rgba16Float` | 24.789 | 23.495 | 0.000 | 14.62 / 47.70 | 163 413 | 766.2 |
+| default (SDR) | `Bgra8Unorm` | 24.634 | 23.992 | 0.000 | 14.14 / 50.50 | 199 898 | 669.9 |
+
+The swapchain format is printed by the application itself, so the line below is
+the application's own compositor, not a stand-in:
+
+```
+video surface: target Rgba16Float, extended range true
+video surface: target Bgra8Unorm, extended range false
+```
+
+Against the recorded baseline of 24.4 fps at 13.95 % mean CPU, the extended path
+delivers 24.79 fps at 14.62 % in a single run — the same picture rate with no
+upload, and a CPU difference inside the run-to-run spread of one sample. RSS is
+*lower* with the half-float swapchain in this run, which is allocator behaviour,
+not a claim.
+
+### What is still not verified, and what only the owner can see
+
+- **No eye has seen the extended range on the panel.** `maximumExtendedDynamic
+  RangeColorComponentValue` rises above 1.0 only while EDR content is on screen,
+  so the headroom actually granted to the window cannot be read headlessly, and
+  a screenshot cannot carry it. The delivery is proven up to the swapchain and
+  the layer flags; the last step needs a look at an HDR10 film on the built-in
+  panel.
+- **The fixture is generated noise tagged PQ**, not a graded master, and the nits
+  are the ST 2084 EOTF applied to delivered codes, not a display measurement.
+- **Gamut is BT.709.** The drawable is shared with the UI and carries one colour
+  space, so the master's BT.2020 is gamut mapped into the sRGB primaries. HDR
+  luminance and 10-bit precision reach the panel; wide-gamut saturation does
+  not. [`docs/ADR-019_HDR_PRESENTATION.md`](../../docs/ADR-019_HDR_PRESENTATION.md)
+  records why and what would lift it.
+- **The 16-bit swapchain costs GPU memory**: 2940×1912 at 8 bytes per pixel across
+  the swapchain's drawables, against 4 bytes on the eight-bit path. Not measured
+  as a GPU allocation here.
+- **`SCREENROOM_HDR` stays off by default** until the owner has looked.

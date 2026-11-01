@@ -263,6 +263,8 @@ Helpers (`scripts/`, all local, nothing published):
 scripts/package-macos.sh [DEST]              # dist/Screenroom.app, ad-hoc signed, bundled libmpv
 scripts/verify-bundle.sh [APP]               # bundle checks without opening it
 scripts/check-quit-routing.sh                # hidden-window model check
+scripts/check-terminate-routing.sh           # Dock Quit / logout routes through the close path
+scripts/check-no-network.sh [MEDIA] [SEC]    # playback opens no socket (not a Wi-Fi-off proof)
 scripts/probe-library.sh ROOT OUT.jsonl      # read-only ffprobe of a real library
 scripts/capture-window.sh OUT.png            # Screenshot of Screenroom's own window
 scripts/drive-app.sh library|enter|space|left|right|capture NAME   # foreground, gated

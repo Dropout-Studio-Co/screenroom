@@ -19,7 +19,7 @@ does its half: `wgpu-hal`'s Metal surface sets
 `wantsExtendedDynamicRangeContent` when the surface format is `Rgba16Float`.
 Only the format choice was missing.
 
-**What the patch changes.** Two files:
+**What the patch changes.** Three files:
 
 - `Cargo.toml` — macOS-only dependencies on `objc2`, `objc2-core-foundation`,
   `objc2-core-graphics` and `raw-window-handle`, needed to set the layer's colour
@@ -27,9 +27,16 @@ Only the format choice was missing.
 - `src/window/compositor.rs` — a `SCREENROOM_HDR` gate; a pure
   `select_format(available, extended_range, gamma_correction)` helper that returns
   `Rgba16Float` only when the variable asks for extended range *and* the surface
-  offers that format, and otherwise reproduces upstream's selection exactly; and a
-  macOS-only step that sets the window layer's extended-range flag and colour
-  space once the surface exists.
+  offers that format, and otherwise reproduces upstream's selection exactly; a
+  macOS-only step that sets the window layer's colour space once the surface
+  exists (`wgpu-hal` sets `wantsExtendedDynamicRangeContent` itself, and
+  CoreAnimation's own default for an EDR layer is extended *linear* sRGB, which is
+  the wrong transfer function for a renderer that packs sRGB-encoded values); and
+  the receipt example that reads those facts back from a real `CAMetalLayer`.
+- `examples/metal_extended_range.rs` — an offscreen `NSView` and a real `wgpu`
+  surface, so the swapchain format, the flag and the colour space can be checked
+  headlessly, with an eight-bit control. It needs `objc2-app-kit` as a
+  dev-dependency for `NSView` and `NSScreen`.
 
 **What it does not change.** With `SCREENROOM_HDR` unset or set to anything other
 than `extended`, `select_format` returns what upstream's code returned, so every
@@ -38,7 +45,15 @@ no rendering code, touches no shader, and changes no other file.
 
 **How to update it.** Take the new upstream release, re-apply the two changes
 above, and re-run `cargo test --workspace` plus `SCREENROOM_HDR=extended` on an
-HDR10 file. If a future iced release exposes the swapchain format through
+HDR10 file. This crate is excluded from the workspace, so its own tests and the
+receipt run against its own lockfile:
+
+```
+CARGO_TARGET_DIR=$PWD/target cargo test --manifest-path vendor/iced_wgpu/Cargo.toml --lib
+CARGO_TARGET_DIR=$PWD/target cargo run  --manifest-path vendor/iced_wgpu/Cargo.toml --example metal_extended_range
+```
+
+If a future iced release exposes the swapchain format through
 `Settings`, delete this directory, remove the `[patch.crates-io]` entry in the root
 `Cargo.toml`, and use the setting instead.
 

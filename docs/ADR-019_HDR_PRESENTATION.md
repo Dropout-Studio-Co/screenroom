@@ -1,4 +1,4 @@
-# ADR-005 — HDR presentation on macOS: an extended-range swapchain
+# ADR-019 — HDR presentation on macOS: an extended-range swapchain
 
 - **Date:** 2026-11-02
 - **Status:** Accepted; implemented; one owner check outstanding
@@ -109,6 +109,11 @@ converting it twice.
 - **Cost of the fork.** iced upgrades re-apply a ~330-line diff in one file
   plus a manifest block. Nothing else in the tree knows about the fork, and the
   eight-bit path is the upstream expression when the switch is off.
+- **How the switch is set today.** `SCREENROOM_HDR=extended` is an environment
+  variable, so it applies to a launch from a shell (`cargo run`, or the packaged
+  binary started from a terminal). A Dock double-click cannot carry it, so an
+  owner-facing toggle is a Settings control in `apps/desktop/src/app.rs` — the one
+  piece of this decision that lives outside the files this change owns.
 - **Verification limits.** `maximumExtendedDynamicRangeColorComponentValue` only
   rises above 1.0 while EDR content is actually on screen, so the *delivered*
   headroom cannot be read headlessly; and the fixture is generated noise, not a
