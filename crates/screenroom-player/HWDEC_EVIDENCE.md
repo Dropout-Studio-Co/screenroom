@@ -221,3 +221,39 @@ the events, take `time-pos` for `PLAYBACK_RESTART` from the last observed value,
 and relax the `apply_property` gates so those events are not dropped before
 `FILE_LOADED` arrives. `position_ready` must keep waiting for a real `time-pos`
 value, or a fresh load can write position 0 over a resume point.
+
+## HDR10 on the software path (2026-11-01)
+
+Fixture: generated 3840×2160 24 fps HEVC Main10 with `bt2020nc`/`smpte2084`,
+BT.2020 primaries and mastering metadata (1000-nit MaxCLL). Played with
+`auto-copy`: **23.948 fps at native 3840×2160**, `hwdec-current=videotoolbox-copy`,
+CPU mean 269.7 % / max 344.4 %, RSS mean 528 MiB / max 573 MiB.
+
+One delivered frame compared against the same source rendered by `mpv -o`
+(libplacebo tone mapping), both measured with `signalstats`. The mpv PNG is
+16-bit and is divided by 257 to compare:
+
+| Frame | YMIN | YLOW | YAVG | YHIGH | YMAX |
+|---|---:|---:|---:|---:|---:|
+| Screenroom delivered | 8 | 29 | 129.2 | 226 | 255 |
+| mpv/libplacebo tone-mapped | 8.7 | 29.2 | 128.7 | 226.5 | 245.8 |
+
+So the software path **does** receive an already tone-mapped SDR image — mpv tone
+maps in its video chain, because the sw renderer targets 8-bit RGB — and it matches
+the libplacebo reference to within 0.4 % of mean luma and 0.2 % at YHIGH. Only the
+top of the range clips slightly (255 against 245.8).
+
+What remains a limitation, stated plainly:
+
+- The frame is 8-bit SDR RGB with no colour metadata, so HDR10 is never passed
+  through: highlight luminance is compressed to the SDR range instead of being
+  presented at its mastered level, and the window never asks macOS for an
+  HDR/EDR surface.
+- The tone-mapping curve is mpv's default. This app neither chooses nor labels it.
+- There is no path to `target-colorspace-hint` or EDR from here. `render.h` (0.41)
+  gives the sw backend single-plane RGB only, and this libmpv exports only `sw`
+  and `opengl` render APIs.
+
+Not proven: a real HDR10 film, an HDR-capable display, and how this looks to a
+person. One frame of one generated fixture is the whole sample, and the owner's
+media was not mounted.

@@ -1536,3 +1536,24 @@ still), so loop order is not the fix. Next action: take `dwidth`, `dheight`,
 synchronous reads, relaxing the `apply_property` gates for them, while
 `position_ready` keeps waiting for a real `time-pos` so a fresh load cannot write
 0 over a resume point. Full numbers: `HWDEC_EVIDENCE.md`.
+
+### HDR10 measured on the software path (2026-11-01)
+
+A generated 4K HEVC Main10 HDR10 fixture (`bt2020nc`/`smpte2084`, BT.2020, 1000-nit
+MaxCLL) delivered **23.948 fps at native 3840×2160** with `videotoolbox-copy`,
+CPU mean 269.7 %, RSS mean 528 MiB. One delivered frame matched mpv's own
+libplacebo tone-mapped render to within 0.4 % of mean luma (129.2 vs 128.7) and
+0.2 % at YHIGH, so the path receives a correctly tone-mapped SDR image already;
+only the top of the range clips (255 vs 245.8).
+
+The limitation is therefore not tone mapping but **HDR itself**: the output is
+8-bit SDR RGB with no colour metadata, highlights are compressed into the SDR
+range rather than presented at their mastered luminance, the curve is mpv's default
+and unlabelled, and nothing here can ask macOS for an EDR surface. Not proven: a
+real HDR10 film on a real HDR display, and what a person sees.
+
+Gate G2's on-screen half is still open. The app can hide its window
+(`SCREENROOM_WINDOW=hidden`), but no check mode plays a file and reports the
+presented frame rate, so on-screen 4K remains unmeasured. Next action: add that
+check mode, then run it with `SCREENROOM_ALLOW_FOREGROUND=0` and record the
+presented rate, CPU and RSS.
