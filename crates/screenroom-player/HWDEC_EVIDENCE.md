@@ -139,9 +139,9 @@ and renders as fast as it can, so nothing waits), same Apple M4, same libmpv
 by less than 1 ms (39.0–39.9 ms), which is what identified a wait rather than a
 filter: a real scaler cost would have moved. Real conversion and scaling is
 **3 ms at 1080p out and 6–12 ms at native 4K**, against a 41.7 ms budget at 24 fps
-The mean is still inflated by periodic stalls (p95 ≈ 45 ms) that appear at every
-output size and with `hwdec=no`, so they belong to decode/demux scheduling, not to
-the render bridge; under paced playback they cost the occasional frame.
+One hold of ~280–300 ms appears once shortly after a load in most runs, at every
+output size and with `hwdec=no`. It is **not** periodic and not decode or demux
+scheduling; its cause is established in the section at the end of this file.
 
 Consequences, implemented in this change:
 
@@ -166,3 +166,58 @@ this libmpv exports only `MPV_RENDER_API_TYPE_SW` and `..._OPENGL`. A GPU path
 means an OpenGL render context plus an IOSurface handed to Metal, and wgpu exposes
 no Metal device at the point iced draws, so true zero copy stays blocked; HDR also
 stays untone-mapped on the software path, as `render.h` warns.
+
+## The one-off hold after a load, and what it is not (2026-11-01)
+
+The new `frame_stall` example reports every inter-frame gap with the playhead,
+`avsync` and `mistimed-frame-count`, so a hold is placed in media time and not
+only in wall time. Apple M4, libmpv 0.41.0, `auto-copy`, generated 3840×2160
+24 fps fixtures, 8–10 s sampled per run:
+
+| Fixture | Runs | Delivered | The hold |
+|---|---:|---:|---|
+| 4K H.264, no audio track | 2 | 23.98 fps | none above 48 ms |
+| 4K H.264, mono AAC | 6 | 23.25–23.40 fps | 277–302 ms, playhead 0.333 s |
+| 4K H.264, stereo AAC | 3 | 23.40 / 24.00 fps | 290 ms in one run, none in two |
+
+`mistimed-frame-count` stayed 0 throughout and `avsync` at the hold was −0.0108 s,
+the same value every time, so this is a scheduling hold and not an audio sync
+error.
+
+Eliminated as causes, each by measurement rather than reasoning:
+
+| Suspect | Test | Result |
+|---|---|---|
+| `audio-buffer` priming | 0.05 / 0.1 / 0.2 / 0.5 s | 283.6 / none / 302.5 / 289.9 ms — no scaling |
+| CoreAudio device open | `ao=null` | 279.6 ms — unchanged |
+| Mono channel layout | `audio-channels=stereo` | 283.0 ms — unchanged |
+| Colour conversion and scaler | output 1080p vs native 4K | appears at both sizes |
+| Hardware decode | `hwdec=no` | appears too |
+| mpv waiting for frames | mpv `--log-file` | mpv logs `[v][vo/libmpv] mpv_render_context_render() not being called or stuck.` twice during the hold |
+
+The mpv log settles the direction: mpv is ready and *we* are not rendering.
+`mpv_wait_event` returns in microseconds, so the wait is not libmpv's event
+queue. Phase timing added to the play loop (behind `SCREENROOM_PLAYER_TRACE`)
+attributes the block to event handling — 393 ms and 231 ms inside
+`handle_event` — and the per-event timings name the offenders:
+`FILE_LOADED` (6–378 ms), `PROPERTY_CHANGE` (136–326 ms),
+`VIDEO_RECONFIG` (200–204 ms) and `PLAYBACK_RESTART` (230–238 ms).
+
+**Cause.** Those handlers issue synchronous libmpv property reads — `duration`,
+`hwdec-current`, the fifteen `track-list/*` reads, `dwidth`/`dheight`, and
+`time-pos` — on the one thread that must also call
+`mpv_render_context_render`. mpv holds its core lock while it builds the 4K video
+chain and opens VideoToolbox, so the read waits, the due frame waits with it, and
+about six frames (0.25 s at 24 fps) are lost once per load. That is the whole
+difference between the 23.25 fps and 24.12 fps runs.
+
+Servicing the render request before draining events did not help: the hold still
+measured 302 ms, because the block begins before a frame is due. Loop order is
+not the fix.
+
+**Next action.** Remove the blocking reads from the render loop: observe
+`dwidth`, `dheight`, `duration` and `hwdec-current` and take their values from
+the events, take `time-pos` for `PLAYBACK_RESTART` from the last observed value,
+and relax the `apply_property` gates so those events are not dropped before
+`FILE_LOADED` arrives. `position_ready` must keep waiting for a real `time-pos`
+value, or a fresh load can write position 0 over a resume point.

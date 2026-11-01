@@ -610,6 +610,8 @@ impl Runner {
     ) {
         loop {
             let observed = wake.current();
+            let loop_began = std::time::Instant::now();
+            let phase = std::time::Instant::now();
             loop {
                 match commands.try_recv() {
                     Ok(PlayerCommand::Shutdown) => return,
@@ -619,10 +621,29 @@ impl Runner {
                     Err(TryRecvError::Disconnected) => return,
                 }
             }
+            let command_time = phase.elapsed();
+            let phase = std::time::Instant::now();
 
-            while let Some(raw) = self.core.wait_event_raw(0.0) {
+            let mut event_wait = Duration::ZERO;
+            let mut event_handle = Duration::ZERO;
+            let mut event_count = 0_u64;
+            loop {
+                let wait_began = std::time::Instant::now();
+                let raw = self.core.wait_event_raw(0.0);
+                event_wait += wait_began.elapsed();
+                let Some(raw) = raw else { break };
+                let event_id = raw.event_id;
+                let handle_began = std::time::Instant::now();
                 self.handle_event(raw, shared);
+                let handled = handle_began.elapsed();
+                if handled >= Duration::from_millis(5) {
+                    trace!("slow event {event_id} took {handled:?}");
+                }
+                event_handle += handled;
+                event_count += 1;
             }
+            let event_time = phase.elapsed();
+            let phase = std::time::Instant::now();
 
             if self.pending_seek_serial.is_none()
                 && self.loaded
@@ -634,7 +655,16 @@ impl Runner {
             if self.renderer.take_dirty() {
                 self.present(shared);
             }
+            let render_time = phase.elapsed();
+            let phase = std::time::Instant::now();
             wake.wait_after(observed);
+            let wait_time = phase.elapsed();
+            let total = loop_began.elapsed();
+            if total >= Duration::from_millis(40) {
+                trace!(
+                    "slow loop {total:?}: commands {command_time:?}, events {event_time:?} ({event_count} events: wait {event_wait:?}, handle {event_handle:?}), render {render_time:?}, wait {wait_time:?}"
+                );
+            }
         }
     }
 
@@ -1146,6 +1176,7 @@ impl Runner {
             }
         };
         if flags & UPDATE_FRAME == 0 {
+            trace!("present: flags {flags} carry no frame");
             return;
         }
         trace!("present: rendering frame");

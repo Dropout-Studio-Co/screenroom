@@ -1501,3 +1501,38 @@ Full detail and caveats: `HWDEC_EVIDENCE.md`.
 Not proven: **on-screen** 4K presentation (the window was not opened), HDR tone
 mapping (the software render API is single-plane RGB and does not map HDR), and the
 owner's 3240×2160 Main10 sample, because `/Volumes/bleh` was not mounted.
+
+### The one-off hold after a load, previously read as a periodic stall (2026-11-01)
+
+A new `frame_stall` example reports every inter-frame gap with the playhead,
+`avsync` and `mistimed-frame-count`, which turns "periodic ~290 ms stalls" into a
+hold that can be placed in media time.
+
+| Fixture | Runs | Delivered | The hold |
+| --- | ---: | ---: | --- |
+| 4K H.264, no audio track | 2 | 23.98 fps | none above 48 ms |
+| 4K H.264, mono AAC | 6 | 23.25–23.40 fps | 277–302 ms at playhead 0.333 s |
+| 4K H.264, stereo AAC | 3 | 23.40 / 24.00 fps | 290 ms in one run, none in two |
+
+Ruled out by measurement rather than reasoning: `audio-buffer` (0.05–0.5 s, no
+scaling), the CoreAudio device (`ao=null`, unchanged), mono channel layout
+(`audio-channels=stereo`, unchanged), output size, hardware decode, and colour
+conversion. mpv's own log names the side — `mpv_render_context_render() not being
+called or stuck` appears twice during the hold — while `mpv_wait_event` returns in
+microseconds, so libmpv is ready and this side is not.
+
+Cause: `FILE_LOADED`, `PROPERTY_CHANGE`, `VIDEO_RECONFIG` and `PLAYBACK_RESTART`
+issue synchronous libmpv property reads (`duration`, `hwdec-current`, fifteen
+`track-list/*` reads, `dwidth`/`dheight`, `time-pos`) on the only thread that can
+call `mpv_render_context_render`. mpv holds its core lock while it builds the 4K
+video chain, so the read blocks, the due frame blocks with it, and about six
+frames (0.25 s) are lost once per load. Phase timing behind
+`SCREENROOM_PLAYER_TRACE` now attributes loop time to commands, events, render and
+wait, which is how those handlers were named (393 ms and 231 ms of event time).
+
+Servicing the render request before draining events did **not** help (302 ms
+still), so loop order is not the fix. Next action: take `dwidth`, `dheight`,
+`duration`, `hwdec-current` and `time-pos` from observed events instead of
+synchronous reads, relaxing the `apply_property` gates for them, while
+`position_ready` keeps waiting for a real `time-pos` so a fresh load cannot write
+0 over a resume point. Full numbers: `HWDEC_EVIDENCE.md`.
