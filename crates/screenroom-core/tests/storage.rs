@@ -149,6 +149,7 @@ fn preferences_survive_a_reopen() {
     let library = open_library(&directory);
     let profile = library.profiles().unwrap().remove(0);
     let chosen = Preferences {
+        hdr_extended: true,
         autoplay_next: false,
 
         auto_skip_intro: true,

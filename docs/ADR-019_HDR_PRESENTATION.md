@@ -91,7 +91,7 @@ converting it twice.
   the measured display peak, gamut mapped to BT.709, delivered as
   `RGBA16Float`, presented through a `Rgba16Float` swapchain on a layer that
   asks for extended range and is tagged extended sRGB. Measured headlessly:
-  peak 380.6 nits, 1.875× reference white, 85 050 of 169 641 sampled pixels
+  peak 380.6 nits, 1.875× reference white, 84 875 of 169 641 sampled pixels
   above reference white, on a display whose potential headroom is 2.0.
 - **Gamut ceiling.** One drawable has one colour space, and the UI owns it, so
   the picture is gamut mapped to BT.709 rather than shown in the panel's full

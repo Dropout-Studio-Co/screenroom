@@ -1869,7 +1869,10 @@ pass starts without a provider.
 
 ### What is still not true
 
-HDR is still tone-mapped to SDR. There is no OS-wide Picture-in-Picture. No live
+HDR now reaches an extended-range swapchain behind `SCREENROOM_HDR=extended`
+(ADR-019, [`HWDEC_EVIDENCE.md`](../crates/screenroom-player/HWDEC_EVIDENCE.md)),
+but nobody has looked at it on the panel yet and the switch is still off by
+default. There is no OS-wide Picture-in-Picture. No live
 provider call has been made, because no key is configured and the std-only transport
 cannot carry https. No media has been played on a real cast receiver. No VoiceOver
 pass is possible on iced 0.14, which ships no accessibility tree at all — recorded

@@ -135,7 +135,7 @@ that need something the machine does not have.
 | F04 | Identity matching: filename/folder, local NFO, manual match, protected override | COMPLETE (local only) | parsing tests, `step_18` (NFO), manual-match tests | step 2 | online IDs absent (F05) |
 | F05 | Whole-library enrichment | **COMPLETE (core) / BLOCKED (live)** — TMDB-shaped provider, durable queue, rate limits, backoff, reconciliation precedence, artwork retention gate; nothing is fetched until a key is configured | `tests/providers.rs` (28), `tests/providers_http.rs` (5), drain tests | step 2 | owner key + TLS transport + retention decision |
 | F06 | Offline artwork bytes | COMPLETE | 21 posters re-decoded by ffprobe, 200 candidates readable, `a_retained_poster_is_cached_for_its_card` | step 2 | — |
-| F07 | Video playback | **COMPLETE (SDR) / HDR complete and opt-in** — 1080p and 4K at the source frame rate (24.4 fps, 13.95 % CPU, zero uploads); with `SCREENROOM_HDR=extended` a PQ file is tone mapped to the measured display peak (2.0 × 203 nits) and presented through a `Rgba16Float` swapchain on an extended-range layer (24.79 fps, 14.62 % CPU, zero uploads, hidden-window run) | `SCREENROOM_PLAY_CHECK`, `gl_render_check`, `hdr_check`, `metal_extended_range` | step 4 and the owner's look (P1-03) | wide-gamut saturation is BT.709; the switch stays off until the owner looks |
+| F07 | Video playback | **COMPLETE (SDR) / HDR complete and opt-in** — 1080p and 4K at the source frame rate (24.4 fps, 13.95 % CPU, zero uploads); with `SCREENROOM_HDR=extended` a PQ file is tone mapped to the measured display peak (2.0 × 203 nits) and presented through a `Rgba16Float` swapchain on an extended-range layer (24.5 fps, 14.3 % mean CPU, zero uploads, hidden-window run) | `SCREENROOM_PLAY_CHECK`, `gl_render_check`, `hdr_check`, `metal_extended_range` | step 4 and the owner's look (P1-03) | wide-gamut saturation is BT.709; the switch stays off until the owner looks |
 | F08 | Profiles and progress | COMPLETE | `step_10`, `step_14`, checkpoint tests | steps 10, 14 | — |
 | F09 | Home and Continue Watching | COMPLETE | `step_11`, `step_13` | step 11 | — |
 | F10 | Next-episode autoplay | COMPLETE | `step_9`, gap/season tests | step 9 | — |
@@ -162,7 +162,7 @@ that need something the machine does not have.
 | Q00 | Installed local app, no browser, no server, no localhost runtime | COMPLETE | bundle walked end to end; `verify-bundle.sh` | — |
 | Q00B | Dropout Design System, pinned, private | COMPLETE | `ds_pinned.rs` generated at a pinned commit; theme string visible; neutral fallback | the DS sync is machine-local; a clean checkout builds without it |
 | Q01 | Offline: library, profiles, artwork, resume, playback with the network off | COMPLETE by construction (no network code at all; only the browser handoff and an opt-in SSDP probe) | not yet *executed* with Wi-Fi off (P1-12) | execution pending |
-| Q02 | Performance: startup, first frame, 4K, memory, no runaway jobs | **COMPLETE (SDR and HDR)** | startup ~1.2 s; 4K 24.4 fps at 13.95 % mean CPU with zero uploads; the extended-range path measured 24.79 fps at 14.62 % in the same hidden-window check; paging 13.7 ms first page and 78 ms grouped last page at 10k rows; backups and restores run off the UI thread | single-run CPU samples; the 16F swapchain costs GPU memory (P1-03) |
+| Q02 | Performance: startup, first frame, 4K, memory, no runaway jobs | **COMPLETE (SDR and HDR)** | startup ~1.2 s; 4K 24.4 fps at 13.95 % mean CPU with zero uploads; the extended-range path measured 24.51 fps at 14.27 % in the same hidden-window check; paging 13.7 ms first page and 78 ms grouped last page at 10k rows; backups and restores run off the UI thread | single-run CPU samples; the 16F swapchain costs GPU memory (P1-03) |
 | Q03 | Fidelity: aspect, anamorphic, timebase, honest codec claims | COMPLETE | `step_7`, `anamorphic_video_renders_at_its_display_aspect_without_letterbox_rows` | the *look* of step 7 is the owner's |
 | Q04 | Portability: one monorepo, isolated platform adapters | COMPLETE | layout, `cfg` boundaries | — |
 | Q05 | Security and privacy | COMPLETE | argument vectors (no shell), root canonicalisation, `contained_media_path` tests, no credentials anywhere | — |
@@ -295,9 +295,9 @@ than reclassified.
   preset engaged. `rgba16Float` is renderable on the device.
 - **What was measured, headless** (`examples/hdr_check.rs`): the surface reads back
   `'RGhA'` `0x52476841`, 8 bytes per pixel, 30 720-byte row at 3840, FBO `0x881a`,
-  **1 237 distinct green values against 246 for eight bits**, 137 822 samples off
+  **1 261 distinct green values against 246 for eight bits**, 138 175 samples off
   the 8-bit grid, peak luma **380.6 nits = 1.875× the 203-nit reference white**
-  against a display ceiling of 2.0, and **84 628 of 169 641** sampled pixels above
+  against a display ceiling of 2.0, and **84 875 of 169 641** sampled pixels above
   reference white. The `float8` control (2 105 distinct, zero codes above 1.0)
   keeps "off the eight-bit grid" from being confused with HDR. The SDR fixture is
   unchanged: `BGRA`/`0x8058`/256 distinct/zero off-grid.
@@ -307,8 +307,8 @@ than reclassified.
   colour space **`kCGColorSpaceExtendedSRGB`**; the eight-bit control stays at 81,
   false, `kCGColorSpaceSRGB`.
 - **The whole application, hidden, release build:** `SCREENROOM_HDR=extended`
-  reports its own swapchain as `Rgba16Float` and delivers **24.789 fps at
-  14.62 % mean CPU** with zero uploads, against 24.634 fps at 14.14 % for the SDR
+  reports its own swapchain as `Rgba16Float` and delivers **24.506 fps at
+  14.27 % mean CPU** with zero uploads, against 24.626 fps at 14.17 % for the SDR
   control — the same picture rate as the recorded baseline (24.4 fps, 13.95 %).
 - **How it works, in one line:** a vendored `iced_wgpu` (semantic diff in
   `window/compositor.rs` only) selects `Rgba16Float` and re-tags the layer
@@ -692,7 +692,7 @@ check that actually ran; `Action` is what is still owed and by whom.
 | Q00 | Installed local app | COMPLETE | bundle walk, `verify-bundle.sh` | — | — |
 | Q00B | Design system | COMPLETE | `ds_pinned.rs` at a pinned commit, visible theme string | machine-local sync | — |
 | Q01 | Offline | COMPLETE by construction | 33 provider tests assert zero requests when unconfigured | execute with Wi-Fi off | owner |
-| Q02 | Performance | COMPLETE (SDR and HDR) | 4K 24.39 fps / 13.95 % CPU; extended range 24.79 fps / 14.62 %; paging; startup ~1.2 s | the owner's look at HDR (P1-03) | owner |
+| Q02 | Performance | COMPLETE (SDR and HDR) | 4K 24.39 fps / 13.95 % CPU; extended range 24.51 fps / 14.27 %; paging; startup ~1.2 s | the owner's look at HDR (P1-03) | owner |
 | Q03 | Fidelity | COMPLETE | `step_7`, anamorphic test | the look | owner |
 | Q04 | Portability | COMPLETE | layout, `cfg` boundaries, `cargo check` for the Windows target | real Windows build | owner |
 | Q05 | Security and privacy | COMPLETE | argument vectors, root canonicalisation, credential redaction tests, cast host allowlist | — | — |
@@ -733,7 +733,7 @@ cd crates/screenroom-player/examples/gl-path-probe && \
 HDR half of item 1 has since been implemented (ADR-019): the swapchain is
 `Rgba16Float` behind a vendored `iced_wgpu`, the layer is tagged extended sRGB and
 asks for extended range, libmpv tone maps into the measured 406-nit display peak,
-and the application reports 24.789 fps at 14.62 % mean CPU with zero uploads on
+and the application reports 24.51 fps at 14.27 % mean CPU with zero uploads on
 the HDR10 fixture. The remaining HDR step is the owner's look, and the switch is
 still off by default.
 
@@ -801,7 +801,7 @@ check that actually ran; `Action` is what is still owed and by whom.
 | Q00 | Installed local app | COMPLETE | bundle walk, `verify-bundle.sh` | — | — |
 | Q00B | Design system | COMPLETE | `ds_pinned.rs` at a pinned commit, visible theme string | machine-local sync | — |
 | Q01 | Offline | COMPLETE by construction | 33 provider tests assert zero requests when unconfigured | execute with Wi-Fi off | owner |
-| Q02 | Performance | COMPLETE (SDR and HDR) | 4K 24.39 fps / 13.95 % CPU; extended range 24.79 fps / 14.62 %; paging; startup ~1.2 s | the owner's look at HDR (P1-03) | owner |
+| Q02 | Performance | COMPLETE (SDR and HDR) | 4K 24.39 fps / 13.95 % CPU; extended range 24.51 fps / 14.27 %; paging; startup ~1.2 s | the owner's look at HDR (P1-03) | owner |
 | Q03 | Fidelity | COMPLETE | `step_7`, anamorphic test | the look | owner |
 | Q04 | Portability | COMPLETE | layout, `cfg` boundaries, `cargo check` for the Windows target | real Windows build | owner |
 | Q05 | Security and privacy | COMPLETE | argument vectors, root canonicalisation, credential redaction tests, cast host allowlist | — | — |

@@ -791,13 +791,13 @@ cargo run -p screenroom-player --example hdr_check -- .artifacts/media/bench-4k-
 | `GL` internal format | `0x8058` | `0x881a` | `0x881a` |
 | `MPV_RENDER_PARAM_DEPTH` | 0 | 16 | 16 |
 | Extended range requested | no | no | **yes** |
-| Distinct green values | 246 | 2 105 | **1 237** |
-| Samples off the 8-bit grid | 0 | 113 558 | **137 822** |
+| Distinct green values | 246 | 2 105 | **1 261** |
+| Samples off the 8-bit grid | 0 | 113 558 | **138 175** |
 | Peak green code | 1.000000 | 1.000000 | 0.653809 |
 | Mean luma | — | — | 182.2 nits |
 | Peak luma | — | — | **380.6 nits** |
 | Peak vs reference white | — | — | **1.875×** |
-| Samples above reference white | — | — | **84 628 of 169 641** |
+| Samples above reference white | — | — | **84 875 of 169 641** |
 | Delivered peak, extended linear | — | — | **1.875** (green channel 1.993) |
 | Display ceiling, extended linear | — | — | 2.000 |
 
@@ -813,11 +813,11 @@ Three things in that table are the evidence, and one is a correction:
 
 1. **The panel's headroom is what bounds the picture, and it is reached.**
    `peak_luma_code 0.647256` is 380.6 nits, `1.875×` the 203-nit reference white,
-   against a ceiling of `2.0`. Half the sampled pixels (84 628 of 169 641) are
+   against a ceiling of `2.0`. Half the sampled pixels (84 875 of 169 641) are
    above reference white. On the eight-bit path the ceiling is 1.000000 by
    construction.
-2. **More than eight bits survived** — 1 237 distinct green values against 246,
-   with 137 822 samples off the 8-bit grid. The `float8` control (2 105 distinct,
+2. **More than eight bits survived** — 1 261 distinct green values against 246,
+   with 138 175 samples off the 8-bit grid. The `float8` control (2 105 distinct,
    also off-grid) is why "off the grid" alone is not claimed as HDR.
 3. **Nothing exceeds the display.** The tone map is asked for 406 nits and
    delivers 380.6; `above_one` is 0 by design, because the whole point of
@@ -852,8 +852,8 @@ release build, 10-second sample, four-corner 3840×2160 HEVC Main10 HDR10 fixtur
 
 | Run | Swapchain | Delivered fps | Drawn fps | Uploaded fps | CPU mean / max (%) | RSS mean (KiB) | Startup (ms) |
 |---|---|---:|---:|---:|---:|---:|---:|
-| `SCREENROOM_HDR=extended` | `Rgba16Float` | 24.789 | 23.495 | 0.000 | 14.62 / 47.70 | 163 413 | 766.2 |
-| default (SDR) | `Bgra8Unorm` | 24.634 | 23.992 | 0.000 | 14.14 / 50.50 | 199 898 | 669.9 |
+| `SCREENROOM_HDR=extended` | `Rgba16Float` | 24.506 | 24.090 | 0.000 | 14.27 / 34.00 | 167 389 | 742.6 |
+| default (SDR) | `Bgra8Unorm` | 24.626 | 24.198 | 0.000 | 14.17 / 29.60 | 213 002 | 638.2 |
 
 The swapchain format is printed by the application itself, so the line below is
 the application's own compositor, not a stand-in:
@@ -864,8 +864,10 @@ video surface: target Bgra8Unorm, extended range false
 ```
 
 Against the recorded baseline of 24.4 fps at 13.95 % mean CPU, the extended path
-delivers 24.79 fps at 14.62 % in a single run — the same picture rate with no
-upload, and a CPU difference inside the run-to-run spread of one sample. RSS is
+delivers 24.51 fps at 14.27 % — the same picture rate with no upload, and a CPU
+difference inside the run-to-run spread of one sample. An earlier run of the same
+build measured 24.79 fps at 14.62 % and a 128 ms worst gap, so both the rate and
+the gap move between runs. RSS is
 *lower* with the half-float swapchain in this run, which is allocator behaviour,
 not a claim.
 

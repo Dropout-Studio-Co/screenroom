@@ -475,6 +475,13 @@ impl Run {
         push("imported_total", imports().to_string());
         push("imported_fps", format!("{:.3}", imports() as f64 / window));
         push(
+            "picture_surface",
+            match crate::video_surface::target_format() {
+                Some(format) => format!("{format:?}"),
+                None => "none".to_string(),
+            },
+        );
+        push(
             "worst_gap_ms",
             format!("{:.3}", gaps.iter().copied().fold(0.0_f64, f64::max)),
         );

@@ -74,6 +74,7 @@ pub fn run() -> iced::Result {
         eprintln!("play check refused: {error}");
         return Ok(());
     }
+    apply_hdr_preference();
     crate::accessibility::install();
     let window = iced::window::Settings {
         visible: !hides_its_window(),
@@ -88,6 +89,31 @@ pub fn run() -> iced::Result {
         .window_size((1280.0, 800.0))
         .exit_on_close_request(false)
         .run()
+}
+
+fn library_path() -> Option<PathBuf> {
+    match std::env::var_os("SCREENROOM_LIBRARY") {
+        Some(path) => Some(PathBuf::from(path)),
+        None => default_library_path(),
+    }
+}
+
+fn apply_hdr_preference() {
+    if std::env::var_os("SCREENROOM_HDR").is_some() {
+        return;
+    }
+    let Some(path) = library_path() else {
+        return;
+    };
+    let Ok(library) = Library::open(&path) else {
+        return;
+    };
+    let Ok(preferences) = library.preferences() else {
+        return;
+    };
+    if preferences.hdr_extended {
+        unsafe { std::env::set_var("SCREENROOM_HDR", "extended") };
+    }
 }
 
 pub fn default_library_path() -> Option<PathBuf> {
@@ -762,6 +788,8 @@ pub enum Message {
 
     ToggleArtworkRetention,
 
+    ToggleHdrExtended(bool),
+
     SubtitleQueryChanged(String),
 
     SubtitleSearchNow,
@@ -899,7 +927,7 @@ impl App {
     fn launch() -> (Self, Task<Message>) {
         let (path, label) = match std::env::var_os("SCREENROOM_LIBRARY") {
             Some(path) => (PathBuf::from(path), String::from("SCREENROOM_LIBRARY")),
-            None => match default_library_path() {
+            None => match library_path() {
                 Some(path) => {
                     let label = path.display().to_string();
                     (path, label)
@@ -1681,6 +1709,24 @@ impl App {
                     ArtworkRetention::DoNotStore => {
                         "Provider artwork will not be downloaded or kept.".to_string()
                     }
+                });
+            }
+            Err(error) => self.report(&error),
+        }
+    }
+
+    fn toggle_hdr_extended(&mut self, on: bool) {
+        self.preferences.hdr_extended = on;
+        match self.library.set_preferences(&self.preferences) {
+            Ok(()) => {
+                self.error = None;
+                self.status = Some(if on {
+                    "HDR is on. Restart the app for it to take effect, because the window picks \
+                     its surface when it opens."
+                        .to_string()
+                } else {
+                    "HDR is off. The picture is tone-mapped to SDR. Restart the app to apply it."
+                        .to_string()
                 });
             }
             Err(error) => self.report(&error),
@@ -3894,6 +3940,7 @@ impl App {
             Message::BackupNow => self.backup_now(),
             Message::EnrichmentNow => self.enrichment_now(),
             Message::ToggleArtworkRetention => self.toggle_artwork_retention(),
+            Message::ToggleHdrExtended(on) => self.toggle_hdr_extended(on),
             Message::SubtitleQueryChanged(value) => self.subtitle_query = value,
             Message::SubtitleSearchNow => self.subtitle_search_now(),
             Message::SubtitleDownload(file_id) => self.subtitle_download(file_id),
@@ -5303,6 +5350,15 @@ impl App {
                 .on_toggle(Message::ToggleAutoSkip)
                 .size(18.0),
             note("Only a segment you marked is skipped; an intro is never guessed."),
+            checkbox(self.preferences.hdr_extended)
+                .label("Show HDR films as HDR (restart to apply)")
+                .on_toggle(Message::ToggleHdrExtended)
+                .size(18.0),
+            note(
+                "With this on, the window asks for an extended-range surface and an HDR10 film \
+                 keeps its highlights instead of being tone-mapped into SDR. The panel decides \
+                 how much of that it can show; Settings states what the picture actually carries.",
+            ),
             checkbox(self.preferences.reduced_motion)
                 .label("Reduce motion: no browse previews")
                 .on_toggle(Message::ToggleReducedMotion)
