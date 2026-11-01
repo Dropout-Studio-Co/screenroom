@@ -200,6 +200,8 @@ impl<'a> Home<'a> {
 
         blocks = blocks.push(self.hero_actions(item));
 
+        let inset = theme::content_inset(self.width);
+
         let content = container(blocks)
             .width(Length::Fill)
             .height(Length::Fixed(height))
@@ -207,8 +209,8 @@ impl<'a> Home<'a> {
             .padding(Padding {
                 top: 0.0,
                 bottom: theme::gap(Gap::Section),
-                left: theme::PAD,
-                right: theme::PAD,
+                left: theme::PAD + inset,
+                right: theme::PAD + inset,
             });
 
         let backdrop: Element<'a, Message> = match self.art.get(&item.work_id) {

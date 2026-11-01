@@ -657,8 +657,10 @@ than reclassified.
   ([`UI_REBUILD.md`](UI_REBUILD.md)), and captures were taken at 900, 1280, 1440
   and 3440 during the rebuild, but they are Git-ignored local artefacts and no
   owner look has happened.
-- **What is missing:** eyes, and a window that may be resized while it is visible.
-  There is no environment variable for the window size; it opens at 1280×800.
+- **What is missing:** eyes. `SCREENROOM_WINDOW_WIDTH` and
+  `SCREENROOM_WINDOW_HEIGHT` now open the window at a chosen size, so a
+  breakpoint can be captured without a resize; the review below still needs a
+  person.
 - **Where:** `apps/desktop/src/ui/` (all of it), `scripts/capture-window.sh`.
 - **Why it matters:** the rebuild exists because the previous composition read as
   a control panel. "Reads as a media application" is a judgement no test makes.
@@ -671,6 +673,29 @@ than reclassified.
 - **Automated verification:** `cargo test -p screenroom-desktop --lib ui::` — but
   it cannot settle the question.
 - **Human verification:** the owner, once.
+
+#### P2-07 · Posters are blank for the first half-minute on a cold library — **OPEN**
+
+- **Requirement:** Q03 and Q08; a cold launch must not look broken.
+- **Status:** OPEN, with evidence. On a library of 318 titles, a captured Home
+  screen at 14 seconds had artwork only for the hero; the rail cards were empty
+  grey blocks. At 40 seconds every card had its poster. The artwork table held 30
+  rows at both captures, because extraction is lazy and writes as it goes.
+- **Where:** `apps/desktop/src/app.rs` (`queue_artwork`, `drain_artwork`),
+  `apps/desktop/src/artwork.rs`.
+- **Why it matters:** the first screen the owner sees is the one that has not
+  finished loading. A library of a thousand titles would make the window longer,
+  and nothing on screen says "still working".
+- **Work:** choose one — extract posters in parallel rather than one at a time,
+  extract the first page's posters during the scan rather than on first display,
+  or draw a skeleton that reads as loading rather than as a missing poster. The
+  cheapest honest step is parallelism if the extractor is serial today.
+- **Acceptance:** a cold launch on the owner's library shows a poster on every
+  card in the first visible rail within two seconds, or shows an unmistakable
+  loading state until it can.
+- **Automated verification:** none yet; the observation above came from two
+  captures.
+- **Human verification:** the owner, on a cold library.
 
 ---
 

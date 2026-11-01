@@ -222,15 +222,16 @@ impl<'a> Settings<'a> {
 
     fn rows_element(&self) -> Element<'a, Message> {
         let mut rows = column![].width(Length::Fill);
+        let last = self.rows.len().saturating_sub(1);
 
-        for row in &self.rows {
-            rows = rows.push(self.row_element(row));
+        for (index, row) in self.rows.iter().enumerate() {
+            rows = rows.push(self.row_element(row, index < last));
         }
 
         rows.into()
     }
 
-    fn row_element(&self, row: &Row<'a>) -> Element<'a, Message> {
+    fn row_element(&self, row: &Row<'a>, rule: bool) -> Element<'a, Message> {
         let tokens = design::tokens();
 
         let (label, hint, control): (&'a str, Option<&'a str>, Element<'a, Message>) = match row {
@@ -285,7 +286,7 @@ impl<'a> Settings<'a> {
 
         let text_block = container(lines).width(Length::Fill).max_width(LABEL_COLUMN);
 
-        column![
+        let mut element = column![
             container(
                 row![text_block, control]
                     .align_y(Alignment::Center)
@@ -297,11 +298,15 @@ impl<'a> Settings<'a> {
                 bottom: theme::gap(Gap::Group),
                 left: 0.0,
                 right: 0.0,
-            }),
-            hairline(),
+            })
         ]
-        .width(Length::Fill)
-        .into()
+        .width(Length::Fill);
+
+        if rule {
+            element = element.push(hairline());
+        }
+
+        element.into()
     }
 }
 

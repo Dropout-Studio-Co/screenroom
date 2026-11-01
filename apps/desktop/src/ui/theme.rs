@@ -4,6 +4,16 @@ use iced::widget::{container, scrollable};
 use iced::{Background, Border, Color, Font, Shadow, Theme};
 use std::borrow::Cow;
 
+pub fn content_inset(width: f32) -> f32 {
+    if !width.is_finite() || width <= 0.0 {
+        return 0.0;
+    }
+    match Breakpoint::at(width).content_cap() {
+        Some(cap) => ((width - cap) / 2.0).max(0.0),
+        None => 0.0,
+    }
+}
+
 pub fn scrollbar(_theme: &Theme, _status: scrollable::Status) -> scrollable::Style {
     let scroller = scrollable::Scroller {
         background: Background::Color(Color::from_rgba(1.0, 1.0, 1.0, 0.07)),
@@ -236,14 +246,67 @@ mod tests {
     use crate::ui::theme;
     use crate::ui::theme::{Breakpoint, Gap, Radius};
 
+    fn luminance(colour: iced::Color) -> f32 {
+        let channel = |value: f32| {
+            if value <= 0.039_28 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(colour.r) + 0.7152 * channel(colour.g) + 0.0722 * channel(colour.b)
+    }
+
+    fn contrast(a: iced::Color, b: iced::Color) -> f32 {
+        let (high, low) = {
+            let (a, b) = (luminance(a), luminance(b));
+            if a >= b { (a, b) } else { (b, a) }
+        };
+        (high + 0.05) / (low + 0.05)
+    }
+
     #[test]
-    fn theme_values_come_from_the_pinned_tokens() {
-        let tokens = crate::design::tokens();
-        assert_eq!(theme::ground(), tokens.palette.background);
-        assert_eq!(theme::ink(), tokens.palette.foreground);
-        assert_eq!(theme::surface(1), tokens.palette.surface1);
-        assert_eq!(theme::surface(2), tokens.palette.surface2);
-        assert_eq!(theme::danger(), tokens.palette.destructive);
+    fn the_text_colours_are_readable_on_the_ground_they_sit_on() {
+        assert!(
+            contrast(theme::ink(), theme::ground()) >= 7.0,
+            "body text on the ground must clear the enhanced contrast floor"
+        );
+        assert!(
+            contrast(theme::muted(), theme::ground()) >= 4.5,
+            "muted captions must still clear the normal-text floor"
+        );
+        assert!(
+            contrast(theme::ground(), theme::signal()) >= 7.0,
+            "the primary button's label must clear the enhanced floor"
+        );
+        assert!(
+            contrast(theme::ink(), theme::surface(2)) >= 4.5,
+            "text on a raised surface must clear the normal-text floor"
+        );
+    }
+
+    #[test]
+    fn the_hero_starts_where_the_capped_content_starts() {
+        for width in [900.0_f32, 1100.0, 1440.0, 1760.0, 2560.0, 3440.0] {
+            let inset = theme::content_inset(width);
+            let cap = Breakpoint::at(width).content_cap();
+            match cap {
+                None => assert_eq!(inset, 0.0, "{width}px is not capped"),
+                Some(cap) => assert!(
+                    (inset - (width - cap) / 2.0).abs() < 0.01,
+                    "at {width}px the hero must start at the capped column's edge"
+                ),
+            }
+        }
+        assert_eq!(theme::content_inset(f32::NAN), 0.0);
+        assert_eq!(theme::content_inset(-10.0), 0.0);
+    }
+
+    #[test]
+    fn the_surfaces_step_up_from_the_ground() {
+        assert!(luminance(theme::surface(1)) > luminance(theme::ground()));
+        assert!(luminance(theme::surface(2)) > luminance(theme::surface(1)));
+        assert!(luminance(theme::surface(3)) > luminance(theme::surface(2)));
     }
 
     #[test]

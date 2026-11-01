@@ -157,8 +157,8 @@ impl<'a> Detail<'a> {
             .padding(Padding {
                 top: BAR_HEIGHT + theme::gap(Gap::Group),
                 bottom: theme::gap(Gap::Section),
-                left: theme::PAD,
-                right: theme::PAD,
+                left: theme::PAD + theme::content_inset(self.width),
+                right: theme::PAD + theme::content_inset(self.width),
             });
 
         let backdrop: Element<'a, Message> = match self.art.get(&self.item.work_id) {
