@@ -2429,12 +2429,14 @@ impl App {
             return;
         }
         let mut ended = false;
-        if let Some(preview) = &self.preview {
-            let snapshot = preview.snapshot();
-            if snapshot.frame.is_some() {
-                self.preview_frame = snapshot.frame.clone();
-            }
+        let mut presented = None;
+        if let Some(preview) = self.preview.as_mut() {
+            let snapshot = preview.tick();
+            presented = snapshot.frame.clone();
             ended = snapshot.ended;
+        }
+        if presented.is_some() {
+            self.preview_frame = presented;
         }
         let focused = self
             .browse

@@ -1581,6 +1581,18 @@ All 335 workspace tests pass, including the desktop acceptance suite; clippy and
 rustfmt are clean. The owner's-media re-run stays **BLOCKED**: `/Volumes` holds only
 `mothership` and `Recovery`, so no 3240×2160 Main10 sample was reachable.
 
+### A preview no longer seeks blind (2026-11-01)
+
+`Preview::start` loaded at `preview_position_ms(duration_ms)`, and a duration of 0
+gives 30 s, so a file shorter than 30 s started past its own end: the player ended,
+the preview was released and the card kept its poster. It worked only when the
+library row already had a duration, which made
+`step_17_a_preview_is_one_delayed_decoder_and_reduced_motion_stops_it` intermittent
+and always failing when run alone. The preview now loads at the start and seeks
+once, in `Preview::tick`, only after `snapshot.duration_ms()` is known, so the target
+is inside the file. That test went from 15–16 s and failing to 1.9–3.2 s and passing
+5 runs out of 5; the workspace is **352 tests, 0 failures**.
+
 ### The check mode exists, and it separates decoded from presented (2026-11-01)
 
 Gate G2's on-screen half needed the application's own presentation path, not an

@@ -67,22 +67,36 @@ pub struct Preview {
     file_id: String,
 
     started: Instant,
+
+    moved: bool,
 }
 
 impl Preview {
-    pub fn start(file_id: &str, path: &Path, duration_ms: i64) -> Result<Self, String> {
+    pub fn start(file_id: &str, path: &Path, _duration_ms: i64) -> Result<Self, String> {
         let player = Player::start_with_max_dimension(PREVIEW_MAX_DIMENSION)
             .map_err(|error| error.to_string())?;
         player.set_volume(0.0);
-        player.load_at(
-            path,
-            Some(preview_position_ms(duration_ms) as f64 / 1_000.0),
-        );
+        player.load_at(path, None);
         Ok(Self {
             player,
             file_id: file_id.to_string(),
             started: Instant::now(),
+            moved: false,
         })
+    }
+
+    pub fn tick(&mut self) -> PlayerSnapshot {
+        let snapshot = self.player.snapshot();
+        if self.moved || snapshot.duration_ms() <= 0 {
+            return snapshot;
+        }
+        self.moved = true;
+        let target = preview_position_ms(snapshot.duration_ms());
+        if target <= 1 {
+            return snapshot;
+        }
+        self.player.seek(target as f64 / 1_000.0);
+        self.player.snapshot()
     }
 
     pub fn file_id(&self) -> &str {

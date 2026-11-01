@@ -98,6 +98,21 @@ and `step_1_a_mid_scan_report_refreshes_the_catalogue_before_the_walk_ends`.
 
 Both defects were found by the acceptance work itself, not by inspection.
 
+### 3. A preview sought blind, so a short clip never previewed (2026-11-01) — Medium
+
+`Preview::start` loaded at `preview_position_ms(duration_ms)`, and a duration of 0
+gives 30 s. A file shorter than 30 s therefore started **past its own end**: the
+player ended, `drain_preview` released the preview, and the card kept its poster. It
+only worked when the library row already carried a duration, which is why
+`step_17_a_preview_is_one_delayed_decoder_and_reduced_motion_stops_it` alternated
+between passing and failing and failed every time it ran alone.
+
+Fixed by loading at the start and seeking once, in `Preview::tick`, only after
+`snapshot.duration_ms()` is known, so the target is always inside the file. That
+test now runs in 1.9–3.2 s instead of 15–16 s and passed 5 runs out of 5; the
+workspace is 352 tests with 0 failures. Found while re-checking the 4K work, not by
+inspection.
+
 ## Checks run
 
 ```bash
