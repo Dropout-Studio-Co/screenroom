@@ -8,6 +8,7 @@ pub const CREATE: &[&str] = &[
       overview TEXT NOT NULL DEFAULT '',genres TEXT NOT NULL DEFAULT '[]',poster_path TEXT,
       confidence REAL NOT NULL DEFAULT 0,
       manual_match INTEGER NOT NULL DEFAULT 0 CHECK(manual_match IN (0,1)),
+      metadata_origin TEXT NOT NULL DEFAULT 'legacy',
       metadata_revision INTEGER NOT NULL DEFAULT 0)",
     "CREATE INDEX works_identity ON works(identity_key)",
     "CREATE INDEX works_title ON works(title COLLATE NOCASE,kind)",
@@ -89,6 +90,9 @@ pub const MIGRATE_4_TO_5: &[&str] = &[
     CONVERSION_JOBS,
     "CREATE INDEX IF NOT EXISTS conversion_jobs_file ON conversion_jobs(file_id,created_ms)",
 ];
+
+pub const MIGRATE_5_TO_6: &[&str] =
+    &["ALTER TABLE works ADD COLUMN metadata_origin TEXT NOT NULL DEFAULT 'legacy'"];
 
 pub const MIGRATE_3_TO_4: &[&str] = &[
     CREATE[CREATE.len() - 4],

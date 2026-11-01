@@ -5,6 +5,7 @@ mod conversion;
 mod lists;
 mod markers;
 mod media_info;
+mod metadata;
 mod playback;
 mod recommend;
 mod settings;
@@ -29,6 +30,7 @@ pub use conversion::{
     ConversionJob, ConversionPlan, ConversionProfile, ConversionStatus, OutputFacts, verify_output,
 };
 pub use media_info::UnprobedFile;
+pub use metadata::EnrichmentSummary;
 pub use playback::Checkpoint;
 pub use settings::Preferences;
 
@@ -130,6 +132,20 @@ impl std::fmt::Debug for Library {
     }
 }
 
+fn add_metadata_origin(tx: &Connection) -> Result<()> {
+    let mut statement = tx.prepare("PRAGMA table_info(works)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if columns.iter().any(|name| name == "metadata_origin") {
+        return Ok(());
+    }
+    for statement in schema::MIGRATE_5_TO_6 {
+        tx.execute(statement, [])?;
+    }
+    Ok(())
+}
+
 impl Library {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -202,6 +218,7 @@ impl Library {
                 for statement in schema::MIGRATE_4_TO_5 {
                     tx.execute(statement, [])?;
                 }
+                add_metadata_origin(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -213,6 +230,7 @@ impl Library {
                 for statement in schema::MIGRATE_4_TO_5 {
                     tx.execute(statement, [])?;
                 }
+                add_metadata_origin(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -221,6 +239,13 @@ impl Library {
                 for statement in schema::MIGRATE_4_TO_5 {
                     tx.execute(statement, [])?;
                 }
+                add_metadata_origin(&tx)?;
+                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+                tx.commit()?;
+            }
+            5 => {
+                let tx = connection.transaction()?;
+                add_metadata_origin(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }

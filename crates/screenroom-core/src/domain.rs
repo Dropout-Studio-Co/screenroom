@@ -134,6 +134,8 @@ pub struct LibraryItem {
     pub watchlisted: bool,
 
     pub manual_match: bool,
+
+    pub metadata_origin: String,
 }
 
 impl LibraryItem {

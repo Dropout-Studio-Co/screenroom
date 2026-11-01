@@ -1309,3 +1309,40 @@ done.
 - **Not proven:** the preview has not been watched in a window, so the feel of
   the dwell and the look of a video inside a card are unverified, and nothing
   measures the second decoder's memory or GPU cost on the owner's machine.
+
+## F05 (offline half) and F11 — local NFO metadata and a genre filter with real data (2026-11-01)
+
+**Completed on macOS, verified headlessly. Online enrichment stays BLOCKED.**
+
+- `crates/screenroom-core/src/nfo.rs` reads a sidecar the owner already keeps
+  beside a file — `<name>.nfo`, then `movie.nfo`, then `tvshow.nfo` — with a
+  256 KiB input cap, 2 000-character fields, 20 genres of 40 characters,
+  entity decoding, nested markup stripped, and no guessing: a file with no
+  recognisable `movie`/`tvshow`/`episodedetails` root, or one whose values are
+  all empty, yields nothing.
+- `Library::enrich_from_sidecars` applies a sidecar inside one transaction:
+  title, year, overview and genres on the work, title and overview on the
+  episode the file belongs to. `metadata_revision` moves only when a value
+  changes, so a rescan of an unchanged library writes nothing. A work marked as
+  a **manual match is never overwritten**, and a file with no sidecar is left
+  alone. Schema 6 adds `works.metadata_origin`, additively, and the migration is
+  guarded by an explicit column check so a database that already has it — a
+  fresh one, or a restored backup — migrates cleanly.
+- The scan thread runs the enrichment for the folder it just walked, before it
+  reports completion, and the status line says how many works gained details
+  from a local NFO file. Detail names the provenance: *details from a local NFO
+  file*.
+- **F11 becomes real:** the genre filter is exercised end to end by `step_18`
+  in the running application — a sidecar in a scanned folder gives the film its
+  real title, year, overview and `Drama` genre, `Drama` keeps it, `Comedy`
+  empties the grid, clearing brings it back, and Detail shows the origin.
+- **Tests added:** seven sidecar tests (parsing, entities, episode sidecars,
+  refusals, bounds, preference order, oversize), six enrichment tests
+  (film, series plus episode, manual match untouched, idempotence, schema 5 → 6
+  with a kept row), and `step_18`.
+- **BLOCKED, not faked:** online enrichment (F05's provider half) and the
+  subtitle provider (F15) have no account, key or chosen service, and nothing
+  here invents one. No network request is made anywhere in this change.
+- **Not proven:** no sidecar has been read from the owner's own library, because
+  none of its files has an NFO beside it yet; the genre dropdown has not been
+  looked at in a window.

@@ -390,6 +390,7 @@ fn step_1_a_mid_scan_report_refreshes_the_catalogue_before_the_walk_ends() {
             issues: 0,
             done: false,
             complete: false,
+            enriched: 0,
         })
         .expect("report");
     let _ = app.update(Message::Tick);
@@ -1391,4 +1392,55 @@ fn step_17_a_preview_is_one_delayed_decoder_and_reduced_motion_stops_it() {
     let _ = app.update(Message::ToggleReducedMotion(true));
     let _ = app.update(Message::Tick);
     assert!(app.preview.is_none(), "turning Reduce motion on stops it");
+}
+
+#[test]
+fn step_18_a_local_nfo_gives_a_film_its_real_title_and_the_browse_filter_real_genres() {
+    let media = Media::new();
+    media.placeholders(&["Some.Release.2019.mkv".to_string()]);
+    std::fs::write(
+        media.root.join("Some.Release.2019.nfo"),
+        b"<movie><title>Pather Panchali</title><year>1955</year><genre>Drama</genre>\
+          <plot>A village childhood.</plot></movie>",
+    )
+    .expect("nfo");
+
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let _ = app.update(Message::Tick);
+
+    let status = app.status.clone().unwrap_or_default();
+    assert!(
+        status.contains("NFO"),
+        "the scan must say what it read, got {status:?}"
+    );
+    assert_eq!(app.browse.items.len(), 1);
+    let item = app.browse.items[0].clone();
+    assert_eq!(item.title, "Pather Panchali");
+    assert_eq!(item.year, Some(1955));
+    assert_eq!(item.overview, "A village childhood.");
+    assert_eq!(item.genres, vec!["Drama".to_string()]);
+    assert_eq!(item.metadata_origin, "nfo");
+    assert_eq!(app.browse.genres, vec!["Drama".to_string()]);
+
+    let _ = app.update(Message::GenreChanged(Some("Drama".to_string())));
+    assert_eq!(app.browse.items.len(), 1, "the film is in its own genre");
+
+    let _ = app.update(Message::GenreChanged(Some("Comedy".to_string())));
+    assert!(
+        app.browse.items.is_empty(),
+        "a genre nothing is in filters everything out"
+    );
+
+    let _ = app.update(Message::GenreChanged(None));
+    assert_eq!(
+        app.browse.items.len(),
+        1,
+        "clearing the genre brings it back"
+    );
+
+    let _ = app.update(Message::OpenDetail(item.id.clone()));
+    let detail = app.detail.as_ref().expect("detail");
+    assert_eq!(detail.item.genres, vec!["Drama".to_string()]);
+    assert_eq!(detail.item.metadata_origin, "nfo");
 }

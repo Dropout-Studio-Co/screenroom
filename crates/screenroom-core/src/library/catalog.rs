@@ -10,7 +10,7 @@ use crate::filename::{ParsedName, parse_filename};
 
 const SELECT: &str = "SELECT f.id, f.source_id, f.edition_id, f.relative_path, f.filename,
     f.available, f.added_ms, w.id work_id, w.title, w.kind, w.year, w.overview, w.genres,
-    w.manual_match, e.duration_ms, f.season_number, f.episode_number,
+    w.manual_match, w.metadata_origin, e.duration_ms, f.season_number, f.episode_number,
     (SELECT CASE WHEN ep.metadata_origin='stale' THEN '' ELSE ep.title END
        FROM episodes ep JOIN file_episodes fe ON fe.episode_id=ep.id
        WHERE fe.file_id=f.id ORDER BY fe.sequence LIMIT 1) episode_title,
@@ -784,6 +784,7 @@ fn item_from_row(row: &Row<'_>) -> rusqlite::Result<LibraryItem> {
         favorite: row.get::<_, i64>("favorite")? == 1,
         watchlisted: row.get::<_, i64>("watchlisted")? == 1,
         manual_match: row.get::<_, i64>("manual_match")? == 1,
+        metadata_origin: row.get("metadata_origin")?,
     })
 }
 

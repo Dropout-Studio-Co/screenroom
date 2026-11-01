@@ -360,6 +360,7 @@ enum ScanEvent {
         issues: usize,
         done: bool,
         complete: bool,
+        enriched: u64,
     },
 
     Failed(String),
@@ -2582,18 +2583,24 @@ impl App {
                     visited: update.visited,
                     imported: update.imported,
                     issues: update.errors.len(),
-                    done: update.done,
+                    done: false,
                     complete: false,
+                    enriched: 0,
                 });
             });
             match outcome {
                 Ok(summary) => {
+                    let enriched = library
+                        .enrich_from_sidecars(Some(&source_id))
+                        .map(|enriched| enriched.works)
+                        .unwrap_or(0);
                     let _ = sender.send(ScanEvent::Progress {
                         visited: summary.visited,
                         imported: summary.imported,
                         issues: summary.issues.len(),
                         done: true,
                         complete: summary.complete && !summary.cancelled,
+                        enriched,
                     });
                 }
                 Err(error) => {
@@ -2619,12 +2626,18 @@ impl App {
                     issues,
                     done,
                     complete,
+                    enriched,
                 }) => {
                     self.scan_visited = visited;
                     self.scan_imported = imported;
                     if done {
                         finished = true;
-                        status = Some(if complete {
+                        status = Some(if complete && enriched > 0 {
+                            format!(
+                                "Scan finished — {visited} entries, {imported} imported, \
+                                 details from {enriched} local NFO file(s)."
+                            )
+                        } else if complete {
                             format!("Scan finished — {visited} entries, {imported} imported.")
                         } else {
                             format!(
@@ -3569,6 +3582,11 @@ impl App {
                 String::new()
             } else {
                 item.genres.join(", ")
+            },
+            if item.metadata_origin == "nfo" {
+                "details from a local NFO file".to_string()
+            } else {
+                String::new()
             },
         ]
         .into_iter()
