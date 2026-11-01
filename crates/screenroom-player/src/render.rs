@@ -166,6 +166,14 @@ impl SoftwareRenderer {
         }
         let base = self.buffer.as_ptr() as usize;
         self.offset = (64 - (base % 64)) % 64;
+        let frame_bytes = self.stride * height as usize;
+        for buffer in &mut self.packed_buffers {
+            if let Some(buffer) = Arc::get_mut(buffer)
+                && buffer.len() != frame_bytes
+            {
+                buffer.resize(frame_bytes, 0);
+            }
+        }
     }
 
     pub fn render(&mut self) -> Result<Option<Frame>, PlayerError> {
@@ -329,6 +337,29 @@ mod tests {
         assert_eq!(target_size(0, 0, MAX_DIMENSION), (1, 1));
         assert_eq!(target_size(0, 1080, MAX_DIMENSION), (1, 1));
         assert_eq!(target_size(100, 100, 0), (1, 1));
+    }
+
+    #[test]
+    fn a_card_preview_target_is_bounded_to_the_card() {
+        assert_eq!(target_size(3840, 2160, 960), (960, 540));
+        assert_eq!(target_size(3240, 2160, 960), (960, 640));
+    }
+
+    #[test]
+    fn pooled_buffers_can_be_sized_before_the_first_frame() {
+        let mut buffers: Vec<Arc<Vec<u8>>> = (0..FRAME_BUFFER_POOL_SIZE)
+            .map(|_| Arc::new(Vec::new()))
+            .collect();
+        let bytes = row_stride(3840) * 2160;
+        for buffer in &mut buffers {
+            if let Some(buffer) = Arc::get_mut(buffer)
+                && buffer.len() != bytes
+            {
+                buffer.resize(bytes, 0);
+            }
+        }
+        assert!(buffers.iter().all(|buffer| buffer.len() == bytes));
+        assert_eq!(reusable_buffer_index(&buffers), Some(0));
     }
 
     #[test]

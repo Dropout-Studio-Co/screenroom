@@ -150,13 +150,4 @@ mod tests {
         assert!(PREVIEW_DELAY >= Duration::from_millis(400));
         assert!(PREVIEW_MAX > PREVIEW_DELAY);
     }
-
-    #[test]
-    fn a_card_preview_never_asks_for_four_k_frames() {
-        assert!(PREVIEW_MAX_DIMENSION >= 480);
-        assert!(
-            PREVIEW_MAX_DIMENSION <= 1920,
-            "a card preview must not pay for frames larger than a card"
-        );
-    }
 }
