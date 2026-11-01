@@ -1580,3 +1580,28 @@ The slowest remaining event is the deferred refresh at 12–28 ms, under one fra
 All 335 workspace tests pass, including the desktop acceptance suite; clippy and
 rustfmt are clean. The owner's-media re-run stays **BLOCKED**: `/Volumes` holds only
 `mothership` and `Recovery`, so no 3240×2160 Main10 sample was reachable.
+
+### On-screen measurement needs a check mode, not an example (2026-11-01)
+
+Gate G2's on-screen half cannot come from the examples: they run offscreen with no
+window. What exists, confirmed in the code, and what blocks it:
+
+- `hides_its_window()` already keys off `SCREENROOM_WINDOW=hidden`, and `run()` sets
+  `visible: !hides_its_window()` with `.exit_on_close_request(false)`.
+- `apps/desktop/src/video_surface.rs::prepare` is the only place a frame reaches the
+  GPU (`queue.write_texture`, skipped while `uploaded_generation` is unchanged), so
+  a presented-frame counter belongs there and nowhere else.
+- `Message::Tick` drives `poll()` at `PLAYER_TICK`, so it can sample CPU/RSS and
+  enforce a deadline; `update` already returns `iced::exit()` on the quit path.
+- The blocker: playback is library-only. `open_player(&file_id, …)` takes a file id
+  from the library, so a path-based check has to scan the media's folder and open the
+  resulting item first. That plumbing was not landed here, because an unverified mode
+  is worse than a missing one.
+
+Plan for the next session: add `SCREENROOM_PLAY_CHECK=<csv>`,
+`SCREENROOM_PLAY_CHECK_MEDIA=<file>` and `SCREENROOM_PLAY_CHECK_SECONDS`; scan the
+media's folder, open the first item, count presentations in
+`video_surface::prepare`, sample `ps -o %cpu=,rss= -p <pid>` once per second, write
+`frames,fps,cpu_mean,rss_mean` and exit with `iced::exit()`. Run it with
+`SCREENROOM_WINDOW=hidden` and `SCREENROOM_ALLOW_FOREGROUND=0` on the 4K fixtures and
+confirm the frontmost application does not change.
