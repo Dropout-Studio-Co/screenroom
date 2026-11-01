@@ -11,6 +11,7 @@ mod playback;
 mod recommend;
 mod settings;
 mod sources;
+mod subtitles;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -35,6 +36,7 @@ pub use media_info::UnprobedFile;
 pub use metadata::EnrichmentSummary;
 pub use playback::Checkpoint;
 pub use settings::Preferences;
+pub use subtitles::{SUBTITLE_EXTENSIONS, StoredSubtitle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -148,6 +150,20 @@ fn add_bookmarks_table(tx: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn add_subtitles_table(tx: &Connection) -> Result<()> {
+    let present: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'subtitles'",
+        [],
+        |row| row.get(0),
+    )?;
+    if present == 0 {
+        for statement in schema::MIGRATE_7_TO_8 {
+            tx.execute(statement, [])?;
+        }
+    }
+    Ok(())
+}
+
 fn add_metadata_origin(tx: &Connection) -> Result<()> {
     let mut statement = tx.prepare("PRAGMA table_info(works)")?;
     let columns = statement
@@ -236,6 +252,7 @@ impl Library {
                 }
                 add_metadata_origin(&tx)?;
                 add_bookmarks_table(&tx)?;
+                add_subtitles_table(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -249,6 +266,7 @@ impl Library {
                 }
                 add_metadata_origin(&tx)?;
                 add_bookmarks_table(&tx)?;
+                add_subtitles_table(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -259,6 +277,7 @@ impl Library {
                 }
                 add_metadata_origin(&tx)?;
                 add_bookmarks_table(&tx)?;
+                add_subtitles_table(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -266,12 +285,20 @@ impl Library {
                 let tx = connection.transaction()?;
                 add_metadata_origin(&tx)?;
                 add_bookmarks_table(&tx)?;
+                add_subtitles_table(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
             6 => {
                 let tx = connection.transaction()?;
                 add_bookmarks_table(&tx)?;
+                add_subtitles_table(&tx)?;
+                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+                tx.commit()?;
+            }
+            7 => {
+                let tx = connection.transaction()?;
+                add_subtitles_table(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }

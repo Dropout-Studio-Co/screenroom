@@ -245,6 +245,10 @@ pub enum PlayerCommand {
 
     SetMuted(bool),
 
+    SubAdd {
+        path: PathBuf,
+    },
+
     Shutdown,
 }
 
@@ -408,6 +412,12 @@ impl Player {
 
     pub fn set_muted(&self, muted: bool) {
         self.send(PlayerCommand::SetMuted(muted));
+    }
+
+    pub fn sub_add(&self, path: impl AsRef<Path>) {
+        self.send(PlayerCommand::SubAdd {
+            path: path.as_ref().to_path_buf(),
+        });
     }
 
     pub fn stop(&self) {
@@ -625,6 +635,7 @@ impl Runner {
             }
             PlayerCommand::SetVolume(percent) => self.set_volume(percent, shared),
             PlayerCommand::SetMuted(muted) => self.set_muted(muted, shared),
+            PlayerCommand::SubAdd { path } => self.sub_add(&path, shared),
             PlayerCommand::Stop => self.stop(shared),
             PlayerCommand::Shutdown => {}
         }
@@ -796,6 +807,20 @@ impl Runner {
         };
         if let Err(error) = self.core.command(&["set", property, &value]) {
             self.fail("track_failed", error.to_string(), shared);
+            return;
+        }
+        self.tracks = read_tracks(&self.core);
+        let tracks = self.tracks.clone();
+        publish(shared, |snapshot| snapshot.tracks = tracks);
+    }
+
+    fn sub_add(&mut self, path: &Path, shared: &Arc<Mutex<PlayerSnapshot>>) {
+        if !self.loaded {
+            return;
+        }
+        let address = path.to_string_lossy().to_string();
+        if let Err(error) = self.core.command(&["sub-add", &address]) {
+            self.fail("subtitle_add_failed", error.to_string(), shared);
             return;
         }
         self.tracks = read_tracks(&self.core);

@@ -19,13 +19,13 @@ pub use library::{
     Artwork, ArtworkCandidate, BackupInfo, BackupReport, Bookmark, BookmarkDraft, Checkpoint,
     ConversionJob, ConversionPlan, ConversionProfile, ConversionStatus, EnrichmentSummary, Ingest,
     Library, LibraryQuery, OutputFacts, PathSemantics, Preferences, RestoreReport, Sort,
-    UnprobedFile, verify_output,
+    StoredSubtitle, UnprobedFile, verify_output,
 };
 pub use paths::{PathStyle, location_key};
 pub use scanner::{
     LibraryScanner, MEDIA_EXTENSIONS, ScanIssue, ScanSummary, ScanToken, ScanUpdate,
 };
 
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 pub const BACKUP_FORMAT_VERSION: i64 = 2;

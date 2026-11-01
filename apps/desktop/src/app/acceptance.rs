@@ -1542,3 +1542,56 @@ fn step_20_the_mini_player_keeps_playing_while_you_browse_and_reopens_the_full_o
         "the place it reached was stored, not thrown away"
     );
 }
+
+#[test]
+fn step_21_a_subtitle_is_kept_and_handed_to_the_player_without_touching_the_original() {
+    if !player_ready() {
+        return;
+    }
+    let media = Media::new();
+    let path = media.path("Subtitle Test (2020).mkv");
+    assert!(clip(&path, 4.0), "a generated clip is needed");
+    settle(&path);
+    let subtitle = media.path("Subtitle Test (2020).en.srt");
+    let body = "1\n00:00:01,000 --> 00:00:02,000\nHello\n";
+    std::fs::write(&subtitle, body).expect("subtitle");
+    let original = std::fs::read(&subtitle).expect("read original");
+
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(play(&mut app, &id), "the clip plays");
+    assert!(app.subtitles.is_empty());
+
+    let _ = app.update(Message::SubtitleChosen(
+        subtitle.to_string_lossy().to_string(),
+    ));
+    assert_eq!(app.subtitles.len(), 1, "the subtitle was not kept");
+    let stored = app.subtitles[0].clone();
+    assert_eq!(stored.language, "English");
+    assert_eq!(stored.format, "srt");
+    assert!(stored.provenance.contains("imported by you"));
+    assert_eq!(
+        std::fs::read(&subtitle).expect("still readable"),
+        original,
+        "the file the owner picked must not be modified"
+    );
+
+    let _ = app.update(Message::UseSubtitle(stored.id.clone()));
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(
+        app.status
+            .as_deref()
+            .is_some_and(|status| status.contains("Subtitle")),
+        "the handoff must be reported, got {:?}",
+        app.status
+    );
+
+    let _ = app.update(Message::RemoveSubtitle(stored.id.clone()));
+    assert!(app.subtitles.is_empty());
+    assert!(
+        subtitle.is_file(),
+        "the original file is untouched by removal"
+    );
+    let _ = app.update(Message::BackFromPlayer);
+}

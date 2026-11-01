@@ -52,6 +52,30 @@ pub fn choose_backup_path(start: Option<&Path>, file_name: &str) -> Picked {
     }
 }
 
+pub fn choose_subtitle(start: Option<&Path>) -> Picked {
+    #[cfg(target_os = "macos")]
+    {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Choose a subtitle file")
+            .add_filter(
+                "Subtitle",
+                &["srt", "smi", "vtt", "ass", "ssa", "sub", "ttml", "dfxp"],
+            );
+        if let Some(start) = start.filter(|path| path.is_dir()) {
+            dialog = dialog.set_directory(start);
+        }
+        match dialog.pick_file() {
+            Some(path) => Picked::Path(path),
+            None => Picked::Cancelled,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = start;
+        Picked::Unavailable("This build has no native file panel; import is unavailable here.")
+    }
+}
+
 pub fn choose_restore_file(start: Option<&Path>) -> Picked {
     #[cfg(target_os = "macos")]
     {

@@ -80,6 +80,8 @@ pub const CREATE: &[&str] = &[
 
     SOURCE_BOOKMARKS,
 
+    SUBTITLES,
+
     "CREATE INDEX IF NOT EXISTS editions_work ON editions(work_id)",
     "CREATE INDEX IF NOT EXISTS files_edition ON files(edition_id)",
     "CREATE INDEX IF NOT EXISTS file_episodes_episode ON file_episodes(episode_id)",
@@ -99,6 +101,10 @@ pub const MIGRATE_5_TO_6: &[&str] =
 pub const SOURCE_BOOKMARKS: &str = "CREATE TABLE IF NOT EXISTS source_bookmarks(id TEXT PRIMARY KEY,\n      label TEXT NOT NULL,address TEXT NOT NULL,protocol TEXT NOT NULL,\n      access TEXT NOT NULL DEFAULT '',provenance TEXT NOT NULL DEFAULT '',\n      added_ms INTEGER NOT NULL,UNIQUE(address))";
 
 pub const MIGRATE_6_TO_7: &[&str] = &[SOURCE_BOOKMARKS];
+
+pub const SUBTITLES: &str = "CREATE TABLE IF NOT EXISTS subtitles(id TEXT PRIMARY KEY,\n      file_id TEXT NOT NULL REFERENCES files(id),label TEXT NOT NULL,language TEXT NOT NULL,\n      format TEXT NOT NULL,provenance TEXT NOT NULL,bytes BLOB NOT NULL,\n      created_ms INTEGER NOT NULL)";
+
+pub const MIGRATE_7_TO_8: &[&str] = &[SUBTITLES];
 
 pub const MIGRATE_3_TO_4: &[&str] = &[
     CREATE[CREATE.len() - 4],

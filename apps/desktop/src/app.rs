@@ -417,6 +417,7 @@ pub struct App {
     up_next: Option<UpNext>,
 
     markers: Vec<SegmentMarker>,
+    subtitles: Vec<screenroom_core::StoredSubtitle>,
 
     preview: Option<Preview>,
     preview_frame: Option<Frame>,
@@ -591,6 +592,14 @@ pub enum Message {
     RemoveBookmark(String),
 
     OpenBookmark(String),
+
+    ImportSubtitle,
+
+    SubtitleChosen(String),
+
+    UseSubtitle(String),
+
+    RemoveSubtitle(String),
 
     CancelScan,
 
@@ -845,6 +854,7 @@ impl App {
             fullscreen: false,
             mini: false,
             markers: Vec::new(),
+            subtitles: Vec::new(),
             preview: None,
             preview_frame: None,
             preview_shown: None,
@@ -1424,6 +1434,7 @@ impl App {
 
         self.markers.clear();
         self.reload_markers(&item.edition_id);
+        self.reload_subtitles(&item.id);
         self.mark_pending = None;
         self.auto_skipped = None;
         self.mini = false;
@@ -1444,6 +1455,82 @@ impl App {
             return self.toggle_fullscreen();
         }
         Task::none()
+    }
+
+    fn reload_subtitles(&mut self, file_id: &str) {
+        match self.library.subtitles_for(file_id) {
+            Ok(subtitles) => self.subtitles = subtitles,
+            Err(error) => {
+                self.subtitles.clear();
+                self.report(&error);
+            }
+        }
+    }
+
+    fn import_subtitle(&mut self) {
+        let start = self
+            .active
+            .as_ref()
+            .and_then(|active| {
+                self.library
+                    .item(&active.file_id, Some(&self.profile_id))
+                    .ok()
+                    .flatten()
+            })
+            .and_then(|item| self.media_path(&item))
+            .and_then(|path| path.parent().map(Path::to_path_buf));
+        match crate::picker::choose_subtitle(start.as_deref()) {
+            crate::picker::Picked::Path(path) => {
+                self.subtitle_chosen(&path.to_string_lossy().to_string());
+            }
+            crate::picker::Picked::Cancelled => {}
+            crate::picker::Picked::Unavailable(reason) => self.status = Some(reason.to_string()),
+        }
+    }
+
+    fn subtitle_chosen(&mut self, path: &str) {
+        let Some(file_id) = self.active.as_ref().map(|active| active.file_id.clone()) else {
+            return;
+        };
+        match self.library.import_subtitle(&file_id, Path::new(path)) {
+            Ok(stored) => {
+                self.reload_subtitles(&file_id);
+                self.status = Some(format!(
+                    "Kept {} for this film; the file you picked was not changed.",
+                    stored.label
+                ));
+            }
+            Err(error) => self.report(&error),
+        }
+    }
+
+    fn use_subtitle(&mut self, id: &str) {
+        let Some(player) = &self.player else {
+            return;
+        };
+        match self.library.subtitle_path_for(id) {
+            Ok(Some(path)) => {
+                player.sub_add(&path);
+                self.status = Some("Subtitle handed to the player.".to_string());
+            }
+            Ok(None) => {
+                self.error = Some("That stored subtitle is no longer here.".to_string());
+            }
+            Err(error) => self.report(&error),
+        }
+    }
+
+    fn remove_subtitle(&mut self, id: &str) {
+        match self.library.remove_subtitle(id) {
+            Ok(true) => {
+                if let Some(file_id) = self.active.as_ref().map(|active| active.file_id.clone()) {
+                    self.reload_subtitles(&file_id);
+                }
+                self.status = Some("Stored subtitle removed.".to_string());
+            }
+            Ok(false) => {}
+            Err(error) => self.report(&error),
+        }
     }
 
     fn reduce_to_mini(&mut self) {
@@ -1623,6 +1710,7 @@ impl App {
         if let Some(player) = &self.player {
             player.stop();
         }
+        self.subtitles.clear();
         self.frame = None;
         self.scrub = None;
         self.snapshot = PlayerSnapshot::default();
@@ -3085,6 +3173,10 @@ impl App {
             Message::AddBookmark => self.add_bookmark(),
             Message::RemoveBookmark(id) => self.remove_bookmark(&id),
             Message::OpenBookmark(id) => self.open_bookmark(&id),
+            Message::ImportSubtitle => self.import_subtitle(),
+            Message::SubtitleChosen(path) => self.subtitle_chosen(&path),
+            Message::UseSubtitle(id) => self.use_subtitle(&id),
+            Message::RemoveSubtitle(id) => self.remove_subtitle(&id),
             Message::BackupNow => self.backup_now(),
             Message::RestorePathChanged(value) => {
                 self.restore_path = value;
@@ -5103,10 +5195,69 @@ impl App {
             })
             .unwrap_or_else(|| text("").size(tokens.type_scale.micro));
 
+        let mut subtitles = column![].spacing(tokens.spacing.field_y / 2.0);
+        let mut subtitle_head: iced::widget::Row<'_, Message> = row![
+            text("Subtitle files kept for this film")
+                .size(tokens.type_scale.micro)
+                .color(tokens.palette.ink_muted),
+        ]
+        .spacing(tokens.spacing.field_x)
+        .align_y(Alignment::Center);
+        subtitle_head = subtitle_head.push(
+            button(text("Import a subtitle file…").size(tokens.type_scale.label))
+                .on_press(Message::ImportSubtitle)
+                .style(design::quiet_style(false))
+                .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+        );
+        subtitles = subtitles.push(subtitle_head);
+        if self.subtitles.is_empty() {
+            subtitles = subtitles.push(
+                text(
+                    "None kept yet. An import copies the file into the library; the file on disk is \
+                     never modified or moved.",
+                )
+                .size(tokens.type_scale.micro)
+                .color(tokens.palette.disabled_foreground),
+            );
+        }
+        for subtitle in &self.subtitles {
+            subtitles = subtitles.push(
+                row![
+                    text(subtitle.label.clone()).size(tokens.type_scale.caption),
+                    text(format!(
+                        "{} · {}",
+                        subtitle.format.to_uppercase(),
+                        subtitle.provenance
+                    ))
+                    .size(tokens.type_scale.micro)
+                    .color(tokens.palette.ink_muted),
+                    button(text("Use").size(tokens.type_scale.label))
+                        .on_press(Message::UseSubtitle(subtitle.id.clone()))
+                        .style(design::action_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                    button(text("Remove").size(tokens.type_scale.label))
+                        .on_press(Message::RemoveSubtitle(subtitle.id.clone()))
+                        .style(design::danger_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                ]
+                .spacing(tokens.spacing.field_x)
+                .align_y(Alignment::Center),
+            );
+        }
+        subtitles = subtitles.push(
+            text(
+                "Searching a provider online needs an authorised account of your own, for example \
+                 OpenSubtitles with your API key; none is configured in this build, so no search is \
+                 offered here and nothing is fetched.",
+            )
+            .size(tokens.type_scale.micro)
+            .color(tokens.palette.ink_muted),
+        );
+
         let footer = row![resume].spacing(tokens.spacing.field_x);
 
         let chrome = container(
-            column![controls, volume_row, segments, track_row, footer]
+            column![controls, volume_row, segments, track_row, subtitles, footer]
                 .spacing(tokens.spacing.field_y),
         )
         .style(|_theme| design::container_style(Level::Panel, false))

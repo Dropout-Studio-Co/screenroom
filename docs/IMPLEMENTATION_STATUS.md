@@ -1413,3 +1413,31 @@ done.
   shrink again, Escape closes, no frame left, and the stored position kept.
 - **Not proven:** the panel has not been looked at in a window; system-wide PiP
   over other applications remains unimplemented and unclaimed.
+
+## F15 — imported subtitles kept and reused offline (2026-11-01)
+
+**The offline half is complete on macOS. Online search stays BLOCKED, without a
+fake control.**
+
+- Provider search needs an OpenSubtitles-compatible account and key plus a
+  licensing decision (ADR-010 remains PROPOSED). None exists, so no search box,
+  no disabled button and no placeholder result is shown: the player panel says
+  what would be needed and offers only what actually works.
+- `crates/screenroom-core/src/library/subtitles.rs` imports a subtitle the owner
+  picks **into the library** — bytes in the `subtitles` table (schema 8,
+  additive, guarded) — so it survives the file moving and is available with the
+  network off. Bounds: 4 MiB, text-only (a NUL in the first 8 KiB is refused),
+  eight known extensions, and the picked file is read once, never written,
+  moved or renamed. Language comes from a filename token (`en`, `bn`, `[bn]`) or
+  a `lang=` tag and is otherwise reported as *Unknown* rather than guessed.
+- The player gained `Player::sub_add` → `PlayerCommand::SubAdd` → mpv
+  `sub-add`, then re-reads the track list, so an imported file appears in the
+  existing subtitle picker. Removal deletes only the stored copy.
+- **Tests added:** five core tests (round trip with language/format/provenance,
+  Bengali and unknown languages, refused binaries/wrong extension/empty/oversize,
+  removal leaving the original file, schema 7 → 8 with a kept row) and `step_21`
+  (real clip, import, hand to the player, remove, original bytes compared before
+  and after).
+- **Not proven:** nothing was searched online, because nothing may be; the
+  panel has not been looked at in a window; no provider-downloaded subtitle has
+  been retained or tested for reuse.
