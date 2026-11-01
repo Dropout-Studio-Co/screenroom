@@ -114,6 +114,10 @@ pub fn status_bar<'a>(
     )
 }
 
+pub fn owns_full_bleed_hero(active: Option<Screen>) -> bool {
+    matches!(active, Some(Screen::Home) | Some(Screen::Detail))
+}
+
 pub fn frame<'a>(
     body: Element<'a, Message>,
     active: Option<Screen>,
@@ -124,16 +128,18 @@ pub fn frame<'a>(
         return body;
     }
 
-    let hero = matches!(active, Some(Screen::Home) | Some(Screen::Detail));
-    let body = container(body)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(Padding {
+    let hero = owns_full_bleed_hero(active);
+    let body = container(body).width(Length::Fill).height(Length::Fill);
+    let body = if hero {
+        body
+    } else {
+        body.padding(Padding {
             top: 0.0,
             bottom: 0.0,
             left: theme::PAD,
             right: theme::PAD,
-        });
+        })
+    };
 
     let bar = container(nav_bar(active))
         .width(Length::Fill)

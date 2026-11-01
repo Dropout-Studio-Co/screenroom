@@ -1,6 +1,6 @@
 use crate::app::Message;
 use crate::design;
-use crate::ui::components::poster::{CARD_GAP, CARD_WIDTH};
+use crate::ui::components::poster::CARD_GAP;
 use crate::ui::theme::{self, Gap};
 use iced::widget::{Id, Space, column, operation, row, scrollable, text};
 use iced::{Alignment, Element, Length, Task};
@@ -28,6 +28,7 @@ pub fn rail<'a>(
     count: usize,
     cards: Vec<(Element<'a, Message>, usize)>,
     focus: usize,
+    card_width: f32,
 ) -> Element<'a, Message> {
     let tokens = design::tokens();
     let at = focus.min(count.saturating_sub(1));
@@ -62,7 +63,7 @@ pub fn rail<'a>(
             scrollable::Anchor::End
         })
         .width(Length::Fill)
-        .height(Length::Fixed(CARD_WIDTH * 9.0 / 16.0 + 52.0));
+        .height(Length::Fixed(card_width * 9.0 / 16.0 + 52.0));
 
     column![header, strip]
         .spacing(theme::gap(Gap::Group))

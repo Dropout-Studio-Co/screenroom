@@ -19,6 +19,85 @@ pub enum Radius {
     Surface,
 
     Overlay,
+
+    Full,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Breakpoint {
+    Narrow,
+
+    Compact,
+
+    Standard,
+
+    Wide,
+
+    Ultra,
+}
+
+impl Breakpoint {
+    pub const ALL: &'static [Breakpoint] = &[
+        Breakpoint::Narrow,
+        Breakpoint::Compact,
+        Breakpoint::Standard,
+        Breakpoint::Wide,
+        Breakpoint::Ultra,
+    ];
+
+    pub fn at(width: f32) -> Breakpoint {
+        if !width.is_finite() {
+            return Breakpoint::Standard;
+        }
+        if width >= 1760.0 {
+            Breakpoint::Ultra
+        } else if width >= 1440.0 {
+            Breakpoint::Wide
+        } else if width >= 1100.0 {
+            Breakpoint::Standard
+        } else if width >= 900.0 {
+            Breakpoint::Compact
+        } else {
+            Breakpoint::Narrow
+        }
+    }
+
+    pub fn columns(self) -> usize {
+        match self {
+            Breakpoint::Narrow => 2,
+            Breakpoint::Compact => 4,
+            Breakpoint::Standard => 5,
+            Breakpoint::Wide => 6,
+            Breakpoint::Ultra => 7,
+        }
+    }
+
+    pub fn hero(self) -> f32 {
+        match self {
+            Breakpoint::Narrow => 340.0,
+            Breakpoint::Compact => 430.0,
+            Breakpoint::Standard => 480.0,
+            Breakpoint::Wide => 530.0,
+            Breakpoint::Ultra => 600.0,
+        }
+    }
+
+    pub fn card(self) -> f32 {
+        match self {
+            Breakpoint::Narrow => 176.0,
+            Breakpoint::Compact => 208.0,
+            Breakpoint::Standard => 224.0,
+            Breakpoint::Wide => 240.0,
+            Breakpoint::Ultra => 268.0,
+        }
+    }
+
+    pub fn content_cap(self) -> Option<f32> {
+        match self {
+            Breakpoint::Ultra => Some(1760.0),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +143,10 @@ pub fn signal() -> Color {
     design::tokens().palette.signal
 }
 
+pub fn signal_foreground() -> Color {
+    design::tokens().palette.signal_foreground
+}
+
 pub fn danger() -> Color {
     design::tokens().palette.destructive
 }
@@ -75,6 +158,7 @@ pub fn radius(step: Radius) -> f32 {
         Radius::Control => radius.control,
         Radius::Surface => radius.surface,
         Radius::Overlay => radius.overlay,
+        Radius::Full => radius.full,
     }
 }
 
@@ -123,7 +207,7 @@ pub fn semibold() -> Font {
 #[cfg(test)]
 mod tests {
     use crate::ui::theme;
-    use crate::ui::theme::{Gap, Radius};
+    use crate::ui::theme::{Breakpoint, Gap, Radius};
 
     #[test]
     fn theme_values_come_from_the_pinned_tokens() {
@@ -153,10 +237,44 @@ mod tests {
                 theme::radius(Radius::Small),
                 theme::radius(Radius::Control),
                 theme::radius(Radius::Surface),
-                theme::radius(Radius::Overlay)
+                theme::radius(Radius::Overlay),
+                theme::radius(Radius::Full)
             ],
-            [8.0, 12.0, 14.0, 16.0]
+            [8.0, 12.0, 14.0, 16.0, 9999.0]
         );
+        assert_eq!(
+            theme::signal_foreground(),
+            crate::design::tokens().palette.signal_foreground
+        );
+    }
+
+    #[test]
+    fn every_width_maps_to_a_breakpoint_with_sane_geometry() {
+        assert_eq!(Breakpoint::at(800.0), Breakpoint::Narrow);
+        assert_eq!(Breakpoint::at(960.0), Breakpoint::Compact);
+        assert_eq!(Breakpoint::at(1100.0), Breakpoint::Standard);
+        assert_eq!(Breakpoint::at(1500.0), Breakpoint::Wide);
+        assert_eq!(Breakpoint::at(3440.0), Breakpoint::Ultra);
+        for breakpoint in Breakpoint::ALL {
+            assert!(
+                breakpoint.columns() >= 2 && breakpoint.columns() <= 7,
+                "{breakpoint:?} must place between two and seven columns"
+            );
+            assert!(
+                breakpoint.hero() > 0.0 && breakpoint.card() > 0.0,
+                "{breakpoint:?} must carry a hero and a card size"
+            );
+        }
+        assert_eq!(Breakpoint::at(f32::NAN), Breakpoint::Standard);
+        assert_eq!(Breakpoint::at(1440.0), Breakpoint::Wide);
+        assert_eq!(Breakpoint::at(1200.0), Breakpoint::Standard);
+        assert_eq!(Breakpoint::at(900.0), Breakpoint::Compact);
+    }
+
+    #[test]
+    fn an_ultrawide_caps_its_content_instead_of_stretching_cards() {
+        assert_eq!(Breakpoint::Ultra.content_cap(), Some(1760.0));
+        assert_eq!(Breakpoint::Wide.content_cap(), None);
     }
 
     #[test]

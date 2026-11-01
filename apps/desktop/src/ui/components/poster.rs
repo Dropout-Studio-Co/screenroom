@@ -1,6 +1,6 @@
 use crate::app::Message;
 use crate::design;
-use crate::ui::theme::{self, Gap, Radius};
+use crate::ui::theme::{self, Breakpoint, Gap, Radius};
 use iced::widget::{Space, button, column, container, image, row, stack, text};
 use iced::{Background, Border, ContentFit, Element, Length, Shadow, Theme};
 
@@ -34,22 +34,7 @@ pub fn truncate(text: &str, max_chars: usize) -> &str {
 }
 
 pub fn card_columns(width: f32) -> usize {
-    if !width.is_finite() {
-        return 4;
-    }
-    if width >= 1760.0 {
-        7
-    } else if width >= 1440.0 {
-        6
-    } else if width >= 1200.0 {
-        5
-    } else if width >= 1000.0 {
-        4
-    } else if width >= 900.0 {
-        3
-    } else {
-        2
-    }
+    Breakpoint::at(width).columns()
 }
 
 pub struct Poster<'a> {

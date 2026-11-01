@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use iced::widget::shader;
 use iced::widget::{
-    Id, Space, button, checkbox, column, container, image, mouse_area, operation, pick_list, row,
-    scrollable, slider, stack, text, text_input,
+    Id, Space, button, column, container, image, operation, pick_list, row, slider, text,
+    text_input,
 };
-use iced::{Alignment, ContentFit, Element, Length, Subscription, Task, keyboard};
+use iced::{Alignment, Element, Length, Subscription, Task, keyboard};
 use screenroom_core::{
     ArtworkRetention, CatalogueMetadataProvider, ConversionJob, ConversionProfile,
     ConversionStatus, CoreError, EnrichmentDrainReport, Library, LibraryItem, LibraryQuery,
@@ -29,6 +29,7 @@ use crate::design::{self, Level};
 use crate::playback::PlaybackTracker;
 use crate::preview::{PREVIEW_DELAY, Preview, may_preview};
 use crate::probe::{DurationPass, spawn_duration_pass};
+use crate::ui;
 use crate::ui::route::{FocusPos, Nav};
 use crate::video_surface::{Frame, VideoSurface};
 
@@ -47,8 +48,6 @@ const DEFAULT_COLUMNS: usize = 4;
 const RAIL: i64 = 8;
 
 const SEEK_STEP: f64 = 10.0;
-
-const CARD_POSTER_HEIGHT: f32 = 150.0;
 
 const MINI_WIDTH: f32 = 320.0;
 
@@ -234,8 +233,6 @@ pub enum WatchFilter {
 }
 
 impl WatchFilter {
-    const ALL: [Self; 3] = [Self::Any, Self::Unwatched, Self::Watched];
-
     fn watched(self) -> Option<bool> {
         match self {
             Self::Any => None,
@@ -255,8 +252,6 @@ impl std::fmt::Display for WatchFilter {
     }
 }
 
-const ANY_GENRE: &str = "Any genre";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortChoice {
     Title,
@@ -275,6 +270,7 @@ impl std::fmt::Display for SortChoice {
 }
 
 impl SortChoice {
+    #[cfg(test)]
     const ALL: [Self; 4] = [Self::Title, Self::Added, Self::Year, Self::Progress];
 
     fn label(self) -> &'static str {
@@ -337,6 +333,7 @@ impl Browse {
         }
     }
 
+    #[cfg(test)]
     fn narrowed(&self) -> bool {
         !self.text.trim().is_empty()
             || self.kind != KindFilter::All
@@ -353,9 +350,38 @@ struct Detail {
 
     episodes: Vec<LibraryItem>,
 
+    shown: Vec<LibraryItem>,
+
     seasons: Vec<i64>,
 
+    season: i64,
+
     origin: (Screen, usize),
+}
+
+impl Detail {
+    fn compute_shown(&self) -> Vec<LibraryItem> {
+        let held: Vec<LibraryItem> = self
+            .episodes
+            .iter()
+            .filter(|episode| episode.season.unwrap_or(self.season) == self.season)
+            .cloned()
+            .collect();
+
+        if held.is_empty() {
+            self.episodes.clone()
+        } else {
+            held
+        }
+    }
+
+    fn refresh_shown(&mut self) {
+        self.shown = self.compute_shown();
+    }
+
+    fn season_episodes(&self) -> &[LibraryItem] {
+        &self.shown
+    }
 }
 
 struct Active {
@@ -431,6 +457,8 @@ pub struct App {
     nav: Nav,
 
     settings_focus: usize,
+
+    settings_section: ui::screens::settings::Section,
 
     home: Vec<LibraryItem>,
 
@@ -633,6 +661,8 @@ pub enum Message {
 
     OpenDetail(String),
 
+    SeasonChosen(i64),
+
     Play(String),
 
     Restart(String),
@@ -694,6 +724,8 @@ pub enum Message {
     RelinkSource,
 
     GoSettings,
+
+    SettingsSection(ui::screens::settings::Section),
 
     ProfileChosen(String),
 
@@ -1032,6 +1064,7 @@ impl App {
             preferences,
             profiles: Vec::new(),
             settings_focus: 0,
+            settings_section: ui::screens::settings::Section::default(),
             sources: Vec::new(),
             new_profile: String::new(),
             relink_target: None,
@@ -1472,10 +1505,57 @@ impl App {
     }
 
     fn clamp_focus(&mut self) {
+        if self.screen == Screen::Home {
+            let sections = self.home_sections();
+            let current = self.nav.focus();
+            let rail = current.rail.min(sections.len().saturating_sub(1));
+            let held = sections.get(rail).map_or(0, |(_, items)| items.len());
+            let column = if held == 0 {
+                0
+            } else {
+                current.column.min(held - 1)
+            };
+            self.nav.set_focus(FocusPos { rail, column });
+            self.sync_navigation();
+            return;
+        }
+
         let len = self.visible_len();
         self.focus_card(if len == 0 { 0 } else { self.focus.min(len - 1) });
     }
 
+    fn home_sections(&self) -> Vec<(&'static str, Vec<&LibraryItem>)> {
+        let suggested: Vec<&LibraryItem> = self
+            .suggestions
+            .iter()
+            .map(|suggestion| &suggestion.item)
+            .collect();
+        ui::screens::home::rails_for(&self.home, &suggested)
+    }
+
+    fn home_selected_item(&self) -> Option<&LibraryItem> {
+        let sections = self.home_sections();
+        let focus = self.nav.focus();
+        sections
+            .get(focus.rail)
+            .and_then(|(_, items)| items.get(focus.column))
+            .copied()
+    }
+
+    fn home_focus_index(&self) -> Option<usize> {
+        let selected = self.home_selected_item()?;
+        self.home
+            .iter()
+            .position(|item| item.id == selected.id)
+            .or_else(|| {
+                self.suggestions
+                    .iter()
+                    .position(|suggestion| suggestion.item.id == selected.id)
+                    .map(|index| index + self.home.len())
+            })
+    }
+
+    #[cfg(test)]
     fn home_item(&self, index: usize) -> Option<&LibraryItem> {
         if index < self.home.len() {
             self.home.get(index)
@@ -1495,7 +1575,7 @@ impl App {
             Screen::Detail => self
                 .detail
                 .as_ref()
-                .map(|detail| detail.episodes.len().max(1))
+                .map(|detail| detail.season_episodes().len().max(1))
                 .unwrap_or(0),
         }
     }
@@ -1566,16 +1646,25 @@ impl App {
             _ => (self.screen, self.focus),
         };
 
-        let focus = episodes
-            .iter()
-            .position(|episode| episode.id == item.id)
-            .unwrap_or(0);
-        self.detail = Some(Detail {
+        let season = item
+            .season
+            .or_else(|| seasons.first().copied())
+            .unwrap_or(1);
+        let mut detail = Detail {
             item,
             episodes,
+            shown: Vec::new(),
             seasons,
+            season,
             origin,
-        });
+        };
+        detail.refresh_shown();
+        let focus = detail
+            .season_episodes()
+            .iter()
+            .position(|episode| episode.id == detail.item.id)
+            .unwrap_or(0);
+        self.detail = Some(detail);
         self.open_screen(Screen::Detail);
         self.focus_card(focus);
         self.ensure_artwork();
@@ -2220,6 +2309,7 @@ impl App {
                 if let Some(episodes) = episodes {
                     detail.episodes = episodes;
                 }
+                detail.refresh_shown();
             }
         }
     }
@@ -3826,9 +3916,20 @@ impl App {
                 }
             }
 
-            Message::Move(direction) => self.move_focus(direction),
+            Message::Move(direction) => return self.move_focus(direction),
             Message::Activate => self.activate(),
             Message::OpenDetail(file_id) => self.open_detail(&file_id),
+            Message::SeasonChosen(season) => {
+                if let Some(detail) = self.detail.as_mut() {
+                    detail.season = season;
+                    detail.refresh_shown();
+                }
+                self.focus_card(0);
+            }
+            Message::SettingsSection(section) => {
+                self.settings_section = section;
+                self.settings_focus = 0;
+            }
             Message::Play(file_id) => self.open_player(&file_id, false),
             Message::Restart(file_id) => self.open_player(&file_id, true),
             Message::ToggleFavorite(work_id) => {
@@ -4071,17 +4172,49 @@ impl App {
         Task::none()
     }
 
-    fn move_focus(&mut self, direction: Focus) {
+    fn move_focus(&mut self, direction: Focus) -> Task<Message> {
+        if self.screen == Screen::Home {
+            let rails: Vec<(&'static str, usize)> = self
+                .home_sections()
+                .iter()
+                .map(|(label, items)| (*label, items.len()))
+                .collect();
+            let counts: Vec<usize> = rails.iter().map(|(_, count)| *count).collect();
+            if counts.is_empty() {
+                self.focus_card(0);
+                return Task::none();
+            }
+            self.nav.move_focus(
+                match direction {
+                    Focus::Left => ui::route::Focus::Left,
+                    Focus::Right => ui::route::Focus::Right,
+                    Focus::Up => ui::route::Focus::Up,
+                    Focus::Down => ui::route::Focus::Down,
+                },
+                &counts,
+                ui::theme::Breakpoint::at(self.window_width).columns(),
+            );
+            self.sync_navigation();
+            let focus = self.nav.focus();
+            return rails.get(focus.rail).map_or(Task::none(), |(label, _)| {
+                ui::components::rail::scroll_task(
+                    label,
+                    focus.column,
+                    ui::theme::Breakpoint::at(self.window_width).card(),
+                )
+            });
+        }
+
         let len = self.visible_len();
         if len == 0 {
             self.focus_card(0);
-            return;
+            return Task::none();
         }
         let current = self.focus.min(len - 1);
 
         let step = match self.screen {
             Screen::Detail => 1,
-            _ => self.columns(),
+            _ => grid_columns(self.window_width),
         };
         let next = match direction {
             Focus::Left => current.checked_sub(1),
@@ -4093,11 +4226,16 @@ impl App {
             }
         };
         self.focus_card(next.unwrap_or(current));
+
+        if self.screen == Screen::Browse {
+            return ui::screens::library::scroll_task(self.nav.focus(), self.window_width);
+        }
+        Task::none()
     }
 
     fn activate(&mut self) {
         let file_id = match self.screen {
-            Screen::Home => self.home_item(self.focus).map(|item| item.id.clone()),
+            Screen::Home => self.home_selected_item().map(|item| item.id.clone()),
             Screen::Browse => self
                 .browse
                 .items
@@ -4106,11 +4244,10 @@ impl App {
 
             Screen::Detail => self.detail.as_ref().map(|detail| {
                 detail
-                    .episodes
+                    .season_episodes()
                     .get(self.focus)
-                    .unwrap_or(&detail.item)
-                    .id
-                    .clone()
+                    .map(|episode| episode.id.clone())
+                    .unwrap_or_else(|| detail.item.id.clone())
             }),
             Screen::Player | Screen::Settings => None,
         };
@@ -4342,8 +4479,8 @@ impl App {
             Screen::Detail => match key {
                 Key::Named(Named::Escape) => self.back(),
                 Key::Named(Named::Enter) => self.activate(),
-                Key::Named(Named::ArrowUp) => self.move_focus(Focus::Up),
-                Key::Named(Named::ArrowDown) => self.move_focus(Focus::Down),
+                Key::Named(Named::ArrowUp) => return self.move_focus(Focus::Up),
+                Key::Named(Named::ArrowDown) => return self.move_focus(Focus::Down),
                 Key::Character(character) => match character.as_str() {
                     "f" => self.toggle_focused_flag(Flag::Favorite),
                     "w" => self.toggle_focused_flag(Flag::Watchlist),
@@ -4363,10 +4500,10 @@ impl App {
             _ => match key {
                 Key::Named(Named::Escape) => self.back(),
                 Key::Named(Named::Enter) => self.activate(),
-                Key::Named(Named::ArrowLeft) => self.move_focus(Focus::Left),
-                Key::Named(Named::ArrowRight) => self.move_focus(Focus::Right),
-                Key::Named(Named::ArrowUp) => self.move_focus(Focus::Up),
-                Key::Named(Named::ArrowDown) => self.move_focus(Focus::Down),
+                Key::Named(Named::ArrowLeft) => return self.move_focus(Focus::Left),
+                Key::Named(Named::ArrowRight) => return self.move_focus(Focus::Right),
+                Key::Named(Named::ArrowUp) => return self.move_focus(Focus::Up),
+                Key::Named(Named::ArrowDown) => return self.move_focus(Focus::Down),
                 _ => {}
             },
         }
@@ -4503,7 +4640,7 @@ impl App {
                     .iter()
                     .chain(self.suggestions.iter().map(|suggestion| &suggestion.item))
                     .collect();
-                facts.focus = Some(self.focus);
+                facts.focus = self.home_focus_index();
             }
             Screen::Browse => {
                 facts.items = self.browse.items.iter().collect();
@@ -4523,7 +4660,7 @@ impl App {
                     facts.items = if detail.episodes.is_empty() {
                         vec![&detail.item]
                     } else {
-                        detail.episodes.iter().collect()
+                        detail.season_episodes().iter().collect()
                     };
                     facts.flags = Some(Flags {
                         favourite: detail.item.favorite,
@@ -4595,11 +4732,11 @@ impl App {
     fn view(&self) -> Element<'_, Message> {
         crate::accessibility::publish(self.accessible_screen());
         let body = match self.screen {
-            Screen::Home => self.home_view(),
-            Screen::Browse => self.browse_view(),
-            Screen::Detail => self.detail_view(),
-            Screen::Player => self.player_view(),
-            Screen::Settings => self.settings_view(),
+            Screen::Home => self.home_screen(),
+            Screen::Browse => self.library_screen(),
+            Screen::Detail => self.detail_screen(),
+            Screen::Player => self.player_screen(),
+            Screen::Settings => self.settings_screen(),
         };
 
         if self.fullscreen && self.screen == Screen::Player {
@@ -4613,13 +4750,13 @@ impl App {
 
         let mut content = body;
         if let Some(strip) = self.scan_strip() {
-            content = column![strip, content]
+            content = column![self.gutter(strip), content]
                 .spacing(design::tokens().spacing.content_pad)
                 .width(Length::Fill)
                 .into();
         }
         if self.mini && self.screen != Screen::Player {
-            content = column![content, self.mini_view()]
+            content = column![content, self.gutter(self.mini_view())]
                 .spacing(design::tokens().spacing.content_pad)
                 .width(Length::Fill)
                 .into();
@@ -4631,6 +4768,310 @@ impl App {
             self.status.as_deref(),
             self.error.as_deref(),
         )
+    }
+
+    fn gutter<'a>(&self, body: Element<'a, Message>) -> Element<'a, Message> {
+        container(body)
+            .width(Length::Fill)
+            .padding(iced::Padding {
+                top: 0.0,
+                bottom: 0.0,
+                left: crate::ui::theme::PAD,
+                right: crate::ui::theme::PAD,
+            })
+            .into()
+    }
+
+    fn home_screen(&self) -> Element<'_, Message> {
+        let suggested: Vec<&LibraryItem> = self
+            .suggestions
+            .iter()
+            .map(|suggestion| &suggestion.item)
+            .collect();
+        let resume = self
+            .home
+            .first()
+            .or_else(|| self.suggestions.first().map(|suggestion| &suggestion.item));
+
+        ui::screens::home::Home {
+            continue_watching: &self.home,
+            suggested,
+            resume,
+            nav: &self.nav,
+            empty: false,
+            art: &self.artwork,
+            width: self.window_width,
+        }
+        .view()
+    }
+
+    fn library_screen(&self) -> Element<'_, Message> {
+        ui::screens::library::Library {
+            items: &self.browse.items,
+            total: self.browse.total.max(0) as usize,
+            page: self.browse.page as u32,
+            pages: self.browse.page_count() as u32,
+            query: &self.browse.text,
+            filter: self.browse_filter(),
+            sort: self.browse.sort,
+            source_line: ui::screens::library::source_line(
+                self.sources.len(),
+                self.browse.total.max(0) as usize,
+                self.last_scan_phrase().as_deref(),
+            ),
+            nav: &self.nav,
+            genres: &self.browse.genres,
+            genre: self.browse.genre.as_deref(),
+            art: &self.artwork,
+            width: self.window_width,
+        }
+        .view()
+    }
+
+    fn browse_filter(&self) -> ui::screens::library::Filter {
+        use ui::screens::library::Filter;
+        if self.browse.available_only {
+            Filter::AvailableOffline
+        } else if self.browse.watch == WatchFilter::Unwatched {
+            Filter::Unwatched
+        } else {
+            match self.browse.kind {
+                KindFilter::Movies => Filter::Films,
+                KindFilter::Series => Filter::Series,
+                KindFilter::All => Filter::All,
+            }
+        }
+    }
+
+    fn last_scan_phrase(&self) -> Option<String> {
+        let newest = self
+            .sources
+            .iter()
+            .filter_map(|source| source.last_scan_ms)
+            .max()?;
+        let elapsed = (epoch_ms() - newest).max(0) / 1_000;
+        Some(match elapsed {
+            0..=90 => "scanned just now".to_string(),
+            seconds if seconds < 3_600 => {
+                format!("scanned {} minutes ago", (seconds / 60).max(1))
+            }
+            seconds if seconds < 86_400 => format!("scanned {} hours ago", seconds / 3_600),
+            seconds => format!("scanned {} days ago", seconds / 86_400),
+        })
+    }
+
+    fn detail_screen(&self) -> Element<'_, Message> {
+        let Some(detail) = &self.detail else {
+            return self.empty_note("Nothing selected.", "Open something from the library.");
+        };
+
+        ui::screens::detail::Detail {
+            item: &detail.item,
+            episodes: detail.season_episodes(),
+            seasons: &detail.seasons,
+            season: detail.season,
+            nav: &self.nav,
+            facts: self.detail_facts(&detail.item),
+            art: &self.artwork,
+            width: self.window_width,
+            extra: Some(self.detail_extra(&detail.item)),
+        }
+        .view()
+    }
+
+    fn detail_facts(&self, item: &LibraryItem) -> String {
+        let mut lines: Vec<String> = vec![
+            item.kind.as_str().to_string(),
+            item.year.map(|year| year.to_string()).unwrap_or_default(),
+            item.episode_label(),
+            if item.duration_ms > 0 {
+                format!(
+                    "{} / {}",
+                    clock(item.position_ms as f64 / 1_000.0),
+                    clock(item.duration_ms as f64 / 1_000.0)
+                )
+            } else {
+                "duration reported by the player on open".to_string()
+            },
+            if item.genres.is_empty() {
+                String::new()
+            } else {
+                item.genres.join(", ")
+            },
+            if item.metadata_origin == "nfo" {
+                "details from a local NFO file".to_string()
+            } else {
+                String::new()
+            },
+            item.relative_path.clone(),
+        ]
+        .into_iter()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+
+        if !item.available {
+            lines.push(
+                "This file is not readable right now. Relink its source and rescan.".to_string(),
+            );
+        }
+
+        lines.join("\n")
+    }
+
+    fn detail_extra(&self, item: &LibraryItem) -> Element<'_, Message> {
+        let tokens = design::tokens();
+        let secondary = |label: String, message: Message| -> Element<'_, Message> {
+            button(text(label).size(tokens.type_scale.label))
+                .on_press(message)
+                .style(design::quiet_style(false))
+                .padding([tokens.spacing.field_y, tokens.spacing.field_x])
+                .into()
+        };
+
+        column![
+            row![
+                secondary("Start over".to_string(), Message::Restart(item.id.clone()),),
+                secondary(
+                    if item.favorite {
+                        "Favourited".to_string()
+                    } else {
+                        "Favourite".to_string()
+                    },
+                    Message::ToggleFavorite(item.work_id.clone()),
+                ),
+                secondary(
+                    "Hide from Continue".to_string(),
+                    Message::HideFromContinue(item.edition_id.clone()),
+                ),
+            ]
+            .spacing(tokens.spacing.field_x)
+            .align_y(Alignment::Center),
+            self.detail_conversion_row(item),
+        ]
+        .spacing(tokens.spacing.field_y)
+        .width(Length::Fill)
+        .into()
+    }
+
+    fn player_screen(&self) -> Element<'_, Message> {
+        let title = self
+            .active
+            .as_ref()
+            .map(|active| active.title.clone())
+            .unwrap_or_else(|| "Player".to_string());
+        let episode =
+            self.active
+                .as_ref()
+                .and_then(|active| match (active.season, active.episode) {
+                    (Some(season), Some(episode)) => Some(format!("S{season:02}E{episode:02}")),
+                    _ => None,
+                });
+        let output = self.snapshot.output.label();
+
+        ui::screens::player::Player {
+            snapshot: &self.snapshot,
+            title,
+            episode,
+            output: Some(output.clone()),
+            nav: &self.nav,
+            width: self.window_width,
+            position: self.scrub.unwrap_or(self.snapshot.position),
+            volume: self.volume_percent(),
+            chrome: true,
+            overlay: Some(self.player_overlay()),
+        }
+        .view()
+    }
+
+    fn player_overlay(&self) -> Element<'_, Message> {
+        let tokens = design::tokens();
+        let mut block = column![].spacing(tokens.spacing.field_y);
+
+        if let Some(up) = &self.up_next {
+            let left = up
+                .starts_at
+                .saturating_duration_since(std::time::Instant::now())
+                .as_secs_f32()
+                .ceil();
+            block = block.push(
+                row![
+                    text(format!("Up next: {} in {left:.0} s", up.title))
+                        .size(tokens.type_scale.label),
+                    button(text("Play now").size(tokens.type_scale.label))
+                        .on_press(Message::PlayNextNow)
+                        .style(design::action_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                    button(text("Cancel").size(tokens.type_scale.label))
+                        .on_press(Message::CancelNext)
+                        .style(design::quiet_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                ]
+                .spacing(tokens.spacing.field_x)
+                .align_y(Alignment::Center),
+            );
+        }
+
+        if let Some(marker) = self.active_marker() {
+            let label = if marker.kind == "intro" {
+                "Skip intro"
+            } else {
+                "Skip credits"
+            };
+            block = block.push(
+                row![
+                    button(text(label).size(tokens.type_scale.label))
+                        .on_press(Message::SkipSegment)
+                        .style(design::action_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                    text(if marker.kind == "intro" {
+                        "A segment you marked starts here."
+                    } else {
+                        "A credits segment you marked starts here."
+                    })
+                    .size(tokens.type_scale.micro)
+                    .color(tokens.palette.ink_muted),
+                ]
+                .spacing(tokens.spacing.field_x)
+                .align_y(Alignment::Center),
+            );
+        }
+
+        block = block.push(
+            row![
+                text(
+                    self.active
+                        .as_ref()
+                        .filter(|active| active.resume_from_ms > 0 && !self.snapshot.ended)
+                        .map(|active| format!(
+                            "resumed from {}",
+                            clock(active.resume_from_ms as f64 / 1_000.0)
+                        ))
+                        .unwrap_or_default()
+                )
+                .size(tokens.type_scale.micro)
+                .color(tokens.palette.ink_muted),
+                Space::new().width(Length::Fill),
+                button(text("Mini player").size(tokens.type_scale.label))
+                    .on_press(Message::ReduceToMini)
+                    .style(design::quiet_style(false))
+                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+            ]
+            .spacing(tokens.spacing.field_x)
+            .align_y(Alignment::Center),
+        );
+
+        block.width(Length::Fill).into()
+    }
+
+    fn settings_screen(&self) -> Element<'_, Message> {
+        ui::screens::settings::Settings {
+            section: self.settings_section,
+            rows: self.settings_rows(),
+            nav: &self.nav,
+            width: self.window_width,
+            extra: Some(self.settings_detail()),
+        }
+        .view()
     }
 
     fn screen_label(&self) -> String {
@@ -4646,34 +5087,6 @@ impl App {
             Screen::Player => "Player".to_string(),
             Screen::Settings => "Settings".to_string(),
         }
-    }
-
-    fn home_view(&self) -> Element<'_, Message> {
-        let tokens = design::tokens();
-        let mut body = column![]
-            .spacing(tokens.spacing.content_pad)
-            .width(Length::Fill);
-
-        let resuming = !self.home.is_empty();
-        body = body.push(text("Continue watching").size(tokens.type_scale.title_sm));
-        if resuming {
-            body = body.push(self.card_grid(&self.home, 0));
-        } else {
-            body = body.push(self.empty_note(
-                "Nothing in progress.",
-                "Start something from the library and its position appears here.",
-            ));
-        }
-
-        if !self.suggestions.is_empty() {
-            body = body.push(text("Suggested for you").size(tokens.type_scale.title_sm));
-            body = body.push(self.suggestion_grid(self.home.len()));
-        }
-
-        body = body.push(text("Your library").size(tokens.type_scale.subtitle));
-        body = body.push(self.add_folder_row());
-
-        scrollable(body).height(Length::Fill).into()
     }
 
     fn add_folder_row(&self) -> Element<'_, Message> {
@@ -4732,531 +5145,409 @@ impl App {
         .into()
     }
 
-    fn browse_view(&self) -> Element<'_, Message> {
-        let tokens = design::tokens();
-        let filters = column![
-            row![
-                text_input("Search titles and filenames", &self.browse.text)
-                    .on_input(Message::SearchChanged)
-                    .style(design::input_style())
-                    .padding(tokens.spacing.field_y)
-                    .width(Length::Fill),
-                pick_list(
-                    [KindFilter::All, KindFilter::Movies, KindFilter::Series],
-                    Some(self.browse.kind),
-                    Message::KindChanged,
-                ),
-                pick_list(
-                    SortChoice::ALL,
-                    Some(self.browse.sort),
-                    Message::SortChanged
-                ),
-                pick_list(
-                    WatchFilter::ALL,
-                    Some(self.browse.watch),
-                    Message::WatchChanged
-                ),
-            ]
-            .push((!self.browse.genres.is_empty()).then(|| {
-                pick_list(
-                    std::iter::once(ANY_GENRE.to_string())
-                        .chain(self.browse.genres.iter().cloned())
-                        .collect::<Vec<_>>(),
-                    self.browse.genre.clone(),
-                    |genre: String| Message::GenreChanged((genre != ANY_GENRE).then_some(genre)),
-                )
-                .placeholder(ANY_GENRE)
-            }))
-            .spacing(tokens.spacing.field_x)
-            .align_y(Alignment::Center),
-            row![
-                checkbox(self.browse.watchlist_only)
-                    .label("Watchlist")
-                    .on_toggle(Message::ToggleWatchlistOnly),
-                checkbox(self.browse.favorites_only)
-                    .label("Favourites")
-                    .on_toggle(Message::ToggleFavoritesOnly),
-                checkbox(self.browse.available_only)
-                    .label("Available only")
-                    .on_toggle(Message::ToggleAvailableOnly),
-                Space::new().width(Length::Fill),
-                button(text("Previous").size(tokens.type_scale.caption))
-                    .on_press_maybe((self.browse.page > 0).then_some(Message::PreviousPage))
-                    .style(design::quiet_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                text(format!(
-                    "page {} / {}",
-                    self.browse.page + 1,
-                    self.browse.page_count()
-                ))
-                .size(tokens.type_scale.caption),
-                button(text("Next").size(tokens.type_scale.caption))
-                    .on_press_maybe(
-                        (self.browse.page + 1 < self.browse.page_count())
-                            .then_some(Message::NextPage),
-                    )
-                    .style(design::quiet_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            ]
-            .spacing(tokens.spacing.field_x)
-            .align_y(Alignment::Center),
-        ]
-        .spacing(tokens.spacing.field_y);
-
-        let body: Element<'_, Message> = if self.browse.total == 0 {
-            let (title, detail) =
-                browse_empty_copy(!self.sources.is_empty(), self.browse.narrowed());
-            self.empty_note(title, detail)
-        } else {
-            self.card_grid(&self.browse.items, 0)
-        };
-
-        scrollable(
-            column![filters, body]
-                .spacing(tokens.spacing.content_pad)
-                .width(Length::Fill),
-        )
-        .height(Length::Fill)
-        .into()
-    }
-
-    fn detail_view(&self) -> Element<'_, Message> {
-        let tokens = design::tokens();
-        let Some(detail) = &self.detail else {
-            return self.empty_note("Nothing selected.", "Open something from the library.");
-        };
-        let item = &detail.item;
-
-        let facts = [
-            item.kind.as_str().to_string(),
-            item.year.map(|year| year.to_string()).unwrap_or_default(),
-            item.episode_label(),
-            if item.genres.is_empty() {
-                String::new()
-            } else {
-                item.genres.join(", ")
-            },
-            if item.metadata_origin == "nfo" {
-                "details from a local NFO file".to_string()
-            } else {
-                String::new()
-            },
-        ]
-        .into_iter()
-        .filter(|fact| !fact.is_empty())
-        .collect::<Vec<_>>()
-        .join(" · ");
-
-        let progress = if item.duration_ms > 0 {
-            format!(
-                "{} / {}",
-                clock(item.position_ms as f64 / 1_000.0),
-                clock(item.duration_ms as f64 / 1_000.0)
-            )
-        } else {
-            "duration reported by the player on open".to_string()
-        };
-
-        let actions = row![
-            if item.position_ms > 0 {
-                button(text("Resume").size(tokens.type_scale.label))
-                    .on_press_maybe(item.available.then_some(Message::Play(item.id.clone())))
-                    .style(design::action_style(true))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x])
-            } else {
-                button(text("Play").size(tokens.type_scale.label))
-                    .on_press_maybe(item.available.then_some(Message::Play(item.id.clone())))
-                    .style(design::action_style(true))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x])
-            },
-            button(text("Start over").size(tokens.type_scale.label))
-                .on_press_maybe(item.available.then_some(Message::Restart(item.id.clone())))
-                .style(design::quiet_style(false))
-                .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            button(
-                text(if item.favorite {
-                    "Favourited"
-                } else {
-                    "Favourite"
-                })
-                .size(tokens.type_scale.label)
-            )
-            .on_press(Message::ToggleFavorite(item.work_id.clone()))
-            .style(design::quiet_style(false))
-            .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            button(
-                text(if item.watchlisted {
-                    "On watchlist"
-                } else {
-                    "Watchlist"
-                })
-                .size(tokens.type_scale.label)
-            )
-            .on_press(Message::ToggleWatchlist(item.work_id.clone()))
-            .style(design::quiet_style(false))
-            .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            button(
-                text(if item.watched {
-                    "Watched"
-                } else {
-                    "Mark watched"
-                })
-                .size(tokens.type_scale.label)
-            )
-            .on_press(Message::ToggleWatched(item.edition_id.clone()))
-            .style(design::quiet_style(false))
-            .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            button(text("Hide from Continue").size(tokens.type_scale.label))
-                .on_press(Message::HideFromContinue(item.edition_id.clone()))
-                .style(design::quiet_style(false))
-                .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-        ]
-        .spacing(tokens.spacing.field_x)
-        .align_y(Alignment::Center);
-
-        let mut body = column![
-            text(item.title.clone()).size(tokens.type_scale.title),
-            text(facts)
-                .size(tokens.type_scale.caption)
-                .color(tokens.palette.ink_muted),
-            text(progress).size(tokens.type_scale.label),
-            actions,
-            self.detail_conversion_row(item),
-        ]
-        .spacing(tokens.spacing.field_y)
-        .width(Length::Fill);
-
-        if item.overview.trim().is_empty() {
-            body = body.push(
-                text("No synopsis stored for this title yet.")
-                    .size(tokens.type_scale.caption)
-                    .color(tokens.palette.ink_muted),
-            );
-        } else {
-            body = body.push(text(item.overview.clone()).size(tokens.type_scale.body));
-        }
-        body = body.push(
-            text(item.relative_path.clone())
-                .size(tokens.type_scale.micro)
-                .color(tokens.palette.ink_muted),
-        );
-        if !item.available {
-            body = body.push(
-                text("This file is not readable right now. Relink its source and rescan.")
-                    .size(tokens.type_scale.label)
-                    .color(tokens.palette.destructive),
-            );
-        }
-
-        if item.kind == MediaKind::Series {
-            body = body.push(
-                text(if detail.seasons.is_empty() {
-                    "Episodes".to_string()
-                } else {
-                    format!(
-                        "Seasons {} · {} episode(s) held",
-                        detail
-                            .seasons
-                            .iter()
-                            .map(|season| season.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        detail.episodes.len()
-                    )
-                })
-                .size(tokens.type_scale.subtitle),
-            );
-            if detail.episodes.is_empty() {
-                body = body.push(self.empty_note(
-                    "No other episodes of this series are in the library.",
-                    "Add the folder that holds them and rescan.",
-                ));
-            } else {
-                body = body.push(self.episode_list(&detail.episodes));
-            }
-        }
-
-        let details: Element<'_, Message> = match self.artwork.get(&item.work_id) {
-            Some(handle) => row![
-                image(handle.clone())
-                    .width(Length::Fixed(DETAIL_POSTER.0))
-                    .height(Length::Fixed(self.detail_poster_height(&item.work_id)))
-                    .content_fit(ContentFit::Cover),
-                body,
-            ]
-            .spacing(tokens.spacing.content_pad)
-            .align_y(Alignment::Start)
-            .into(),
-            None => body.into(),
-        };
-
-        scrollable(details).height(Length::Fill).into()
-    }
-
-    fn detail_poster_height(&self, work_id: &str) -> f32 {
-        let aspect = self
-            .artwork_aspect
-            .get(work_id)
-            .copied()
-            .filter(|aspect| aspect.is_finite() && *aspect > 0.0)
-            .unwrap_or(DETAIL_POSTER.0 / DETAIL_POSTER.1);
-        (DETAIL_POSTER.0 / aspect).clamp(140.0, DETAIL_POSTER.1)
-    }
-
-    fn episode_list(&self, episodes: &[LibraryItem]) -> Element<'_, Message> {
-        let tokens = design::tokens();
-        let mut list = column![].spacing(2.0).width(Length::Fill);
-        for (index, episode) in episodes.iter().enumerate() {
-            let label = episode.episode_label();
-            let heading = if label.is_empty() {
-                episode.title.clone()
-            } else {
-                format!("{label}  {}", episode.title)
-            };
-            let progress = if episode.duration_ms > 0 && episode.position_ms > 0 {
-                format!(
-                    "  {} / {}",
-                    clock(episode.position_ms as f64 / 1_000.0),
-                    clock(episode.duration_ms as f64 / 1_000.0)
-                )
-            } else {
-                String::new()
-            };
-            let suffix = if episode.watched {
-                "  · watched"
-            } else if !episode.available {
-                "  · unavailable"
-            } else {
-                ""
-            };
-            list = list.push(
-                button(text(format!("{heading}{progress}{suffix}")).size(tokens.type_scale.label))
-                    .on_press(Message::Play(episode.id.clone()))
-                    .style(design::tile_style(self.focus == index))
-                    .width(Length::Fill)
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            );
-        }
-        scrollable(list).height(Length::Fixed(240.0)).into()
-    }
-
-    fn card_grid(&self, items: &[LibraryItem], base: usize) -> Element<'_, Message> {
-        let tokens = design::tokens();
-
-        let columns = self.columns();
-        let mut grid = column![]
-            .spacing(tokens.spacing.field_x)
-            .width(Length::Fill);
-        for (row_index, chunk) in items.chunks(columns).enumerate() {
-            let mut cells = row![]
-                .spacing(tokens.spacing.field_x)
-                .width(Length::Fill)
-                .align_y(Alignment::Start);
-            for (column_index, item) in chunk.iter().enumerate() {
-                let index = base + row_index * columns + column_index;
-                cells = cells.push(self.card(item, self.focus == index));
-            }
-
-            for _ in chunk.len()..columns {
-                cells = cells.push(Space::new().width(Length::FillPortion(1)));
-            }
-            grid = grid.push(cells);
-        }
-        grid.into()
-    }
-
-    fn columns(&self) -> usize {
-        grid_columns(self.window_width)
-    }
-
-    fn card(&self, item: &LibraryItem, focused: bool) -> Element<'_, Message> {
-        self.card_with(item, focused, None)
-    }
-
-    fn card_with(
-        &self,
-        item: &LibraryItem,
-        focused: bool,
-        note: Option<&str>,
-    ) -> Element<'_, Message> {
-        let tokens = design::tokens();
-        let handle = self.artwork.get(&item.work_id);
-        let title = truncate(&item.title, 34);
-        let subtitle = {
-            let label = item.episode_label();
-            match (label.is_empty(), item.year) {
-                (false, _) => label,
-                (true, Some(year)) => year.to_string(),
-                (true, None) => item.kind.as_str().to_string(),
-            }
-        };
-        let position = if item.duration_ms > 0 && item.position_ms > 0 {
-            let ratio = (item.position_ms as f32 / item.duration_ms as f32).clamp(0.0, 1.0);
-            format!(
-                "{:.0}% · {}",
-                ratio * 100.0,
-                clock(item.position_ms as f64 / 1_000.0)
-            )
-        } else if item.position_ms > 0 {
-            format!("resume at {}", clock(item.position_ms as f64 / 1_000.0))
-        } else if item.watched {
-            "watched".to_string()
-        } else if !item.available {
-            "unavailable".to_string()
-        } else {
-            "not started".to_string()
-        };
-
-        let mut content = column![].spacing(2.0);
-        if self.preview_shown.as_deref() == Some(item.id.as_str()) {
-            content = content.push(
-                shader::Shader::new(VideoSurface::new(self.preview_frame.clone()))
-                    .width(Length::Fill)
-                    .height(Length::Fixed(CARD_POSTER_HEIGHT)),
-            );
-            content = content.push(Space::new().height(Length::Fixed(4.0)));
-        } else if let Some(handle) = handle {
-            content = content.push(
-                image(handle.clone())
-                    .width(Length::Fill)
-                    .height(Length::Fixed(CARD_POSTER_HEIGHT))
-                    .content_fit(ContentFit::Cover),
-            );
-            content = content.push(Space::new().height(Length::Fixed(4.0)));
-        }
-
-        let (muted, accent) = if focused {
-            (
-                tokens.palette.focus_foreground,
-                tokens.palette.focus_foreground,
-            )
-        } else {
-            (tokens.palette.ink_muted, tokens.palette.signal)
-        };
-        content = content
-            .push(text(title).size(tokens.type_scale.label))
-            .push(text(subtitle).size(tokens.type_scale.micro).color(muted))
-            .push(Space::new().height(Length::Fixed(4.0)))
-            .push(text(position).size(tokens.type_scale.micro).color(muted))
-            .push(
-                text(truncate(&item.filename, 30))
-                    .size(tokens.type_scale.micro)
-                    .color(muted),
-            );
-        if let Some(note) = note {
-            content = content.push(
-                text(truncate(note, 34))
-                    .size(tokens.type_scale.micro)
-                    .color(accent),
-            );
-        }
-
-        mouse_area(
-            button(content)
-                .on_press(Message::OpenDetail(item.id.clone()))
-                .style(design::tile_style(focused))
-                .width(Length::FillPortion(1))
-                .padding(tokens.spacing.field_y),
-        )
-        .on_enter(Message::HoverCard(item.id.clone()))
-        .interaction(iced::mouse::Interaction::Pointer)
-        .into()
-    }
-
-    fn suggestion_grid(&self, base: usize) -> Element<'_, Message> {
-        let tokens = design::tokens();
-        let columns = self.columns();
-        let mut grid = column![]
-            .spacing(tokens.spacing.field_x)
-            .width(Length::Fill);
-        for (row_index, chunk) in self.suggestions.chunks(columns).enumerate() {
-            let mut cells = row![]
-                .spacing(tokens.spacing.field_x)
-                .width(Length::Fill)
-                .align_y(Alignment::Start);
-            for (column_index, suggestion) in chunk.iter().enumerate() {
-                let index = base + row_index * columns + column_index;
-                cells = cells.push(self.card_with(
-                    &suggestion.item,
-                    self.focus == index,
-                    Some(&suggestion.reason),
-                ));
-            }
-            for _ in chunk.len()..columns {
-                cells = cells.push(Space::new().width(Length::FillPortion(1)));
-            }
-            grid = grid.push(cells);
-        }
-        grid.into()
-    }
-
     fn empty_note(&self, title: &str, detail: &str) -> Element<'_, Message> {
         let tokens = design::tokens();
         container(
             column![
-                text(title.to_string()).size(tokens.type_scale.label),
+                text(title.to_string())
+                    .size(tokens.type_scale.body_lg)
+                    .color(tokens.palette.foreground),
                 text(detail.to_string())
-                    .size(tokens.type_scale.caption)
+                    .size(tokens.type_scale.label)
                     .color(tokens.palette.ink_muted),
             ]
-            .spacing(2.0),
+            .spacing(tokens.spacing.field_y),
         )
-        .style(|_theme| design::container_style(Level::Panel, false))
         .padding(tokens.spacing.content_pad)
         .width(Length::Fill)
         .into()
     }
 
-    fn settings_view(&self) -> Element<'_, Message> {
-        let tokens = design::tokens();
-        let heading = settings_heading;
-        let note = settings_note;
-        let panel = settings_panel;
+    fn settings_rows(&self) -> Vec<ui::screens::settings::Row<'_>> {
+        use ui::screens::settings::Row;
 
-        let mut viewers = column![].spacing(tokens.spacing.field_y);
-        for profile in &self.profiles {
-            let active = profile.id == self.profile_id;
-            let mut row: iced::widget::Row<'_, Message> =
-                row![text(profile.name.clone()).size(tokens.type_scale.body),]
-                    .spacing(tokens.spacing.field_x)
-                    .align_y(Alignment::Center);
-            if active {
-                row = row.push(
-                    text("active".to_string())
-                        .size(tokens.type_scale.micro)
-                        .color(tokens.palette.signal),
-                );
-            } else {
-                row = row.push(
-                    button(text("Use").size(tokens.type_scale.label))
-                        .on_press(Message::ProfileChosen(profile.id.clone()))
-                        .style(design::action_style(false))
-                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                );
+        let preferences = &self.preferences;
+        let mut rows: Vec<Row<'_>> = Vec::new();
+
+        match self.settings_section {
+            ui::screens::settings::Section::Playback => {
+                rows.push(Row::Toggle {
+                    label: "Play the next episode automatically",
+                    hint: Some("A gap in a season stops the chain."),
+                    on: preferences.autoplay_next,
+                    message: Message::ToggleAutoplay(!preferences.autoplay_next),
+                });
+                rows.push(Row::Toggle {
+                    label: "Skip marked intros automatically",
+                    hint: Some("Only a segment you marked is skipped."),
+                    on: preferences.auto_skip_intro,
+                    message: Message::ToggleAutoSkip(!preferences.auto_skip_intro),
+                });
+                rows.push(Row::Toggle {
+                    label: "Show HDR films as HDR (restart to apply)",
+                    hint: Some("The panel decides how much of it it can show."),
+                    on: preferences.hdr_extended,
+                    message: Message::ToggleHdrExtended(!preferences.hdr_extended),
+                });
+                rows.push(Row::Slider {
+                    label: "Subtitle size",
+                    hint: None,
+                    value: f64::from(preferences.subtitle_scale_percent),
+                    range: f64::from(Preferences::SUBTITLE_SCALE_MIN_PERCENT)
+                        ..=f64::from(Preferences::SUBTITLE_SCALE_MAX_PERCENT),
+                    message: Message::SubtitleScale,
+                });
+                rows.push(Row::Slider {
+                    label: "Subtitle position",
+                    hint: Some("Measured from the top of the picture, so 100% is the bottom."),
+                    value: f64::from(preferences.subtitle_position_percent),
+                    range: f64::from(Preferences::SUBTITLE_POSITION_MIN_PERCENT)
+                        ..=f64::from(Preferences::SUBTITLE_POSITION_MAX_PERCENT),
+                    message: Message::SubtitlePosition,
+                });
             }
-
-            if self.profiles.len() > 1 {
-                row = row.push(
-                    button(
-                        text(
-                            if self.armed_profile.as_deref() == Some(profile.id.as_str()) {
-                                "Confirm remove"
-                            } else {
-                                "Remove"
-                            },
+            ui::screens::settings::Section::Casting => {
+                rows.push(Row::Value {
+                    label: "Capability",
+                    value: crate::casting::CAPABILITY_TEXT.to_string(),
+                });
+                rows.push(Row::Value {
+                    label: "Cast session",
+                    value: if self.cast_session.is_some() {
+                        "A receiver is connected.".to_string()
+                    } else {
+                        "No receiver connected.".to_string()
+                    },
+                });
+                rows.push(Row::Action {
+                    label: "Look for receivers",
+                    hint: Some("Only when you press this; nothing scans in the background."),
+                    action: "Look now",
+                    on_press: Some(Message::LookForReceivers),
+                });
+                for receiver in &self.receivers {
+                    rows.push(Row::Action {
+                        label: receiver.name.as_str(),
+                        hint: Some(receiver.address.as_str()),
+                        action: "Cast",
+                        on_press: Some(Message::CastTo(receiver.id.clone())),
+                    });
+                }
+                if let Some(note) = &self.cast_note {
+                    rows.push(Row::Value {
+                        label: "Last result",
+                        value: note.clone(),
+                    });
+                }
+                if self.cast_session.is_some() {
+                    for (label, message) in [
+                        ("Pause the cast", Message::CastPause),
+                        ("Stop the cast", Message::CastStop),
+                        ("Disconnect the cast", Message::CastDisconnect),
+                    ] {
+                        rows.push(Row::Action {
+                            label,
+                            hint: None,
+                            action: "Run",
+                            on_press: Some(message),
+                        });
+                    }
+                }
+            }
+            ui::screens::settings::Section::Profiles => {
+                for profile in &self.profiles {
+                    let active = profile.id == self.profile_id;
+                    if active {
+                        rows.push(Row::Value {
+                            label: profile.name.as_str(),
+                            value: "Active profile".to_string(),
+                        });
+                    } else {
+                        rows.push(Row::Action {
+                            label: profile.name.as_str(),
+                            hint: Some("Keeps its own progress, favourites and watchlist."),
+                            action: "Use",
+                            on_press: Some(Message::ProfileChosen(profile.id.clone())),
+                        });
+                    }
+                }
+                if self.profiles.len() > 1 {
+                    for profile in &self.profiles {
+                        let armed = self.armed_profile.as_deref() == Some(profile.id.as_str());
+                        rows.push(Row::Action {
+                            label: profile.name.as_str(),
+                            hint: Some("Removing a profile cannot be undone."),
+                            action: if armed { "Confirm remove" } else { "Remove" },
+                            on_press: Some(Message::RemoveProfile(profile.id.clone())),
+                        });
+                    }
+                }
+            }
+            ui::screens::settings::Section::Folders => {
+                rows.push(Row::Action {
+                    label: "Choose a folder of your own media",
+                    hint: Some("Files are read in place and never moved or renamed."),
+                    action: "Choose…",
+                    on_press: Some(Message::ChooseFolder),
+                });
+                for source in &self.sources {
+                    rows.push(Row::Value {
+                        label: source.label.as_str(),
+                        value: source.root_path.clone(),
+                    });
+                    rows.push(Row::Action {
+                        label: source.label.as_str(),
+                        hint: Some(source_state_label(source.state)),
+                        action: "Rescan",
+                        on_press: Some(Message::RescanSource(source.id.clone())),
+                    });
+                    let armed = self.armed_remove.as_deref() == Some(source.id.as_str());
+                    rows.push(Row::Action {
+                        label: source.label.as_str(),
+                        hint: Some("Nothing on disk is changed."),
+                        action: if armed {
+                            "Press again to remove"
+                        } else {
+                            "Remove"
+                        },
+                        on_press: Some(Message::RemoveSource(source.id.clone())),
+                    });
+                }
+            }
+            ui::screens::settings::Section::Online => {
+                rows.push(Row::Value {
+                    label: "Metadata provider",
+                    value: self.metadata_capability.detail.clone(),
+                });
+                rows.push(Row::Toggle {
+                    label: "Keep provider artwork on this machine",
+                    hint: Some("Only permitted image bytes are stored, never a remote URL."),
+                    on: self.artwork_retention == ArtworkRetention::KeepLocally,
+                    message: Message::ToggleArtworkRetention,
+                });
+                rows.push(Row::Action {
+                    label: "Enrich the library now",
+                    hint: Some("A manual match is never overwritten."),
+                    action: "Enrich",
+                    on_press: Some(Message::EnrichmentNow),
+                });
+            }
+            ui::screens::settings::Section::Subtitles => {
+                rows.push(Row::Value {
+                    label: "Provider",
+                    value: self.subtitle_capability.detail.clone(),
+                });
+                rows.push(Row::Action {
+                    label: "Search the subtitle provider",
+                    hint: Some("Uses the film that is playing when the query is empty."),
+                    action: "Search",
+                    on_press: Some(Message::SubtitleSearchNow),
+                });
+                rows.push(Row::Value {
+                    label: "Kept subtitle files",
+                    value: format!("{} kept", self.subtitles.len()),
+                });
+                for subtitle in &self.subtitles {
+                    rows.push(Row::Action {
+                        label: subtitle.label.as_str(),
+                        hint: Some(subtitle.format.as_str()),
+                        action: "Use",
+                        on_press: Some(Message::UseSubtitle(subtitle.id.clone())),
+                    });
+                    rows.push(Row::Action {
+                        label: subtitle.label.as_str(),
+                        hint: Some(subtitle.provenance.as_str()),
+                        action: "Remove",
+                        on_press: Some(Message::RemoveSubtitle(subtitle.id.clone())),
+                    });
+                }
+                rows.push(Row::Action {
+                    label: "Import a subtitle file",
+                    hint: Some("The import copies the file; the original is never touched."),
+                    action: "Import…",
+                    on_press: Some(Message::ImportSubtitle),
+                });
+                if self.subtitle_search.is_some() {
+                    rows.push(Row::Value {
+                        label: "Search",
+                        value: "Searching…".to_string(),
+                    });
+                } else if !self.subtitle_results.is_empty() {
+                    rows.push(Row::Value {
+                        label: "Search",
+                        value: format!("{} match(es)", self.subtitle_results.len()),
+                    });
+                }
+                for result in &self.subtitle_results {
+                    rows.push(Row::Action {
+                        label: result.release_name.as_str(),
+                        hint: Some(result.format.as_str()),
+                        action: "Download",
+                        on_press: Some(Message::SubtitleDownload(result.file_id)),
+                    });
+                }
+            }
+            ui::screens::settings::Section::Accessibility => {
+                rows.push(Row::Toggle {
+                    label: "Reduce motion: no browse previews",
+                    hint: Some("A card keeps its poster and no preview decoder is opened."),
+                    on: preferences.reduced_motion,
+                    message: Message::ToggleReducedMotion(!preferences.reduced_motion),
+                });
+                rows.push(Row::Value {
+                    label: "Subtitle size",
+                    value: format!("{}%", preferences.subtitle_scale_percent),
+                });
+                rows.push(Row::Value {
+                    label: "Subtitle position",
+                    value: format!("{}%", preferences.subtitle_position_percent),
+                });
+            }
+            ui::screens::settings::Section::Data => {
+                rows.push(Row::Value {
+                    label: "Backup file",
+                    value: self.backup_path.clone(),
+                });
+                rows.push(Row::Action {
+                    label: "Back up now",
+                    hint: Some("Profiles, progress and lists, in one file."),
+                    action: "Back up",
+                    on_press: Some(Message::BackupNow),
+                });
+                if self.backup_job.is_some() {
+                    rows.push(Row::Action {
+                        label: "Cancel the backup that is running",
+                        hint: None,
+                        action: "Cancel",
+                        on_press: Some(Message::CancelBackup),
+                    });
+                }
+                rows.push(Row::Value {
+                    label: "Restore file",
+                    value: self.restore_path.clone(),
+                });
+                rows.push(Row::Action {
+                    label: "Check the restore file",
+                    hint: Some("Nothing is replaced until you press again."),
+                    action: "Check",
+                    on_press: Some(Message::InspectRestore),
+                });
+                rows.push(Row::Action {
+                    label: "Restore from that file",
+                    hint: Some("The current library is copied to a .before-restore file first."),
+                    action: if self.armed_restore.is_some() {
+                        "Press again to restore"
+                    } else {
+                        "Restore"
+                    },
+                    on_press: Some(Message::RestoreNow),
+                });
+                if self.conversion_runner.is_some() {
+                    rows.push(Row::Action {
+                        label: "Stop the conversion",
+                        hint: None,
+                        action: "Stop",
+                        on_press: Some(Message::CancelConversion),
+                    });
+                }
+            }
+            ui::screens::settings::Section::About => {
+                rows.push(Row::Value {
+                    label: "Playback",
+                    value: if self.capability.available {
+                        format!(
+                            "libmpv {}",
+                            self.capability.api_version.as_deref().unwrap_or("?")
                         )
-                        .size(tokens.type_scale.label),
-                    )
-                    .on_press(Message::RemoveProfile(profile.id.clone()))
-                    .style(design::danger_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                );
+                    } else {
+                        format!("unavailable — {}", self.capability.reason)
+                    },
+                });
+                rows.push(Row::Value {
+                    label: "Picture",
+                    value: self.snapshot.output.label(),
+                });
+                rows.push(Row::Value {
+                    label: "Library",
+                    value: self.library_label.clone(),
+                });
+                rows.push(Row::Value {
+                    label: "Design tokens",
+                    value: design::provenance().to_string(),
+                });
             }
-            viewers = viewers.push(row);
         }
-        viewers = viewers
-            .push(Space::new().height(tokens.spacing.field_y))
-            .push(
+
+        rows
+    }
+
+    fn settings_detail(&self) -> Element<'_, Message> {
+        use ui::screens::settings::Section;
+        let tokens = design::tokens();
+        let note = |label: String| -> Element<'_, Message> {
+            text(label)
+                .size(tokens.type_scale.caption)
+                .color(tokens.palette.ink_muted)
+                .into()
+        };
+
+        match self.settings_section {
+            Section::Playback => column![
+                row![
+                    text("Subtitle language").size(tokens.type_scale.label),
+                    text_input("e.g. en", &self.subtitle_input)
+                        .id(SettingsField::SubtitleLanguage.id())
+                        .on_input(Message::SubtitleLanguageChanged)
+                        .on_submit(Message::ApplySubtitleLanguage)
+                        .style(design::input_style())
+                        .padding(tokens.spacing.field_y)
+                        .width(140.0),
+                    button(text("Apply").size(tokens.type_scale.label))
+                        .on_press(Message::ApplySubtitleLanguage)
+                        .style(design::quiet_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                ]
+                .spacing(tokens.spacing.field_x)
+                .align_y(Alignment::Center),
+                row![
+                    text("Audio language").size(tokens.type_scale.label),
+                    text_input("e.g. en", &self.audio_input)
+                        .id(SettingsField::AudioLanguage.id())
+                        .on_input(Message::AudioLanguageChanged)
+                        .on_submit(Message::ApplyAudioLanguage)
+                        .style(design::input_style())
+                        .padding(tokens.spacing.field_y)
+                        .width(140.0),
+                    button(text("Apply").size(tokens.type_scale.label))
+                        .on_press(Message::ApplyAudioLanguage)
+                        .style(design::quiet_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                ]
+                .spacing(tokens.spacing.field_x)
+                .align_y(Alignment::Center),
+                note(
+                    "Press Enter to apply. Leave a field empty and press Enter to let the player \
+                     choose."
+                        .to_string(),
+                ),
+            ]
+            .spacing(tokens.spacing.field_y)
+            .width(Length::Fill)
+            .into(),
+            Section::Casting => column![
+                note(crate::casting::CAPABILITY_TEXT.to_string()),
+                note(
+                    "Receivers are looked for on this network only when you press the button. A \
+                     cast session starts only when you choose one and a film is playing: this \
+                     machine then serves that one file from a temporary endpoint that closes \
+                     itself, and sends AVTransport controls to the receiver."
+                        .to_string(),
+                ),
+            ]
+            .spacing(tokens.spacing.field_y)
+            .width(Length::Fill)
+            .into(),
+            Section::Profiles => column![
                 row![
                     text_input("New profile name", &self.new_profile)
                         .id(SettingsField::ProfileName.id())
@@ -5272,269 +5563,236 @@ impl App {
                 ]
                 .spacing(tokens.spacing.field_x)
                 .align_y(Alignment::Center),
-            )
-            .push(note(
-                "Each profile keeps its own progress, favourites and watchlist.",
-            ));
+                note("Each profile keeps its own progress, favourites and watchlist.".to_string()),
+            ]
+            .spacing(tokens.spacing.field_y)
+            .width(Length::Fill)
+            .into(),
+            Section::Folders => {
+                let mut body = column![self.add_folder_row()]
+                    .spacing(tokens.spacing.field_y)
+                    .width(Length::Fill);
 
-        let playback = column![
-            checkbox(self.preferences.autoplay_next)
-                .label("Play the next episode automatically")
-                .on_toggle(Message::ToggleAutoplay)
-                .size(18.0),
-            note(
-                "A gap in a season stops the chain: the next episode is never skipped guessing.",
-            ),
-            checkbox(self.preferences.auto_skip_intro)
-                .label("Skip marked intros automatically")
-                .on_toggle(Message::ToggleAutoSkip)
-                .size(18.0),
-            note("Only a segment you marked is skipped; an intro is never guessed."),
-            checkbox(self.preferences.hdr_extended)
-                .label("Show HDR films as HDR (restart to apply)")
-                .on_toggle(Message::ToggleHdrExtended)
-                .size(18.0),
-            note(
-                "With this on, the window asks for an extended-range surface and an HDR10 film \
-                 keeps its highlights instead of being tone-mapped into SDR. The panel decides \
-                 how much of that it can show; Settings states what the picture actually carries.",
-            ),
-            checkbox(self.preferences.reduced_motion)
-                .label("Reduce motion: no browse previews")
-                .on_toggle(Message::ToggleReducedMotion)
-                .size(18.0),
-            note(
-                "With this on, a card keeps its poster and no preview decoder is ever opened.",
-            ),
-            row![
-                text("Subtitle language".to_string()).size(tokens.type_scale.label),
-                text_input("e.g. en", &self.subtitle_input).id(SettingsField::SubtitleLanguage.id())
-                    .on_input(Message::SubtitleLanguageChanged)
-                    .on_submit(Message::ApplySubtitleLanguage)
-                    .style(design::input_style())
-                    .padding(tokens.spacing.field_y)
-                    .width(140.0),
-                button(text("Apply").size(tokens.type_scale.label))
-                    .on_press(Message::ApplySubtitleLanguage)
-                    .style(design::quiet_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            ]
-            .spacing(tokens.spacing.field_x)
-            .align_y(Alignment::Center),
-            row![
-                text("Audio language".to_string()).size(tokens.type_scale.label),
-                text_input("e.g. en", &self.audio_input).id(SettingsField::AudioLanguage.id())
-                    .on_input(Message::AudioLanguageChanged)
-                    .on_submit(Message::ApplyAudioLanguage)
-                    .style(design::input_style())
-                    .padding(tokens.spacing.field_y)
-                    .width(140.0),
-                button(text("Apply").size(tokens.type_scale.label))
-                    .on_press(Message::ApplyAudioLanguage)
-                    .style(design::quiet_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            ]
-            .spacing(tokens.spacing.field_x)
-            .align_y(Alignment::Center),
-            row![
-                text("Subtitle size".to_string()).size(tokens.type_scale.label),
-                slider(
-                    f64::from(Preferences::SUBTITLE_SCALE_MIN_PERCENT)
-                        ..=f64::from(Preferences::SUBTITLE_SCALE_MAX_PERCENT),
-                    f64::from(self.preferences.subtitle_scale_percent),
-                    Message::SubtitleScale,
-                )
-                .step(5.0)
-                .width(220.0),
-                text(format!("{}%", self.preferences.subtitle_scale_percent))
-                    .size(tokens.type_scale.caption)
-                    .color(tokens.palette.ink_muted),
-            ]
-            .spacing(tokens.spacing.field_x)
-            .align_y(Alignment::Center),
-            row![
-                text("Subtitle position".to_string()).size(tokens.type_scale.label),
-                slider(
-                    f64::from(Preferences::SUBTITLE_POSITION_MIN_PERCENT)
-                        ..=f64::from(Preferences::SUBTITLE_POSITION_MAX_PERCENT),
-                    f64::from(self.preferences.subtitle_position_percent),
-                    Message::SubtitlePosition,
-                )
-                .step(1.0)
-                .width(220.0),
-                text(format!("{}%", self.preferences.subtitle_position_percent))
-                    .size(tokens.type_scale.caption)
-                    .color(tokens.palette.ink_muted),
-            ]
-            .spacing(tokens.spacing.field_x)
-            .align_y(Alignment::Center),
-            note(
-                "Position is measured from the top of the picture, so 100% is the bottom. \
-                 A subtitle file that places its own lines keeps that placement; the \
-                 size still applies.",
-            ),
-            note(
-                "Press Enter to apply. Leave a field empty and press Enter to let the player choose.",
-            ),
-        ]
-        .spacing(tokens.spacing.field_y);
-
-        let mut folders = column![].spacing(tokens.spacing.field_y);
-        if self.sources.is_empty() {
-            folders = folders.push(note(
-                "No folders yet. Grant one below and Screenroom scans it in place.",
-            ));
-        }
-        for source in &self.sources {
-            let armed = self.armed_remove.as_deref() == Some(source.id.as_str());
-            folders = folders
-                .push(
-                    column![
-                        text(source.label.clone()).size(tokens.type_scale.body),
-                        text(source.root_path.clone())
-                            .size(tokens.type_scale.micro)
-                            .color(tokens.palette.ink_muted),
-                        note(source_state_label(source.state)),
-                        if source.last_scan_ms.is_none() {
-                            note("This folder has not finished a scan yet.")
-                        } else {
-                            note("Last scan completed.")
-                        },
-                    ]
-                    .spacing(tokens.spacing.field_y / 2.0),
-                )
-                .push(
-                    row![
-                        button(text("Rescan").size(tokens.type_scale.label))
-                            .on_press(Message::RescanSource(source.id.clone()))
-                            .style(design::quiet_style(false))
-                            .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                        button(
-                            text(if armed {
-                                "Press again to remove"
-                            } else {
-                                "Remove"
-                            })
-                            .size(tokens.type_scale.label)
-                        )
-                        .on_press(Message::RemoveSource(source.id.clone()))
-                        .style(design::danger_style(armed))
-                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                    ]
-                    .spacing(tokens.spacing.field_x)
-                    .align_y(Alignment::Center),
-                );
-        }
-        folders = folders.push(text("Grant a folder".to_string()).size(tokens.type_scale.label));
-        folders = folders.push(self.add_folder_row());
-
-        if !self.sources.is_empty() {
-            let choices: Vec<SourceChoice> = self
-                .sources
-                .iter()
-                .map(|source| SourceChoice {
-                    id: source.id.clone(),
-                    label: source.label.clone(),
-                })
-                .collect();
-            let chosen = self
-                .relink_target
-                .as_ref()
-                .and_then(|id| choices.iter().find(|choice| &choice.id == id).cloned());
-            folders = folders
-                .push(Space::new().height(tokens.spacing.field_y))
-                .push(
-                    text("Relink a folder".to_string()).size(tokens.type_scale.label),
-                )
-                .push(
-                    row![
-                        pick_list(choices, chosen, |choice: SourceChoice| {
-                            Message::RelinkTargetChosen(choice.id)
+                if !self.sources.is_empty() {
+                    let choices: Vec<SourceChoice> = self
+                        .sources
+                        .iter()
+                        .map(|source| SourceChoice {
+                            id: source.id.clone(),
+                            label: source.label.clone(),
                         })
+                        .collect();
+                    let chosen = self
+                        .relink_target
+                        .as_ref()
+                        .and_then(|id| choices.iter().find(|choice| &choice.id == id).cloned());
+                    body = body
+                        .push(text("Relink a folder").size(tokens.type_scale.label))
+                        .push(
+                            row![
+                                pick_list(choices, chosen, |choice: SourceChoice| {
+                                    Message::RelinkTargetChosen(choice.id)
+                                })
+                                .placeholder("Choose a folder"),
+                                button(text("Choose…").size(tokens.type_scale.label))
+                                    .on_press(Message::ChooseRelinkFolder)
+                                    .style(design::quiet_style(false))
+                                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                                text_input(
+                                    "New location, for example /Volumes/Media",
+                                    &self.relink_path
+                                )
+                                .id(SettingsField::FolderPath.id())
+                                .on_input(Message::RelinkPathChanged)
+                                .on_submit(Message::RelinkSource)
+                                .style(design::input_style())
+                                .padding(tokens.spacing.field_y)
+                                .width(Length::Fill),
+                                button(text("Relink and rescan").size(tokens.type_scale.label))
+                                    .on_press(Message::RelinkSource)
+                                    .style(design::action_style(false))
+                                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                            ]
+                            .spacing(tokens.spacing.field_x)
+                            .align_y(Alignment::Center),
+                        )
+                        .push(note(
+                            "Use this when a removable drive mounts somewhere new. Nothing on \
+                             disk is changed."
+                                .to_string(),
+                        ));
+                }
 
-                        .placeholder("Choose a folder"),
-                        button(text("Choose…").size(tokens.type_scale.label))
-                            .on_press(Message::ChooseRelinkFolder)
-                            .style(design::quiet_style(false))
-                            .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                        text_input("New location, for example /Volumes/Media", &self.relink_path).id(SettingsField::FolderPath.id())
-                            .on_input(Message::RelinkPathChanged)
-                            .on_submit(Message::RelinkSource)
-                            .style(design::input_style())
-                            .padding(tokens.spacing.field_y)
-                            .width(Length::Fill),
-                        button(text("Relink and rescan").size(tokens.type_scale.label))
-                            .on_press(Message::RelinkSource)
+                body.into()
+            }
+            Section::Online => column![
+                note(self.metadata_capability.detail.clone()),
+                note(
+                    "A manual match is never overwritten, and a value from a local NFO beats a \
+                     provider unless you ask for the provider's version. Nothing is fetched while \
+                     no key is configured."
+                        .to_string(),
+                ),
+            ]
+            .spacing(tokens.spacing.field_y)
+            .width(Length::Fill)
+            .into(),
+            Section::Subtitles => {
+                let mut body = column![
+                    row![
+                        text_input(
+                            "Title to search for, or leave empty to use the film playing",
+                            &self.subtitle_query,
+                        )
+                        .on_input(Message::SubtitleQueryChanged)
+                        .on_submit(Message::SubtitleSearchNow)
+                        .style(design::input_style())
+                        .padding(tokens.spacing.field_y)
+                        .width(Length::Fill),
+                        button(text("Search").size(tokens.type_scale.label))
+                            .on_press(Message::SubtitleSearchNow)
                             .style(design::action_style(false))
                             .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
                     ]
                     .spacing(tokens.spacing.field_x)
-                    .align_y(Alignment::Center),
-                )
-                .push(note(
-                    "Use this when a removable drive mounts somewhere new. Nothing on disk is changed.",
-                ));
-        }
+                    .align_y(Alignment::Center)
+                ]
+                .spacing(tokens.spacing.field_y)
+                .width(Length::Fill);
 
-        let mut saved: iced::widget::Column<'_, Message> = column![
-            note(
-                "Your own list of places you may look for a film. Screenroom saves the address \
-                 and what you say about it. It never visits, scrapes or downloads anything, and \
-                 nothing here has been verified from this machine.",
-            ),
-            row![
-                text_input("Name, for example an ISP portal", &self.bookmark_label)
-                    .id(SettingsField::BookmarkLabel.id())
-                    .on_input(Message::BookmarkLabelChanged)
+                body = body.push(note(
+                    "Searching a provider online needs an authorised account of your own, for \
+                     example OpenSubtitles with your API key. A kept subtitle is copied into the \
+                     library; the file on disk is never modified or moved."
+                        .to_string(),
+                ));
+
+                body.into()
+            }
+            Section::Accessibility => column![note(
+                "Reduce motion also stops browse previews, so no preview decoder is opened."
+                    .to_string()
+            )]
+            .width(Length::Fill)
+            .into(),
+            Section::Data => column![
+                row![
+                    button(text("Choose…").size(tokens.type_scale.label))
+                        .on_press(Message::ChooseBackupPath)
+                        .style(design::quiet_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                    text_input("Backup file path", &self.backup_path)
+                        .id(SettingsField::BackupPath.id())
+                        .on_input(Message::BackupPathChanged)
+                        .on_submit(Message::BackupNow)
+                        .style(design::input_style())
+                        .padding(tokens.spacing.field_y)
+                        .width(Length::Fill),
+                    button(text("Back up now").size(tokens.type_scale.label))
+                        .on_press(Message::BackupNow)
+                        .style(design::action_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                ]
+                .spacing(tokens.spacing.field_x)
+                .align_y(Alignment::Center),
+                row![
+                    button(text("Choose…").size(tokens.type_scale.label))
+                        .on_press(Message::ChooseRestoreFile)
+                        .style(design::quiet_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                    text_input("Backup file to restore from", &self.restore_path)
+                        .id(SettingsField::RestorePath.id())
+                        .on_input(Message::RestorePathChanged)
+                        .on_submit(Message::InspectRestore)
+                        .style(design::input_style())
+                        .padding(tokens.spacing.field_y)
+                        .width(Length::Fill),
+                    button(text("Check file").size(tokens.type_scale.label))
+                        .on_press(Message::InspectRestore)
+                        .style(design::quiet_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                ]
+                .spacing(tokens.spacing.field_x)
+                .align_y(Alignment::Center),
+                note(
+                    "Restoring replaces profiles, progress and lists with the backup's. Your \
+                     current library is copied to a .before-restore file first."
+                        .to_string(),
+                ),
+                note("Saved sources".to_string()),
+                row![
+                    text_input("Name, for example an ISP portal", &self.bookmark_label)
+                        .id(SettingsField::BookmarkLabel.id())
+                        .on_input(Message::BookmarkLabelChanged)
+                        .style(design::input_style())
+                        .padding(tokens.spacing.field_y)
+                        .width(Length::Fill),
+                    text_input("https://…", &self.bookmark_address)
+                        .id(SettingsField::BookmarkAddress.id())
+                        .on_input(Message::BookmarkAddressChanged)
+                        .on_submit(Message::AddBookmark)
+                        .style(design::input_style())
+                        .padding(tokens.spacing.field_y)
+                        .width(Length::Fill),
+                    text_input(
+                        "Access note, optional: account, ISP, plan",
+                        &self.bookmark_access
+                    )
+                    .id(SettingsField::BookmarkAccess.id())
+                    .on_input(Message::BookmarkAccessChanged)
                     .style(design::input_style())
                     .padding(tokens.spacing.field_y)
                     .width(Length::Fill),
-                text_input("https://…", &self.bookmark_address)
-                    .id(SettingsField::BookmarkAddress.id())
-                    .on_input(Message::BookmarkAddressChanged)
-                    .on_submit(Message::AddBookmark)
-                    .style(design::input_style())
-                    .padding(tokens.spacing.field_y)
-                    .width(Length::Fill),
+                    button(text("Save source").size(tokens.type_scale.label))
+                        .on_press(Message::AddBookmark)
+                        .style(design::action_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                ]
+                .spacing(tokens.spacing.field_x)
+                .align_y(Alignment::Center),
+                self.bookmark_rows(),
+                self.conversion_panel(),
+                note(
+                    "Folders are read in place. Nothing here needs a network, an account or a \
+                     server."
+                        .to_string(),
+                ),
             ]
-            .spacing(tokens.spacing.field_x),
-            row![
-                text_input(
-                    "Access note, optional: account, ISP, plan",
-                    &self.bookmark_access
-                )
-                .id(SettingsField::BookmarkAccess.id())
-                .on_input(Message::BookmarkAccessChanged)
-                .style(design::input_style())
-                .padding(tokens.spacing.field_y)
-                .width(Length::Fill),
-                button(text("Save source").size(tokens.type_scale.label))
-                    .on_press(Message::AddBookmark)
-                    .style(design::action_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+            .spacing(tokens.spacing.field_y)
+            .width(Length::Fill)
+            .into(),
+            Section::About => column![
+                note(format!("Design tokens: {}", design::provenance())),
+                note(
+                    "Folders are read in place. Nothing here needs a network, an account or a \
+                     server."
+                        .to_string(),
+                ),
             ]
-            .spacing(tokens.spacing.field_x)
-            .align_y(Alignment::Center),
-        ]
-        .spacing(tokens.spacing.field_y);
+            .spacing(tokens.spacing.field_y)
+            .width(Length::Fill)
+            .into(),
+        }
+    }
+
+    fn bookmark_rows(&self) -> Element<'_, Message> {
+        let tokens = design::tokens();
+        let mut rows = column![].spacing(tokens.spacing.field_y);
         if self.bookmarks.is_empty() {
-            saved = saved.push(note("No source saved yet."));
+            rows = rows.push(
+                text("No source saved yet.")
+                    .size(tokens.type_scale.caption)
+                    .color(tokens.palette.ink_muted),
+            );
         }
         for bookmark in &self.bookmarks {
-            let mut facts = vec![bookmark.protocol.clone()];
-            if !bookmark.access.is_empty() {
-                facts.push(bookmark.access.clone());
-            }
-            facts.push(bookmark.address.clone());
-            saved = saved.push(
+            rows = rows.push(
                 row![
-                    column![
-                        text(bookmark.label.clone()).size(tokens.type_scale.body),
-                        note(&facts.join(" · ")),
-                        note(&bookmark.provenance),
-                    ]
-                    .spacing(tokens.spacing.field_y / 2.0)
-                    .width(Length::Fill),
+                    text(bookmark.label.clone()).size(tokens.type_scale.body),
+                    text(format!("{} · {}", bookmark.protocol, bookmark.address))
+                        .size(tokens.type_scale.micro)
+                        .color(tokens.palette.ink_muted),
+                    Space::new().width(Length::Fill),
                     button(text("Open").size(tokens.type_scale.label))
                         .on_press(Message::OpenBookmark(bookmark.id.clone()))
                         .style(design::action_style(false))
@@ -5548,259 +5806,7 @@ impl App {
                 .align_y(Alignment::Center),
             );
         }
-
-        let mut casting = column![
-            note(crate::casting::CAPABILITY_TEXT),
-            note(
-                "Receivers are looked for on this network only when you press the button below. \
-                 A cast session starts only when you choose one and a film is playing: this \
-                 machine then serves that one file from a temporary endpoint that closes itself, \
-                 and sends AVTransport controls to the receiver.",
-            ),
-            row![
-                button(text("Look for receivers").size(tokens.type_scale.label))
-                    .on_press(Message::LookForReceivers)
-                    .style(design::action_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                text(self.casting_note())
-                    .size(tokens.type_scale.micro)
-                    .color(tokens.palette.ink_muted),
-            ]
-            .spacing(tokens.spacing.field_x)
-            .align_y(Alignment::Center),
-        ]
-        .spacing(tokens.spacing.field_y);
-        for receiver in &self.receivers {
-            casting = casting.push(
-                row![
-                    column![
-                        text(receiver.name.clone()).size(tokens.type_scale.body),
-                        note(&format!(
-                            "{} · {} · {}",
-                            receiver.kind, receiver.address, receiver.from
-                        )),
-                    ]
-                    .spacing(tokens.spacing.field_y / 2.0)
-                    .width(Length::Fill),
-                    button(text("Cast the playing film").size(tokens.type_scale.label))
-                        .on_press(Message::CastTo(receiver.id.clone()))
-                        .style(design::action_style(false))
-                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                ]
-                .spacing(tokens.spacing.field_x)
-                .align_y(Alignment::Center),
-            );
-        }
-        if let Some(note_text) = &self.cast_note {
-            casting = casting.push(note(note_text));
-        }
-        if self.cast_session.is_some() {
-            casting = casting.push(
-                row![
-                    button(text("Pause").size(tokens.type_scale.label))
-                        .on_press(Message::CastPause)
-                        .style(design::quiet_style(false))
-                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                    button(text("Stop").size(tokens.type_scale.label))
-                        .on_press(Message::CastStop)
-                        .style(design::quiet_style(false))
-                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                    button(text("Disconnect").size(tokens.type_scale.label))
-                        .on_press(Message::CastDisconnect)
-                        .style(design::danger_style(false))
-                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                ]
-                .spacing(tokens.spacing.field_x)
-                .align_y(Alignment::Center),
-            );
-        }
-
-        let online = column![
-            note(&self.metadata_capability.detail),
-            row![
-                button(text("Enrich the library").size(tokens.type_scale.label))
-                    .on_press(Message::EnrichmentNow)
-                    .style(design::action_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                checkbox(self.artwork_retention == ArtworkRetention::KeepLocally)
-                    .label("Keep provider artwork on this machine")
-                    .on_toggle(|_| Message::ToggleArtworkRetention)
-                    .size(18.0),
-            ]
-            .spacing(tokens.spacing.field_x)
-            .align_y(Alignment::Center),
-            note(
-                "A manual match is never overwritten, and a value from a local NFO beats a \
-                 provider unless you ask for the provider's version. Nothing is fetched while \
-                 no key is configured.",
-            ),
-        ]
-        .spacing(tokens.spacing.field_y);
-
-        let mut online_subtitles = column![
-            note(&self.subtitle_capability.detail),
-            row![
-                text_input(
-                    "Title to search for, or leave empty to use the film playing",
-                    &self.subtitle_query,
-                )
-                .on_input(Message::SubtitleQueryChanged)
-                .on_submit(Message::SubtitleSearchNow)
-                .style(design::input_style())
-                .padding(tokens.spacing.field_y)
-                .width(Length::Fill),
-                button(text("Search").size(tokens.type_scale.label))
-                    .on_press(Message::SubtitleSearchNow)
-                    .style(design::action_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            ]
-            .spacing(tokens.spacing.field_x)
-            .align_y(Alignment::Center),
-        ]
-        .spacing(tokens.spacing.field_y);
-        if self.subtitle_search.is_some() {
-            online_subtitles = online_subtitles.push(note("Searching…"));
-        }
-        if self.subtitle_results.is_empty() && self.subtitle_search.is_none() {
-            online_subtitles = online_subtitles.push(note("No result yet."));
-        }
-        for result in &self.subtitle_results {
-            online_subtitles = online_subtitles.push(
-                row![
-                    column![
-                        text(result.release_name.clone()).size(tokens.type_scale.body),
-                        note(&format!(
-                            "{} · {} · {} downloads",
-                            result.language_name, result.format, result.downloads
-                        )),
-                    ]
-                    .spacing(tokens.spacing.field_y / 2.0)
-                    .width(Length::Fill),
-                    button(text("Download and use").size(tokens.type_scale.label))
-                        .on_press(Message::SubtitleDownload(result.file_id))
-                        .style(design::action_style(false))
-                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                ]
-                .spacing(tokens.spacing.field_x)
-                .align_y(Alignment::Center),
-            );
-        }
-
-        let restore_armed = self.armed_restore.is_some();
-        let data = column![
-            text("Back up".to_string()).size(tokens.type_scale.label),
-            row![
-                button(text("Choose…").size(tokens.type_scale.label))
-                    .on_press(Message::ChooseBackupPath)
-                    .style(design::quiet_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                text_input("Backup file path", &self.backup_path)
-                    .id(SettingsField::BackupPath.id())
-                    .on_input(Message::BackupPathChanged)
-                    .on_submit(Message::BackupNow)
-                    .style(design::input_style())
-                    .padding(tokens.spacing.field_y)
-                    .width(Length::Fill),
-                button(text("Back up now").size(tokens.type_scale.label))
-                    .on_press(Message::BackupNow)
-                    .style(design::action_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            ]
-            .spacing(tokens.spacing.field_x)
-            .align_y(Alignment::Center),
-            Space::new().height(tokens.spacing.field_y),
-            text("Restore".to_string()).size(tokens.type_scale.label),
-            row![
-                button(text("Choose…").size(tokens.type_scale.label))
-                    .on_press(Message::ChooseRestoreFile)
-                    .style(design::quiet_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                text_input("Backup file to restore from", &self.restore_path)
-                    .id(SettingsField::RestorePath.id())
-                    .on_input(Message::RestorePathChanged)
-                    .on_submit(Message::InspectRestore)
-                    .style(design::input_style())
-                    .padding(tokens.spacing.field_y)
-                    .width(Length::Fill),
-                button(text("Check file").size(tokens.type_scale.label))
-                    .on_press(Message::InspectRestore)
-                    .style(design::quiet_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                button(
-                    text(if restore_armed {
-                        "Press again to restore"
-                    } else {
-                        "Restore"
-                    })
-                    .size(tokens.type_scale.label)
-                )
-                .on_press(Message::RestoreNow)
-                .style(design::danger_style(restore_armed))
-                .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            ]
-            .spacing(tokens.spacing.field_x)
-            .align_y(Alignment::Center),
-            note(
-                "Restoring replaces profiles, progress and lists with the backup's. Your current \
-                 library is copied to a .before-restore file first.",
-            ),
-        ]
-        .spacing(tokens.spacing.field_y);
-
-        let playback_fact = if self.capability.available {
-            format!(
-                "Playback: libmpv {}",
-                self.capability.api_version.as_deref().unwrap_or("?")
-            )
-        } else {
-            format!("Playback: unavailable — {}", self.capability.reason)
-        };
-        let library_fact = format!("Library: {}", self.library_label);
-        let tokens_fact = format!("Design tokens: {}", design::provenance());
-        let picture_fact = format!("Picture: {}", self.snapshot.output.label());
-
-        let body = column![
-            heading("Viewer"),
-            panel(viewers.into()),
-            heading("Playback"),
-            panel(playback.into()),
-            heading("Folders"),
-            panel(folders.into()),
-            heading("Saved sources"),
-            panel(saved.into()),
-            heading("Online metadata"),
-            panel(online.into()),
-            heading("Subtitle search"),
-            panel(online_subtitles.into()),
-            heading("Casting"),
-            panel(casting.into()),
-            heading("Data"),
-            panel(data.into()),
-            heading("Conversion"),
-            panel(self.conversion_panel()),
-            heading("About this build"),
-            panel(
-                column![
-                    note(&playback_fact),
-                    note(&picture_fact),
-                    note(&library_fact),
-                    note(&tokens_fact),
-                    note(
-                        "Folders are read in place. Nothing here needs a network, an account \
-                         or a server.",
-                    ),
-                ]
-                .spacing(tokens.spacing.field_y / 2.0)
-                .into(),
-            ),
-            Space::new().height(tokens.spacing.content_pad),
-        ]
-        .spacing(tokens.spacing.field_x);
-
-        scrollable(column![self.settings_action_strip(), body].spacing(tokens.spacing.field_x))
-            .height(Length::Fill)
-            .width(Length::Fill)
-            .into()
+        rows.into()
     }
 
     fn settings_actions(&self) -> Vec<(String, Message)> {
@@ -5992,29 +5998,6 @@ impl App {
         self.update(message)
     }
 
-    fn settings_action_strip(&self) -> Element<'_, Message> {
-        let tokens = design::tokens();
-        let actions = self.settings_actions();
-        let focused = self.settings_focus.min(actions.len().saturating_sub(1));
-        let mut list = column![].spacing(tokens.spacing.field_y);
-        for (index, (label, message)) in actions.into_iter().enumerate() {
-            list = list.push(
-                button(text(label).size(tokens.type_scale.label))
-                    .on_press(message)
-                    .style(design::action_style(index == focused))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            );
-        }
-        list = list.push(
-            text("Arrows move, Enter runs the focused action. The fields below take typing.")
-                .size(tokens.type_scale.caption)
-                .color(tokens.palette.ink_muted),
-        );
-        column![settings_heading("Actions"), settings_panel(list.into()),]
-            .spacing(tokens.spacing.field_x)
-            .into()
-    }
-
     fn mini_view(&self) -> Element<'_, Message> {
         let tokens = design::tokens();
         let title = self
@@ -6117,370 +6100,12 @@ impl App {
         .width(Length::Fill)
         .into()
     }
-
-    fn player_view(&self) -> Element<'_, Message> {
-        let tokens = design::tokens();
-        let title = self
-            .active
-            .as_ref()
-            .map(|active| active.title.clone())
-            .unwrap_or_else(|| "Player".to_string());
-        let state = match (&self.snapshot.failure, self.snapshot.state) {
-            (Some(failure), _) => format!("{}: {}", failure.code, failure.message),
-            (None, state) => format!("{state:?}"),
-        };
-
-        let header = row![
-            button(
-                text(if self.fullscreen {
-                    "Windowed"
-                } else {
-                    "Fullscreen"
-                })
-                .size(tokens.type_scale.label)
-            )
-            .on_press(Message::ToggleFullscreen)
-            .style(design::quiet_style(false))
-            .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            if self.fullscreen {
-                Element::from(Space::new().width(0.0))
-            } else {
-                button(text("Mini player").size(tokens.type_scale.label))
-                    .on_press(Message::ReduceToMini)
-                    .style(design::quiet_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x])
-                    .into()
-            },
-            if self.fullscreen {
-                Element::from(Space::new().width(0.0))
-            } else {
-                button(text("Back").size(tokens.type_scale.label))
-                    .on_press(Message::BackFromPlayer)
-                    .style(design::quiet_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x])
-                    .into()
-            },
-            text(title).size(tokens.type_scale.subtitle),
-            text(state)
-                .size(tokens.type_scale.micro)
-                .color(tokens.palette.ink_muted),
-        ]
-        .spacing(tokens.spacing.field_x)
-        .align_y(Alignment::Center)
-        .push(self.up_next.as_ref().map(|up| {
-            let left = up
-                .starts_at
-                .saturating_duration_since(std::time::Instant::now())
-                .as_secs_f32()
-                .ceil();
-            row![
-                text(format!("Up next: {} in {left:.0} s", up.title)).size(tokens.type_scale.label),
-                button(text("Play now").size(tokens.type_scale.label))
-                    .on_press(Message::PlayNextNow)
-                    .style(design::action_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                button(text("Cancel").size(tokens.type_scale.label))
-                    .on_press(Message::CancelNext)
-                    .style(design::quiet_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            ]
-            .spacing(tokens.spacing.field_x)
-            .align_y(Alignment::Center)
-        }));
-
-        let surface: Element<'_, Message> = match (&self.snapshot.failure, &self.frame) {
-            (Some(failure), _) => container(
-                text(format!("Playback failed — {}", failure.message))
-                    .size(tokens.type_scale.body)
-                    .color(tokens.palette.destructive),
-            )
-            .style(|_theme| design::container_style(Level::Panel, false))
-            .padding(tokens.spacing.content_pad)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .into(),
-            (None, Some(frame)) => shader::Shader::new(VideoSurface::new(Some(frame.clone())))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
-            (None, None) => container(
-                text("Preparing streams…")
-                    .size(tokens.type_scale.body)
-                    .color(tokens.palette.ink_muted),
-            )
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .into(),
-        };
-
-        let duration = self.snapshot.duration.max(0.0);
-        let position = self.scrub.unwrap_or(self.snapshot.position);
-        let muted = self.snapshot.muted.unwrap_or(false);
-        let volume = self.volume_percent();
-        let controls = row![
-            button(text(play_action(self.snapshot.state).label()).size(tokens.type_scale.label))
-                .on_press(Message::TogglePlay)
-                .style(design::action_style(true))
-                .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            text(clock(position)).size(tokens.type_scale.caption),
-            slider(0.0..=duration.max(1.0), position, Message::Scrub)
-                .on_release(Message::SeekCommit)
-                .step(0.1)
-                .width(Length::Fill),
-            text(clock(duration)).size(tokens.type_scale.caption),
-        ]
-        .spacing(tokens.spacing.field_x)
-        .align_y(Alignment::Center);
-
-        let volume_row = row![
-            button(text(if muted { "Unmute" } else { "Mute" }).size(tokens.type_scale.label))
-                .on_press(Message::ToggleMute)
-                .style(design::quiet_style(muted))
-                .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            slider(0.0..=100.0, volume, Message::Volume)
-                .on_release(Message::VolumeCommit)
-                .step(1.0)
-                .width(160.0),
-            text(format!("{:.0}%", volume))
-                .size(tokens.type_scale.caption)
-                .color(tokens.palette.ink_muted),
-        ]
-        .spacing(tokens.spacing.field_x)
-        .align_y(Alignment::Center);
-
-        let mut segment_row: iced::widget::Row<'_, Message> = row![]
-            .spacing(tokens.spacing.field_x)
-            .align_y(Alignment::Center);
-        if let Some(marker) = self.active_marker() {
-            let label = if marker.kind == "intro" {
-                "Skip intro"
-            } else {
-                "Skip credits"
-            };
-            segment_row = segment_row.push(
-                button(text(label).size(tokens.type_scale.label))
-                    .on_press(Message::SkipSegment)
-                    .style(design::action_style(true))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            );
-        }
-
-        for kind in ["intro", "credits"] {
-            let label = match &self.mark_pending {
-                Some((pending, start)) if pending == kind => {
-                    format!("End {kind} (from {})", clock(*start as f64 / 1_000.0))
-                }
-                _ => format!("Mark {kind} start"),
-            };
-            segment_row = segment_row.push(
-                button(text(label).size(tokens.type_scale.label))
-                    .on_press(Message::MarkSegment(kind.to_string()))
-                    .style(design::quiet_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            );
-        }
-        if self.mark_pending.is_some() {
-            segment_row = segment_row.push(
-                button(text("Finish segment").size(tokens.type_scale.label))
-                    .on_press(Message::FinishSegment)
-                    .style(design::action_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            );
-        }
-        let marked = self
-            .markers
-            .iter()
-            .map(|marker| {
-                format!(
-                    "{} {}–{}",
-                    marker.kind,
-                    clock(marker.start_ms as f64 / 1_000.0),
-                    clock(marker.end_ms as f64 / 1_000.0)
-                )
-            })
-            .collect::<Vec<_>>();
-        let segment_note = if marked.is_empty() {
-            "No segments stored for this file. Pin them while watching; nothing is guessed."
-                .to_string()
-        } else {
-            marked.join(" · ")
-        };
-        let segments = column![
-            segment_row,
-            text(segment_note)
-                .size(tokens.type_scale.micro)
-                .color(tokens.palette.ink_muted),
-        ]
-        .spacing(tokens.spacing.field_y);
-
-        let (audio_choices, audio_selected) = self.track_chooser(TrackKind::Audio);
-        let (subtitle_choices, subtitle_selected) = self.track_chooser(TrackKind::Subtitle);
-
-        let reported_any = !audio_choices.is_empty() || !subtitle_choices.is_empty();
-        let mut track_row: iced::widget::Row<'_, Message> = row![]
-            .spacing(tokens.spacing.field_x)
-            .align_y(Alignment::Center);
-        for (label, choices, selected, kind) in [
-            ("Audio", audio_choices, audio_selected, TrackKind::Audio),
-            (
-                "Subtitles",
-                subtitle_choices,
-                subtitle_selected,
-                TrackKind::Subtitle,
-            ),
-        ] {
-            track_row = track_row.push(
-                text(label)
-                    .size(tokens.type_scale.micro)
-                    .color(tokens.palette.ink_muted),
-            );
-            track_row = if choices.is_empty() {
-                track_row.push(
-                    text("none in this file")
-                        .size(tokens.type_scale.micro)
-                        .color(tokens.palette.disabled_foreground),
-                )
-            } else {
-                track_row.push(
-                    pick_list(choices, selected, move |choice: TrackChoice| {
-                        Message::SelectTrack(kind, choice.id)
-                    })
-                    .placeholder(label),
-                )
-            };
-        }
-        let track_row: Element<'_, Message> = if !reported_any {
-            text("The player reported no selectable audio or subtitle tracks for this file.")
-                .size(tokens.type_scale.micro)
-                .color(tokens.palette.ink_muted)
-                .into()
-        } else {
-            track_row.into()
-        };
-
-        let resume = self
-            .active
-            .as_ref()
-            .filter(|active| active.resume_from_ms > 0 && !self.snapshot.ended)
-            .map(|active| {
-                text(format!(
-                    "resumed from {}",
-                    clock(active.resume_from_ms as f64 / 1_000.0)
-                ))
-                .size(tokens.type_scale.micro)
-            })
-            .unwrap_or_else(|| text("").size(tokens.type_scale.micro));
-
-        let mut subtitles = column![].spacing(tokens.spacing.field_y / 2.0);
-        let mut subtitle_head: iced::widget::Row<'_, Message> = row![
-            text("Subtitle files kept for this film")
-                .size(tokens.type_scale.micro)
-                .color(tokens.palette.ink_muted),
-        ]
-        .spacing(tokens.spacing.field_x)
-        .align_y(Alignment::Center);
-        subtitle_head = subtitle_head.push(
-            button(text("Import a subtitle file…").size(tokens.type_scale.label))
-                .on_press(Message::ImportSubtitle)
-                .style(design::quiet_style(false))
-                .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-        );
-        subtitles = subtitles.push(subtitle_head);
-        if self.subtitles.is_empty() {
-            subtitles = subtitles.push(
-                text(
-                    "None kept yet. An import copies the file into the library; the file on disk is \
-                     never modified or moved.",
-                )
-                .size(tokens.type_scale.micro)
-                .color(tokens.palette.disabled_foreground),
-            );
-        }
-        for subtitle in &self.subtitles {
-            subtitles = subtitles.push(
-                row![
-                    text(subtitle.label.clone()).size(tokens.type_scale.caption),
-                    text(format!(
-                        "{} · {}",
-                        subtitle.format.to_uppercase(),
-                        subtitle.provenance
-                    ))
-                    .size(tokens.type_scale.micro)
-                    .color(tokens.palette.ink_muted),
-                    button(text("Use").size(tokens.type_scale.label))
-                        .on_press(Message::UseSubtitle(subtitle.id.clone()))
-                        .style(design::action_style(false))
-                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                    button(text("Remove").size(tokens.type_scale.label))
-                        .on_press(Message::RemoveSubtitle(subtitle.id.clone()))
-                        .style(design::danger_style(false))
-                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                ]
-                .spacing(tokens.spacing.field_x)
-                .align_y(Alignment::Center),
-            );
-        }
-        subtitles = subtitles.push(
-            text(
-                "Searching a provider online needs an authorised account of your own, for example \
-                 OpenSubtitles with your API key; none is configured in this build, so no search is \
-                 offered here and nothing is fetched.",
-            )
-            .size(tokens.type_scale.micro)
-            .color(tokens.palette.ink_muted),
-        );
-
-        let footer = row![resume].spacing(tokens.spacing.field_x);
-
-        let chrome = container(
-            column![controls, volume_row, segments, track_row, subtitles, footer]
-                .spacing(tokens.spacing.field_y),
-        )
-        .style(|_theme| design::container_style(Level::Panel, false))
-        .padding(tokens.spacing.content_pad)
-        .width(Length::Fill);
-
-        let overlay = column![Space::new().height(Length::Fill), chrome]
-            .spacing(tokens.spacing.field_y)
-            .width(Length::Fill)
-            .height(Length::Fill);
-
-        let mut page = column![].spacing(tokens.spacing.field_y);
-        if !self.fullscreen {
-            page = page.push(header);
-        }
-        page = page.push(
-            container(stack![surface, overlay])
-                .width(Length::Fill)
-                .height(Length::Fill),
-        );
-
-        container(page)
-            .padding(tokens.spacing.content_pad)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-    }
-}
-
-fn settings_heading(label: &str) -> Element<'_, Message> {
-    text(label.to_string())
-        .size(design::tokens().type_scale.subtitle)
-        .into()
 }
 
 fn settings_note(label: &str) -> Element<'static, Message> {
     text(label.to_string())
         .size(design::tokens().type_scale.micro)
         .color(design::tokens().palette.ink_muted)
-        .into()
-}
-
-fn settings_panel(content: Element<'_, Message>) -> Element<'_, Message> {
-    container(content)
-        .style(|_theme| design::container_style(Level::Panel, false))
-        .padding(design::tokens().spacing.content_pad)
-        .width(Length::Fill)
         .into()
 }
 
@@ -6592,6 +6217,13 @@ pub fn browse_empty_copy(has_sources: bool, narrowed: bool) -> (&'static str, &'
     }
 }
 
+#[cfg(test)]
+impl App {
+    fn columns(&self) -> usize {
+        grid_columns(self.window_width)
+    }
+}
+
 pub fn grid_columns(window_width: f32) -> usize {
     const TARGET_CARD_PX: f32 = 300.0;
 
@@ -6622,6 +6254,7 @@ pub fn round_percent(value: f64, min: u16, max: u16) -> u16 {
     (value.round().max(0.0) as u16).clamp(min, max)
 }
 
+#[cfg(test)]
 fn truncate(value: &str, max: usize) -> String {
     if value.chars().count() <= max {
         return value.to_string();
@@ -6722,12 +6355,12 @@ mod tests {
         assert!(columns > DEFAULT_COLUMNS, "this test needs a wider grid");
 
         app.focus_card(0);
-        app.move_focus(Focus::Down);
+        let _ = app.move_focus(Focus::Down);
         assert_eq!(app.focus, columns, "Down must move exactly one row");
-        app.move_focus(Focus::Up);
+        let _ = app.move_focus(Focus::Up);
         assert_eq!(app.focus, 0, "Up must return to the same column");
 
-        app.move_focus(Focus::Right);
+        let _ = app.move_focus(Focus::Right);
         assert_eq!(app.focus, 1);
     }
 
@@ -7314,18 +6947,18 @@ mod tests {
 
         assert_eq!(app.columns(), DEFAULT_COLUMNS);
         assert_eq!(app.focus, 0);
-        app.move_focus(Focus::Left);
+        let _ = app.move_focus(Focus::Left);
         assert_eq!(app.focus, 0, "focus must not leave the first card");
-        app.move_focus(Focus::Right);
+        let _ = app.move_focus(Focus::Right);
         assert_eq!(app.focus, 1);
-        app.move_focus(Focus::Up);
+        let _ = app.move_focus(Focus::Up);
         assert_eq!(app.focus, 1, "there is no row above the first");
-        app.move_focus(Focus::Down);
+        let _ = app.move_focus(Focus::Down);
         assert_eq!(app.focus, 1 + DEFAULT_COLUMNS, "down moves a whole row");
 
         for _ in 0..20 {
-            app.move_focus(Focus::Right);
-            app.move_focus(Focus::Down);
+            let _ = app.move_focus(Focus::Right);
+            let _ = app.move_focus(Focus::Down);
         }
         assert!(app.focus < app.visible_len());
         assert_eq!(app.focus, app.visible_len() - 1);
@@ -7335,12 +6968,16 @@ mod tests {
     fn down_the_episode_list_moves_one_episode_not_one_grid_row() {
         let (mut app, _directory) = app_with(8);
         let episodes = app.browse.items[..3].to_vec();
-        app.detail = Some(Detail {
+        let mut detail = Detail {
             item: episodes[0].clone(),
             episodes,
+            shown: Vec::new(),
             seasons: Vec::new(),
+            season: 1,
             origin: (Screen::Browse, 0),
-        });
+        };
+        detail.refresh_shown();
+        app.detail = Some(detail);
         app.navigate(Screen::Detail);
         app.focus_card(0);
         assert!(
@@ -7348,18 +6985,18 @@ mod tests {
             "this test only means something when the grid is wider than the list"
         );
 
-        app.move_focus(Focus::Down);
+        let _ = app.move_focus(Focus::Down);
         assert_eq!(app.focus, 1, "one arrow press moves one episode");
-        app.move_focus(Focus::Down);
+        let _ = app.move_focus(Focus::Down);
         assert_eq!(app.focus, 2, "so the third episode is reachable");
-        app.move_focus(Focus::Down);
+        let _ = app.move_focus(Focus::Down);
         assert_eq!(app.focus, 2, "and the list stops at its last episode");
-        app.move_focus(Focus::Up);
+        let _ = app.move_focus(Focus::Up);
         assert_eq!(app.focus, 1, "and comes back one");
 
         app.navigate(Screen::Browse);
         app.focus_card(0);
-        app.move_focus(Focus::Down);
+        let _ = app.move_focus(Focus::Down);
         assert_eq!(
             app.focus,
             app.columns(),
@@ -8521,5 +8158,145 @@ mod tests {
             .expect("item")
             .expect("the row");
         assert_eq!(item.position_ms, 120_000, "progress is untouched");
+    }
+
+    #[test]
+    fn the_home_cursor_walks_rails_and_keeps_the_column() {
+        let (mut app, _directory) = app_with(4);
+        let items = app.library.items(&LibraryQuery::page(10)).expect("items");
+        app.home = items;
+        app.navigate(Screen::Home);
+        app.focus_card(0);
+
+        let _ = app.update(Message::Move(Focus::Right));
+        assert_eq!(
+            app.nav.focus(),
+            FocusPos { rail: 0, column: 1 },
+            "right moves one card inside the rail"
+        );
+        let selected = app.home_selected_item().map(|item| item.id.clone());
+        assert!(selected.is_some(), "the focused card resolves to an item");
+
+        let _ = app.update(Message::Move(Focus::Down));
+        assert_eq!(
+            app.nav.focus(),
+            FocusPos { rail: 1, column: 1 },
+            "down moves to the next rail and keeps the column"
+        );
+        assert_eq!(
+            app.home_selected_item().map(|item| item.id.clone()),
+            app.home_sections()[1].1[1].id.clone().into(),
+            "the selected item is the one under the cursor"
+        );
+
+        let _ = app.update(Message::Move(Focus::Left));
+        let _ = app.update(Message::Move(Focus::Left));
+        let _ = app.update(Message::Move(Focus::Left));
+        assert_eq!(
+            app.nav.focus(),
+            FocusPos { rail: 1, column: 0 },
+            "left clamps at the first card instead of wrapping"
+        );
+    }
+
+    #[test]
+    fn choosing_a_season_changes_the_listed_episodes_without_leaving_the_page() {
+        let (mut app, _directory) = app_with(4);
+        let mut episodes = app.library.items(&LibraryQuery::page(10)).expect("items");
+        for (index, episode) in episodes.iter_mut().enumerate() {
+            episode.kind = MediaKind::Series;
+            episode.season = Some(if index < 2 { 1 } else { 2 });
+            episode.episode = Some((index % 2 + 1) as i64);
+        }
+        let mut detail = Detail {
+            item: episodes[0].clone(),
+            episodes,
+            shown: Vec::new(),
+            seasons: vec![1, 2],
+            season: 1,
+            origin: (Screen::Browse, 0),
+        };
+        detail.refresh_shown();
+        app.detail = Some(detail);
+        app.navigate(Screen::Detail);
+        app.focus_card(1);
+
+        let _ = app.update(Message::SeasonChosen(2));
+
+        let detail = app.detail.as_ref().expect("the page stays open");
+        assert_eq!(detail.season, 2);
+        assert_eq!(detail.season_episodes().len(), 2);
+        assert!(
+            detail
+                .season_episodes()
+                .iter()
+                .all(|episode| episode.season == Some(2)),
+            "the list holds only the chosen season"
+        );
+        assert_eq!(app.screen, Screen::Detail);
+        assert_eq!(app.focus, 0, "the cursor returns to the first episode");
+    }
+
+    #[test]
+    fn casting_and_profiles_are_populated_from_what_the_app_already_holds() {
+        use ui::screens::settings::{Row, Section};
+
+        let (mut app, _directory) = app_with(1);
+        app.receivers.push(crate::casting::Receiver {
+            id: "receiver-1".to_string(),
+            name: "Samsung TV".to_string(),
+            kind: "tv".to_string(),
+            address: "192.0.2.10".to_string(),
+            from: "ssdp".to_string(),
+        });
+        app.profiles = vec![
+            Profile {
+                id: "me".to_string(),
+                name: "Rahi".to_string(),
+            },
+            Profile {
+                id: "guest".to_string(),
+                name: "Guest".to_string(),
+            },
+        ];
+        app.profile_id = "me".to_string();
+
+        app.settings_section = Section::Casting;
+        let rows = app.settings_rows();
+        assert!(
+            rows.iter().any(|row| matches!(
+                row,
+                Row::Action { label, action: "Cast", on_press: Some(_), .. } if *label == "Samsung TV"
+            )),
+            "the receiver is offered as a cast target"
+        );
+        assert!(
+            rows.iter().any(|row| matches!(
+                row,
+                Row::Action {
+                    action: "Look now",
+                    on_press: Some(Message::LookForReceivers),
+                    ..
+                }
+            )),
+            "discovery stays the viewer's choice"
+        );
+
+        app.settings_section = Section::Profiles;
+        let rows = app.settings_rows();
+        assert!(
+            rows.iter().any(|row| matches!(
+                row,
+                Row::Value { label, .. } if *label == "Rahi"
+            )),
+            "the active profile is stated, not offered"
+        );
+        assert!(
+            rows.iter().any(|row| matches!(
+                row,
+                Row::Action { label, action: "Use", on_press: Some(_), .. } if *label == "Guest"
+            )),
+            "another profile can be chosen"
+        );
     }
 }
