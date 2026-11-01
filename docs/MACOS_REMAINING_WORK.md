@@ -310,26 +310,32 @@ than reclassified.
 
 ---
 
-#### P1-05 · Decide macOS Picture-in-Picture (F18)
+#### P1-05 · macOS Picture-in-Picture (F18) — **decision recorded, implementation open**
 
 - **Requirement:** F18.
 - **Status:** PARTIAL — a labelled in-app mini player exists and is honest about what
-  it is; system-wide PiP does not exist.
-- **What is missing:** either real macOS PiP or a recorded, owned decision that it is
-  out of reach with iced/wgpu.
+  it is; system-wide PiP does not exist. The decision and the exact API constraint
+  are now recorded as **ADR-016**.
+- **What is missing:** the second display path PiP needs.
 - **Where:** `apps/desktop/src/app.rs` (`reduce_to_mini`, `mini_view`).
 - **Why it matters:** the PRD allows "authentic OS behaviour **or** a distinctly
-  labelled mini-player"; the app chose the second. That choice is currently a
-  sentence in a status ledger, not a decision with an owner.
-- **Work:** confirm what macOS PiP requires (an `AVPlayerLayer` with an AVPlayer; a
-  wgpu surface cannot be its source), then record an ADR-style note in
-  `DECISIONS_AND_RESEARCH.md` naming the limit and the fallback. Only attempt PiP if
-  a supported path is found that keeps the wgpu renderer.
-- **Depends on:** nothing.
-- **Acceptance:** a written decision with the API constraint quoted, referenced from
-  F18 in `CAPABILITY_MATRIX.md`.
-- **Automated verification:** the mini player's existing `step_20` stays green.
-- **Human verification:** look at the mini panel once (part of the owner session).
+  labelled mini-player"; the app chose the second, and that choice is now a decision
+  rather than a sentence in a ledger.
+- **What the SDK actually says** (checked in the installed macOS SDK, not recalled):
+  `AVPictureInPictureController` takes an `AVPlayerLayer` (`initWithPlayerLayer:`) or,
+  since macOS 12, an `AVSampleBufferDisplayLayer` through
+  `AVPictureInPictureControllerContentSource` with a playback delegate. A wgpu
+  surface is neither, so PiP means wrapping decoded frames as `CMSampleBuffer`s — and
+  the OpenGL/`IOSurface` path in P1-01 is the natural source for an
+  `IOSurface`-backed `CVPixelBuffer`.
+- **Work:** only if real PiP is wanted: prototype an `AVSampleBufferDisplayLayer` fed
+  from the player's surfaces and drive `AVPictureInPictureController` from it, keeping
+  the in-app player as the default.
+- **Depends on:** P1-01 for the surfaces.
+- **Acceptance:** PiP floats the film outside the window, controls work, and closing
+  PiP returns to the real player without reloading.
+- **Automated verification:** the mini player's `step_20` stays green either way.
+- **Human verification:** the floating window itself.
 
 ---
 
