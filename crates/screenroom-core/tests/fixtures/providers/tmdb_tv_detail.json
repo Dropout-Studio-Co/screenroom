@@ -1,0 +1,39 @@
+{
+  "backdrop_path": "/backdrop-harbour.jpg",
+  "first_air_date": "2014-03-02",
+  "genres": [
+    { "id": 18, "name": "Drama" }
+  ],
+  "id": 9001,
+  "name": "Harbour Lights",
+  "number_of_episodes": 16,
+  "number_of_seasons": 2,
+  "origin_country": ["GB"],
+  "original_language": "en",
+  "original_name": "Harbour Lights",
+  "overview": "Two families share a harbour and a long argument.",
+  "popularity": 22.1,
+  "poster_path": "/poster-harbour.jpg",
+  "seasons": [
+    {
+      "air_date": "2014-03-02",
+      "episode_count": 8,
+      "id": 7001,
+      "name": "Season 1",
+      "overview": "The first year.",
+      "poster_path": "/poster-harbour-s1.jpg",
+      "season_number": 1
+    },
+    {
+      "air_date": "2015-04-05",
+      "episode_count": 8,
+      "id": 7002,
+      "name": "Season 2",
+      "overview": "The second year.",
+      "poster_path": "/poster-harbour-s2.jpg",
+      "season_number": 2
+    }
+  ],
+  "status": "Ended",
+  "vote_average": 7.9
+}

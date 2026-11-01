@@ -528,12 +528,31 @@ impl Library {
         Ok(file_id)
     }
 
-    pub fn finish_scan(
+    pub(crate) fn pending_locators(
+        &self,
+        source_id: &str,
+        scan_id: &str,
+        limit: u64,
+    ) -> Result<Vec<(String, String)>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let connection = self.connection();
+        let mut statement = connection.prepare(
+            "SELECT id, relative_path FROM files WHERE source_id = ?1 AND available = 1
+             AND (last_scan_id IS NULL OR last_scan_id != ?2) ORDER BY id LIMIT ?3",
+        )?;
+        let rows = statement.query_map(params![source_id, scan_id, limit], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub(crate) fn finish_scan(
         &self,
         source_id: &str,
         scan_id: &str,
         complete: bool,
         expected_root: Option<&str>,
+        partial: &crate::scanner::PartialScan,
     ) -> Result<()> {
         let mut connection = self.connection();
         let tx = connection.transaction()?;
@@ -558,12 +577,7 @@ impl Library {
                 "The source changed while scanning. Restart the scan.",
             ));
         }
-        let root = Path::new(&root_path);
-        let Ok(resolved_root) = std::fs::canonicalize(root) else {
-            tx.commit()?;
-            return Ok(());
-        };
-        if self.path_key(&resolved_root) != self.path_key(root) {
+        if !partial.root_trusted {
             tx.commit()?;
             return Ok(());
         }
@@ -578,37 +592,14 @@ impl Library {
                 params![now_ms(), source_id],
             )?;
         } else {
-            let mut statement = tx.prepare(
-                "SELECT id, relative_path FROM files WHERE source_id = ?1 AND available = 1
-                 AND (last_scan_id IS NULL OR last_scan_id != ?2)",
-            )?;
-            let locators = statement
-                .query_map(params![source_id, scan_id], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            drop(statement);
-            let missing: Vec<String> = locators
-                .into_iter()
-                .filter(|(_, relative_path)| {
-                    matches!(std::fs::metadata(root.join(relative_path)),
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound)
-                })
-                .map(|(id, _)| id)
-                .collect();
-
-            if std::fs::canonicalize(root).is_ok() {
-                let root_listed = std::fs::read_dir(root).is_ok();
-                for id in missing {
-                    tx.execute("UPDATE files SET available = 0 WHERE id = ?1", [id])?;
-                }
-
-                if root_listed {
-                    tx.execute(
-                        "UPDATE sources SET state = 'available' WHERE id = ?1 AND state != 'removed'",
-                        [source_id],
-                    )?;
-                }
+            for id in &partial.missing {
+                tx.execute("UPDATE files SET available = 0 WHERE id = ?1", [id])?;
+            }
+            if partial.root_listed {
+                tx.execute(
+                    "UPDATE sources SET state = 'available' WHERE id = ?1 AND state != 'removed'",
+                    [source_id],
+                )?;
             }
         }
         tx.commit()?;

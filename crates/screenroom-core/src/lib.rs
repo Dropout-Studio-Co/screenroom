@@ -16,16 +16,27 @@ pub use error::{CoreError, Result};
 pub use filename::{ParsedName, parse_filename};
 pub use fingerprint::media_fingerprint;
 pub use library::{
-    Artwork, ArtworkCandidate, BackupInfo, BackupReport, Bookmark, BookmarkDraft, Checkpoint,
-    ConversionJob, ConversionPlan, ConversionProfile, ConversionStatus, EnrichmentSummary, Ingest,
-    Library, LibraryQuery, OutputFacts, PathSemantics, Preferences, RestoreReport, Sort,
-    StoredSubtitle, UnprobedFile, verify_output,
+    ARTWORK_RETENTION_SETTING, ApiCredential, Artwork, ArtworkCandidate, ArtworkRetention,
+    BENGALI_CODES, BackupCancel, BackupInfo, BackupProgress, BackupProgressFn, BackupReport,
+    Bookmark, BookmarkDraft, CatalogueEpisode, CatalogueMatch, CatalogueMetadataProvider,
+    CatalogueSeason, CatalogueSeasonSummary, CatalogueSeries, CatalogueWork, Checkpoint, Clock,
+    ConversionJob, ConversionPlan, ConversionProfile, ConversionStatus, DownloadedSubtitle,
+    EnrichmentDrainReport, EnrichmentQueueDepth, EnrichmentState, EnrichmentSummary,
+    EnrichmentTarget, EnrichmentTask, HttpMethod, HttpRequest, HttpResponse, HttpTransport,
+    ImageSize, Ingest, Library, LibraryQuery, METADATA_ORIGIN_PROVIDER, MetadataOrigin,
+    MetadataPatch, MetadataQuery, MetadataSnapshot, OpenSubtitlesProvider, OutputFacts,
+    PathSemantics, Preferences, ProviderCapability, ProviderConfig, ProviderError, ProviderImage,
+    ReconcileDecision, ReconcileMode, RestoreReport, Secret, Sleeper, Sort, StoredSubtitle,
+    SubtitleMatch, SubtitleProvider, SubtitleProviderConfig, SubtitleSearch, SystemClock,
+    TMDB_PROVIDER, TcpTransport, ThreadSleeper, TmdbProvider, TransportError, UnprobedFile,
+    describe_enrichment_target, reconcile, replacement_allowed, subtitle_language_codes,
+    subtitle_language_name, verify_output,
 };
 pub use paths::{PathStyle, location_key};
 pub use scanner::{
     LibraryScanner, MEDIA_EXTENSIONS, ScanIssue, ScanSummary, ScanToken, ScanUpdate,
 };
 
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 
 pub const BACKUP_FORMAT_VERSION: i64 = 2;

@@ -1,0 +1,25 @@
+{
+  "adult": false,
+  "backdrop_path": "/backdrop-lantern.jpg",
+  "budget": 0,
+  "genres": [
+    { "id": 18, "name": "Drama" },
+    { "id": 9648, "name": "Mystery" }
+  ],
+  "id": 55001,
+  "imdb_id": "tt0000001",
+  "original_language": "en",
+  "original_title": "The Lantern Keeper",
+  "overview": "A keeper tends a light that never goes out, and the village learns why it must.",
+  "popularity": 18.42,
+  "poster_path": "/poster-lantern.jpg",
+  "release_date": "1998-10-16",
+  "revenue": 0,
+  "runtime": 112,
+  "status": "Released",
+  "tagline": "Some lights are kept.",
+  "title": "The Lantern Keeper",
+  "video": false,
+  "vote_average": 7.4,
+  "vote_count": 812
+}

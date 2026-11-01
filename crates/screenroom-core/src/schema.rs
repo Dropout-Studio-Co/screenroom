@@ -82,13 +82,31 @@ pub const CREATE: &[&str] = &[
 
     SUBTITLES,
 
-    "CREATE INDEX IF NOT EXISTS editions_work ON editions(work_id)",
-    "CREATE INDEX IF NOT EXISTS files_edition ON files(edition_id)",
-    "CREATE INDEX IF NOT EXISTS file_episodes_episode ON file_episodes(episode_id)",
-    "CREATE INDEX IF NOT EXISTS markers_edition ON markers(edition_id,kind)",
+    ENRICHMENT_QUEUE,
+
+    ENRICHMENT_QUEUE_ACTIVE,
+
+    ENRICHMENT_QUEUE_DUE,
+
+    EDITIONS_WORK,
+
+    FILES_EDITION,
+
+    FILE_EPISODES_EPISODE,
+
+    MARKERS_EDITION,
 ];
 
-pub const MIGRATE_2_TO_3: &[&str] = &[CREATE[CREATE.len() - 5]];
+pub const EDITIONS_WORK: &str = "CREATE INDEX IF NOT EXISTS editions_work ON editions(work_id)";
+
+pub const FILES_EDITION: &str = "CREATE INDEX IF NOT EXISTS files_edition ON files(edition_id)";
+
+pub const FILE_EPISODES_EPISODE: &str =
+    "CREATE INDEX IF NOT EXISTS file_episodes_episode ON file_episodes(episode_id)";
+
+pub const MARKERS_EDITION: &str =
+    "CREATE INDEX IF NOT EXISTS markers_edition ON markers(edition_id,kind)";
+pub const MIGRATE_2_TO_3: &[&str] = &[SUBTITLES];
 
 pub const MIGRATE_4_TO_5: &[&str] = &[
     CONVERSION_JOBS,
@@ -106,9 +124,21 @@ pub const SUBTITLES: &str = "CREATE TABLE IF NOT EXISTS subtitles(id TEXT PRIMAR
 
 pub const MIGRATE_7_TO_8: &[&str] = &[SUBTITLES];
 
+pub const ENRICHMENT_QUEUE: &str = "CREATE TABLE IF NOT EXISTS enrichment_queue(id TEXT PRIMARY KEY,\n      work_id TEXT NOT NULL REFERENCES works(id),target_kind TEXT NOT NULL\n      CHECK(target_kind IN ('work','season','episode')),season_number INTEGER,\n      episode_number INTEGER,language TEXT NOT NULL,priority INTEGER NOT NULL DEFAULT 0,\n      state TEXT NOT NULL CHECK(state IN ('queued','running','rateLimited','waitingNetwork',\n      'failed','done','cancelled')),attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0),\n      next_attempt_ms INTEGER NOT NULL DEFAULT 0,last_error TEXT,\n      created_ms INTEGER NOT NULL,updated_ms INTEGER NOT NULL)";
+
+pub const ENRICHMENT_QUEUE_ACTIVE: &str = "CREATE UNIQUE INDEX IF NOT EXISTS enrichment_queue_active\n      ON enrichment_queue(work_id,target_kind,IFNULL(season_number,-1),IFNULL(episode_number,-1))\n      WHERE state NOT IN ('done','cancelled')";
+
+pub const ENRICHMENT_QUEUE_DUE: &str = "CREATE INDEX IF NOT EXISTS enrichment_queue_due\n      ON enrichment_queue(state,next_attempt_ms,priority)";
+
+pub const MIGRATE_8_TO_9: &[&str] = &[
+    ENRICHMENT_QUEUE,
+    ENRICHMENT_QUEUE_ACTIVE,
+    ENRICHMENT_QUEUE_DUE,
+];
+
 pub const MIGRATE_3_TO_4: &[&str] = &[
-    CREATE[CREATE.len() - 4],
-    CREATE[CREATE.len() - 3],
-    CREATE[CREATE.len() - 2],
-    CREATE[CREATE.len() - 1],
+    EDITIONS_WORK,
+    FILES_EDITION,
+    FILE_EPISODES_EPISODE,
+    MARKERS_EDITION,
 ];

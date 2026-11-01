@@ -1,7 +1,10 @@
 use std::fs;
+use std::path::Path;
 
-use rusqlite::Connection;
-use screenroom_core::{Ingest, Library, LibraryQuery, parse_filename};
+use rusqlite::{Connection, params};
+use screenroom_core::{
+    BookmarkDraft, EnrichmentState, EnrichmentTarget, Ingest, Library, LibraryQuery, parse_filename,
+};
 use tempfile::TempDir;
 
 fn raw(directory: &TempDir) -> Connection {
@@ -12,6 +15,30 @@ fn raw_count(directory: &TempDir, sql: &str) -> i64 {
     raw(directory)
         .query_row(sql, [], |row| row.get(0))
         .expect(sql)
+}
+
+fn raw_text(directory: &TempDir, sql: &str) -> String {
+    raw(directory)
+        .query_row(sql, [], |row| row.get(0))
+        .expect(sql)
+}
+
+fn ingest_extra(library: &Library, media: &Path, name: &str, fingerprint: &str) -> String {
+    let source = library.sources().expect("sources").remove(0);
+    fs::write(media.join(name), b"not really a video").unwrap();
+    let parsed = parse_filename(name, None);
+    library
+        .ingest_file(Ingest {
+            source_id: &source.id,
+            relative_path: name,
+            fingerprint,
+            size: 18,
+            modified_ms: 1,
+            scan_id: "test",
+            parsed: Some(&parsed),
+            expected_root: Some(&source.root_path),
+        })
+        .expect("ingest")
 }
 
 fn library_with_a_file(directory: &TempDir) -> (Library, String) {
@@ -231,4 +258,142 @@ fn progress_survives_the_whole_recovery_sequence() {
         assert_eq!(watching[0].position_ms, 30_000, "the position is stable");
         assert!(watching[0].favorite, "and so is the list entry");
     }
+}
+
+#[test]
+fn a_backup_keeps_subtitles_and_saved_sources_across_a_restore() {
+    let directory = TempDir::new().expect("temp dir");
+    let (library, file_id) = library_with_a_file(&directory);
+    let media = directory.path().join("media");
+    let subtitle_body = b"1\n00:00:01,000 --> 00:00:02,000\nHello\n";
+    let subtitle_source = directory.path().join("heat.en.srt");
+    fs::write(&subtitle_source, subtitle_body).unwrap();
+    let subtitle = library
+        .import_subtitle(&file_id, &subtitle_source)
+        .expect("subtitle");
+    let bookmark = library
+        .add_bookmark(&BookmarkDraft {
+            label: "Streaming shelf".to_string(),
+            address: "https://example.org/shelf".to_string(),
+            access: String::new(),
+        })
+        .expect("bookmark");
+
+    let backup = directory.path().join("copy.db");
+    library.backup_to(&backup).expect("backup");
+
+    let added = ingest_extra(&library, &media, "Alien (1979).mkv", "alien");
+    let added_subtitle = directory.path().join("alien.en.srt");
+    fs::write(
+        &added_subtitle,
+        b"1\n00:00:03,000 --> 00:00:04,000\nLater\n",
+    )
+    .unwrap();
+    library
+        .import_subtitle(&added, &added_subtitle)
+        .expect("later subtitle");
+    assert_eq!(library.items(&LibraryQuery::page(50)).unwrap().len(), 2);
+
+    library.restore_from(&backup).expect(
+        "a restore must not fail because the live library holds subtitles the backup does not",
+    );
+
+    assert_eq!(
+        library.items(&LibraryQuery::page(50)).unwrap().len(),
+        1,
+        "the file added after the backup is gone"
+    );
+    assert_eq!(
+        library
+            .subtitle_bytes(&subtitle.id)
+            .unwrap()
+            .expect("the imported subtitle came back"),
+        subtitle_body.to_vec()
+    );
+    assert_eq!(
+        library.bookmarks().unwrap(),
+        vec![bookmark],
+        "a saved source survives the round trip"
+    );
+    assert_eq!(library.subtitles_for(&file_id).unwrap().len(), 1);
+    assert!(
+        library.subtitles_for(&added).unwrap().is_empty(),
+        "the subtitle added after the backup is gone"
+    );
+}
+
+#[test]
+fn a_restore_makes_the_work_a_backup_interrupted_due_again() {
+    let directory = TempDir::new().expect("temp dir");
+    let (library, file_id) = library_with_a_file(&directory);
+    let work_id = library
+        .item(&file_id, None)
+        .expect("item")
+        .expect("present")
+        .work_id;
+    let task = library
+        .enqueue_enrichment(&work_id, EnrichmentTarget::Work, "en-US", 0)
+        .expect("task");
+    assert!(
+        library.claim_enrichment_task(&task, 0).expect("claim"),
+        "the task is running when the backup is taken"
+    );
+
+    {
+        let connection = Connection::open(directory.path().join("library.db")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO jobs(id, kind, target, status, priority, attempts, next_retry_ms)
+                 VALUES('job-during-backup', 'probe', 'target-1', 'running', 0, 1, 0)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO conversion_jobs(id, file_id, title, profile, status, progress,
+                   message, source_path, output_path, source_size, source_modified_ms,
+                   output_bytes, created_ms, updated_ms)
+                 VALUES('conversion-during-backup', ?1, 'Heat', 'remux', 'verifying', 50, '',
+                   '/in.mkv', '/out.mp4', 1, 1, 0, 1, 1)",
+                params![file_id],
+            )
+            .unwrap();
+    }
+
+    let backup = directory.path().join("copy.db");
+    library.backup_to(&backup).expect("backup");
+    library.restore_from(&backup).expect("restore");
+
+    let restored = library
+        .enrichment_task(&task)
+        .expect("task lookup")
+        .expect("the task came back");
+    assert_eq!(
+        restored.state,
+        EnrichmentState::Queued,
+        "a task the backup interrupted is not left claiming to run"
+    );
+    let due = library
+        .due_enrichment_tasks(i64::MAX, 10)
+        .expect("due tasks");
+    assert!(
+        due.iter().any(|candidate| candidate.id == task),
+        "the interrupted task is offered to the worker again"
+    );
+    assert_eq!(
+        raw_text(
+            &directory,
+            "SELECT status FROM jobs WHERE id = 'job-during-backup'"
+        ),
+        "queued",
+        "a job the backup interrupted is retried"
+    );
+    assert_eq!(
+        raw_text(
+            &directory,
+            "SELECT status FROM conversion_jobs WHERE id = 'conversion-during-backup'"
+        ),
+        "failed",
+        "a conversion nothing is working on stops claiming progress"
+    );
 }

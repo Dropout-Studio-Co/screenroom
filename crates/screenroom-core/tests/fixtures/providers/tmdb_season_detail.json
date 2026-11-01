@@ -1,0 +1,32 @@
+{
+  "air_date": "2014-03-02",
+  "episodes": [
+    {
+      "air_date": "2014-03-02",
+      "episode_number": 1,
+      "id": 88001,
+      "name": "The First Tide",
+      "overview": "A boat comes in late.",
+      "runtime": 52,
+      "season_number": 1,
+      "still_path": "/still-harbour-101.jpg",
+      "vote_average": 7.2
+    },
+    {
+      "air_date": "2014-03-09",
+      "episode_number": 2,
+      "id": 88002,
+      "name": "Low Water",
+      "overview": "The harbour dries out and an old debt surfaces.",
+      "runtime": 49,
+      "season_number": 1,
+      "still_path": "/still-harbour-102.jpg",
+      "vote_average": 7.5
+    }
+  ],
+  "id": 7001,
+  "name": "Season 1",
+  "overview": "The first year.",
+  "poster_path": "/poster-harbour-s1.jpg",
+  "season_number": 1
+}

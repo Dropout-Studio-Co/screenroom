@@ -67,6 +67,13 @@ pub struct ScanSummary {
     pub complete: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PartialScan {
+    pub(crate) root_trusted: bool,
+    pub(crate) root_listed: bool,
+    pub(crate) missing: Vec<String>,
+}
+
 #[derive(Debug)]
 pub struct LibraryScanner<'a> {
     library: &'a Library,
@@ -276,8 +283,19 @@ impl<'a> LibraryScanner<'a> {
         let cancelled = token.is_cancelled();
         let complete = !bounded && issues.is_empty();
         if !cancelled {
-            self.library
-                .finish_scan(source_id, &scan_id, complete, Some(&source.root_path))?;
+            let partial = self.probe_partial_scan(
+                source_id,
+                &scan_id,
+                Path::new(&source.root_path),
+                complete,
+            )?;
+            self.library.finish_scan(
+                source_id,
+                &scan_id,
+                complete,
+                Some(&source.root_path),
+                &partial,
+            )?;
         }
         let update = ScanUpdate {
             visited,
@@ -293,6 +311,47 @@ impl<'a> LibraryScanner<'a> {
             issues: issues.into_vec(),
             cancelled,
             complete,
+        })
+    }
+
+    fn probe_partial_scan(
+        &self,
+        source_id: &str,
+        scan_id: &str,
+        root: &Path,
+        complete: bool,
+    ) -> Result<PartialScan> {
+        let resolved = std::fs::canonicalize(root).ok();
+        let root_trusted = resolved
+            .as_ref()
+            .is_some_and(|resolved| self.library.path_key(resolved) == self.library.path_key(root));
+        if complete {
+            return Ok(PartialScan {
+                root_trusted,
+                root_listed: false,
+                missing: Vec::new(),
+            });
+        }
+
+        let root_listed = root_trusted && std::fs::read_dir(root).is_ok();
+        let mut missing = Vec::new();
+        if root_trusted {
+            let limit = self.max_entries.max(1);
+            for (id, relative) in self.library.pending_locators(source_id, scan_id, limit)? {
+                if !is_plain_relative(&relative) {
+                    continue;
+                }
+                #[cfg(test)]
+                probe_observer::notify();
+                if confirmed_missing(&root.join(&relative)) {
+                    missing.push(id);
+                }
+            }
+        }
+        Ok(PartialScan {
+            root_trusted,
+            root_listed,
+            missing,
         })
     }
 
@@ -398,6 +457,27 @@ fn is_media(path: &Path) -> bool {
         .is_some_and(|extension| MEDIA_EXTENSIONS.contains(&extension.as_str()))
 }
 
+fn is_plain_relative(relative: &str) -> bool {
+    let path = Path::new(relative);
+    !relative.is_empty()
+        && !path.is_absolute()
+        && !path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+}
+
+fn confirmed_missing(path: &Path) -> bool {
+    matches!(
+        std::fs::metadata(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    )
+}
+
 fn is_season_folder(name: &str) -> bool {
     let lower = name.to_lowercase();
     let Some(number) = lower.strip_prefix("season") else {
@@ -472,5 +552,133 @@ impl Issues {
 
     fn into_vec(self) -> Vec<ScanIssue> {
         self.entries
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod probe_observer {
+    use std::sync::{Arc, Mutex};
+
+    type Observer = Arc<dyn Fn() + Send + Sync>;
+
+    static OBSERVER: Mutex<Option<Observer>> = Mutex::new(None);
+
+    pub(crate) fn install(observer: Observer) {
+        *OBSERVER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(observer);
+    }
+
+    pub(crate) fn clear() {
+        *OBSERVER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+
+    pub(crate) fn notify() {
+        let observer = OBSERVER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if let Some(observer) = observer {
+            observer();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::{self, File};
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::mpsc;
+
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::LibraryQuery;
+
+    fn write_settled(path: &Path, contents: &[u8]) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, contents).unwrap();
+        File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(3600))
+            .unwrap();
+    }
+
+    #[test]
+    fn a_partial_scan_collects_its_stats_before_opening_the_write_transaction() {
+        let directory = TempDir::new().unwrap();
+        let root = directory.path();
+        write_settled(&root.join("Gone.2020.mkv"), b"gone");
+        write_settled(&root.join("Keep.2020.mkv"), b"keep");
+
+        let library = Arc::new(Library::open_in_memory().unwrap());
+        let source = library.add_source(root, None).unwrap();
+        let scanner =
+            LibraryScanner::new(&library).with_limits(10_000, 32, Duration::from_secs(15));
+        scanner.scan(&source.id, &ScanToken::new(), |_| {}).unwrap();
+
+        fs::remove_file(root.join("Gone.2020.mkv")).unwrap();
+        write_settled(&root.join("Downloading.2020.mkv"), b"partial");
+        fs::write(root.join("Downloading.2020.mkv.part"), b"downloading").unwrap();
+
+        let probed = Arc::new(AtomicUsize::new(0));
+        let held = Arc::new(AtomicBool::new(false));
+        {
+            let reader = Arc::clone(&library);
+            let probed = Arc::clone(&probed);
+            let held = Arc::clone(&held);
+            probe_observer::clear();
+            probe_observer::install(Arc::new(move || {
+                probed.fetch_add(1, Ordering::SeqCst);
+                let (done_tx, done_rx) = mpsc::channel();
+                let reader = Arc::clone(&reader);
+                std::thread::spawn(move || {
+                    let _ = done_tx.send(reader.count(&LibraryQuery::default()).is_ok());
+                });
+                if !done_rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap_or(false)
+                {
+                    held.store(true, Ordering::SeqCst);
+                }
+            }));
+        }
+
+        let summary = scanner.scan(&source.id, &ScanToken::new(), |_| {}).unwrap();
+        probe_observer::clear();
+
+        assert!(
+            !summary.complete,
+            "the download sidecar keeps the scan partial"
+        );
+        assert!(
+            probed.load(Ordering::SeqCst) > 0,
+            "the partial scan collected no stats to observe"
+        );
+        assert!(
+            !held.load(Ordering::SeqCst),
+            "a library read was blocked while the stats were being collected"
+        );
+
+        let items = library.items(&LibraryQuery::page(10)).unwrap();
+        let gone = items
+            .iter()
+            .find(|item| item.filename == "Gone.2020.mkv")
+            .unwrap();
+        assert!(
+            !gone.available,
+            "the confirmed-missing file stayed available"
+        );
+        let keep = items
+            .iter()
+            .find(|item| item.filename == "Keep.2020.mkv")
+            .unwrap();
+        assert!(keep.available);
     }
 }

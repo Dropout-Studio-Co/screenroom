@@ -8,6 +8,11 @@ mod markers;
 mod media_info;
 mod metadata;
 mod playback;
+mod provider_http;
+mod provider_metadata;
+mod provider_queue;
+mod provider_subtitles;
+mod provider_tmdb;
 mod recommend;
 mod settings;
 mod sources;
@@ -26,7 +31,9 @@ use crate::paths::{PathStyle, location_key};
 use crate::{SCHEMA_VERSION, schema};
 
 pub use artwork::{Artwork, ArtworkCandidate};
-pub use backup::{BackupInfo, BackupReport, RestoreReport};
+pub use backup::{
+    BackupCancel, BackupInfo, BackupProgress, BackupProgressFn, BackupReport, RestoreReport,
+};
 pub use bookmarks::{Bookmark, BookmarkDraft, protocol_of};
 pub use catalog::Ingest;
 pub use conversion::{
@@ -35,6 +42,28 @@ pub use conversion::{
 pub use media_info::UnprobedFile;
 pub use metadata::EnrichmentSummary;
 pub use playback::Checkpoint;
+pub use provider_http::{
+    Clock, HttpMethod, HttpRequest, HttpResponse, HttpTransport, ProviderError, Secret, Sleeper,
+    SystemClock, TcpTransport, ThreadSleeper, TransportError,
+};
+pub use provider_metadata::{
+    ARTWORK_RETENTION_SETTING, ArtworkRetention, METADATA_ORIGIN_PROVIDER, MetadataOrigin,
+    MetadataPatch, MetadataSnapshot, ReconcileDecision, ReconcileMode, reconcile,
+    replacement_allowed,
+};
+pub use provider_queue::{
+    EnrichmentDrainReport, EnrichmentQueueDepth, EnrichmentState, EnrichmentTarget, EnrichmentTask,
+    describe_enrichment_target,
+};
+pub use provider_subtitles::{
+    BENGALI_CODES, DownloadedSubtitle, OpenSubtitlesProvider, SubtitleMatch, SubtitleProvider,
+    SubtitleProviderConfig, SubtitleSearch, subtitle_language_codes, subtitle_language_name,
+};
+pub use provider_tmdb::{
+    ApiCredential, CatalogueEpisode, CatalogueMatch, CatalogueMetadataProvider, CatalogueSeason,
+    CatalogueSeasonSummary, CatalogueSeries, CatalogueWork, ImageSize, MetadataQuery,
+    ProviderCapability, ProviderConfig, ProviderImage, TMDB_PROVIDER, TmdbProvider,
+};
 pub use settings::Preferences;
 pub use subtitles::{SUBTITLE_EXTENSIONS, StoredSubtitle};
 
@@ -164,6 +193,13 @@ fn add_subtitles_table(tx: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn add_enrichment_queue(tx: &Connection) -> Result<()> {
+    for statement in schema::MIGRATE_8_TO_9 {
+        tx.execute(statement, [])?;
+    }
+    Ok(())
+}
+
 fn add_metadata_origin(tx: &Connection) -> Result<()> {
     let mut statement = tx.prepare("PRAGMA table_info(works)")?;
     let columns = statement
@@ -253,6 +289,7 @@ impl Library {
                 add_metadata_origin(&tx)?;
                 add_bookmarks_table(&tx)?;
                 add_subtitles_table(&tx)?;
+                add_enrichment_queue(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -267,6 +304,7 @@ impl Library {
                 add_metadata_origin(&tx)?;
                 add_bookmarks_table(&tx)?;
                 add_subtitles_table(&tx)?;
+                add_enrichment_queue(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -278,6 +316,7 @@ impl Library {
                 add_metadata_origin(&tx)?;
                 add_bookmarks_table(&tx)?;
                 add_subtitles_table(&tx)?;
+                add_enrichment_queue(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -286,6 +325,7 @@ impl Library {
                 add_metadata_origin(&tx)?;
                 add_bookmarks_table(&tx)?;
                 add_subtitles_table(&tx)?;
+                add_enrichment_queue(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -293,12 +333,20 @@ impl Library {
                 let tx = connection.transaction()?;
                 add_bookmarks_table(&tx)?;
                 add_subtitles_table(&tx)?;
+                add_enrichment_queue(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
             7 => {
                 let tx = connection.transaction()?;
                 add_subtitles_table(&tx)?;
+                add_enrichment_queue(&tx)?;
+                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+                tx.commit()?;
+            }
+            8 => {
+                let tx = connection.transaction()?;
+                add_enrichment_queue(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -332,13 +380,15 @@ impl Library {
             [now_ms()],
         )?;
 
-        Ok(Self {
+        let library = Self {
             connection: Mutex::new(connection),
             active_scans: Mutex::new(HashSet::new()),
             path_semantics,
             path_style: PathStyle::host(),
             path,
-        })
+        };
+        library.reset_restored_enrichment()?;
+        Ok(library)
     }
 
     fn connection(&self) -> MutexGuard<'_, Connection> {
@@ -366,6 +416,14 @@ impl Library {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(source_id);
+    }
+
+    pub(crate) fn reset_restored_enrichment(&self) -> Result<usize> {
+        let changed = self.connection().execute(
+            "UPDATE enrichment_queue SET state = 'queued' WHERE state = 'running'",
+            [],
+        )?;
+        Ok(changed)
     }
 
     pub(crate) fn canonical_root(&self, root: impl AsRef<Path>) -> Result<PathBuf> {
@@ -510,6 +568,45 @@ mod tests {
                 .iter()
                 .any(|item| item.id == guest.id)
         );
+    }
+
+    #[test]
+    fn a_restored_running_task_is_requeued_so_it_is_due_again() {
+        let library = Library::open_in_memory().unwrap();
+        library
+            .connection()
+            .execute(
+                "INSERT INTO works(id, identity_key, title, kind) VALUES('w', 'k', 'Kept', 'movie')",
+                [],
+            )
+            .unwrap();
+        library
+            .connection()
+            .execute(
+                "INSERT INTO enrichment_queue(id, work_id, target_kind, language, priority, state,
+                   attempts, next_attempt_ms, created_ms, updated_ms)
+                 VALUES('t', 'w', 'work', 'en-US', 0, 'running', 2, 0, 1, 1)",
+                [],
+            )
+            .unwrap();
+
+        assert_eq!(library.enrichment_queue_depth().unwrap().running, 1);
+        assert!(
+            library
+                .due_enrichment_tasks(i64::MAX, 10)
+                .unwrap()
+                .is_empty(),
+            "a running row is not due until it is settled"
+        );
+
+        assert_eq!(library.reset_restored_enrichment().expect("reset"), 1);
+
+        let depth = library.enrichment_queue_depth().unwrap();
+        assert_eq!(depth.running, 0);
+        assert_eq!(depth.queued, 1);
+        let due = library.due_enrichment_tasks(i64::MAX, 10).unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].attempts, 2);
     }
 
     #[test]
