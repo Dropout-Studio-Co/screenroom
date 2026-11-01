@@ -103,7 +103,7 @@ if codesign --verify --deep --strict "$app" 2>/dev/null; then
 else
   fail "codesign --verify --deep --strict rejects the bundle"
 fi
-for key in NSRemovableVolumesUsageDescription NSDocumentsFolderUsageDescription; do
+for key in NSRemovableVolumesUsageDescription NSDocumentsFolderUsageDescription NSLocalNetworkUsageDescription; do
   if plutil -extract "$key" raw "$app/Contents/Info.plist" >/dev/null 2>&1; then
     ok "$key explains the access prompt"
   else

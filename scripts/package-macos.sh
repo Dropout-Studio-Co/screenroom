@@ -93,6 +93,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>Screenroom</string>
   <key>NSRemovableVolumesUsageDescription</key><string>Screenroom reads the films and shows on drives you add to its library. It never changes them.</string>
   <key>NSDocumentsFolderUsageDescription</key><string>Screenroom reads media folders and writes backups only where you choose.</string>
+  <key>NSLocalNetworkUsageDescription</key><string>Screenroom looks for cast receivers on your network only when you press the button, and then serves the one file you chose from a temporary endpoint that closes itself.</string>
 </dict>
 </plist>
 PLIST

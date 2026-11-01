@@ -1,3 +1,4 @@
+pub mod accessibility;
 pub mod app;
 pub mod artwork;
 pub mod backup_job;

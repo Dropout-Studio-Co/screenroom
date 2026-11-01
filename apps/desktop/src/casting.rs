@@ -22,7 +22,8 @@ pub const RENDERING_CONTROL_SERVICE: &str = "urn:schemas-upnp-org:service:Render
 pub const CAPABILITY_TEXT: &str = "A casting session can describe a receiver, serve one chosen \
 file from a temporary endpoint that closes itself, and send AVTransport controls. That path has \
 only been run against an in-process fake receiver: no real device has ever played anything \
-through it, so casting stays unverified until you cast a film and watch it play.";
+through it, and no receiver has answered a search on this network either, so casting stays \
+unverified until a device answers and you watch a film play on it.";
 
 const MULTICAST_ADDRESS: &str = "239.255.255.250:1900";
 
@@ -821,9 +822,25 @@ pub fn discover(timeout: Duration, limit: usize) -> Result<Vec<Receiver>, String
         .map_err(|error| format!("Cannot set the discovery timeout: {error}"))?;
     socket
         .send_to(search_request().as_bytes(), MULTICAST_ADDRESS)
-        .map_err(|error| format!("Cannot send the discovery request: {error}"))?;
+        .map_err(|error| search_not_sent(&error))?;
 
-    let deadline = Instant::now() + timeout.min(MAX_PROBE);
+    Ok(collect_replies(
+        &socket,
+        Instant::now() + timeout.min(MAX_PROBE),
+        limit,
+    ))
+}
+
+fn search_not_sent(error: &std::io::Error) -> String {
+    format!(
+        "Nothing was looked for: this machine refused to send the receiver search ({error}). No \
+         device was asked, so this is not an empty result. If the local network is working, grant \
+         this app local network access in the system privacy settings (on macOS: Privacy and \
+         Security, Local Network), then search again."
+    )
+}
+
+fn collect_replies(socket: &UdpSocket, deadline: Instant, limit: usize) -> Vec<Receiver> {
     let limit = limit.clamp(1, MAX_RECEIVERS);
     let mut found: Vec<Receiver> = Vec::new();
     let mut buffer = [0_u8; 4_096];
@@ -838,7 +855,7 @@ pub fn discover(timeout: Duration, limit: usize) -> Result<Vec<Receiver>, String
             found.push(receiver);
         }
     }
-    Ok(found)
+    found
 }
 
 pub fn describe(address: &str, timeout: Duration) -> Result<DeviceDescription, CastError> {
@@ -1300,6 +1317,10 @@ mod tests {
 
     const DESCRIPTION: &str = "<?xml version=\"1.0\"?>\n<root xmlns=\"urn:schemas-upnp-org:device-1-0\">\n<device>\n<deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType>\n<friendlyName>Living Room &amp; Kitchen</friendlyName>\n<serviceList>\n<service>\n<serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>\n<serviceId>urn:upnp-org:serviceId:AVTransport</serviceId>\n<SCPDURL>/scpd/avt.xml</SCPDURL>\n<controlURL>/control/avt</controlURL>\n<eventSubURL>/event/avt</eventSubURL>\n</service>\n<service>\n<serviceType>urn:schemas-upnp-org:service:RenderingControl:1</serviceType>\n<serviceId>urn:upnp-org:serviceId:RenderingControl</serviceId>\n<SCPDURL>scpd/rcs.xml</SCPDURL>\n<controlURL>../control/rcs</controlURL>\n<eventSubURL>/event/rcs</eventSubURL>\n</service>\n</serviceList>\n</device>\n</root>\n";
 
+    const SECOND_RESPONSE: &str = "HTTP/1.1 200 OK\r\nST: urn:schemas-upnp-org:device:MediaRenderer:1\r\nUSN: uuid:2222::urn:schemas-upnp-org:device:MediaRenderer:1\r\nLOCATION: http://127.0.0.1:9198/dmr\r\n\r\n";
+
+    const THIRD_RESPONSE: &str = "HTTP/1.1 200 OK\r\nST: urn:schemas-upnp-org:device:MediaRenderer:1\r\nUSN: uuid:3333::urn:schemas-upnp-org:device:MediaRenderer:1\r\nLOCATION: http://127.0.0.1:9199/dmr\r\n\r\n";
+
     fn from() -> SocketAddr {
         "192.168.1.20:1900".parse().expect("addr")
     }
@@ -1412,6 +1433,84 @@ mod tests {
             assert!(text.contains("not the same as casting") || text.contains("discovery only"));
             assert!(text.contains("no stream has been sent") || text.contains("nothing was sent"));
         }
+    }
+
+    #[test]
+    fn replies_are_reported_once_per_receiver() {
+        let probe = UdpSocket::bind("127.0.0.1:0").expect("bind");
+        probe
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .expect("timeout");
+        let target = probe.local_addr().expect("address");
+        let sender = UdpSocket::bind("127.0.0.1:0").expect("bind");
+        for _ in 0..2 {
+            sender
+                .send_to(RESPONSE.as_bytes(), target)
+                .expect("the same receiver answers twice");
+        }
+        sender
+            .send_to(SECOND_RESPONSE.as_bytes(), target)
+            .expect("a second receiver answers");
+
+        let found = collect_replies(
+            &probe,
+            Instant::now() + Duration::from_millis(150),
+            MAX_RECEIVERS,
+        );
+        assert_eq!(found.len(), 2, "one entry per receiver, got {found:?}");
+        assert!(found[0].id.starts_with("uuid:1111"));
+        assert!(found[1].id.starts_with("uuid:2222"));
+    }
+
+    #[test]
+    fn collection_stops_at_the_limit_and_leaves_the_rest_for_the_next_call() {
+        let probe = UdpSocket::bind("127.0.0.1:0").expect("bind");
+        probe
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .expect("timeout");
+        let target = probe.local_addr().expect("address");
+        let sender = UdpSocket::bind("127.0.0.1:0").expect("bind");
+        for response in [RESPONSE, SECOND_RESPONSE, THIRD_RESPONSE] {
+            sender
+                .send_to(response.as_bytes(), target)
+                .expect("three receivers answer");
+        }
+
+        let first = collect_replies(&probe, Instant::now() + Duration::from_millis(150), 1);
+        assert_eq!(first.len(), 1, "a limit of one must report one receiver");
+        let rest = collect_replies(
+            &probe,
+            Instant::now() + Duration::from_millis(60),
+            MAX_RECEIVERS,
+        );
+        assert_eq!(
+            rest.len(),
+            2,
+            "the receivers beyond the limit were still waiting, got {rest:?}"
+        );
+        assert!(rest.iter().all(|receiver| receiver.id != first[0].id));
+    }
+
+    #[test]
+    fn a_search_that_could_not_be_sent_says_so_instead_of_reporting_an_empty_network() {
+        let denied = std::io::Error::from(std::io::ErrorKind::HostUnreachable);
+        let text = search_not_sent(&denied);
+        assert!(
+            text.contains("Nothing was looked for"),
+            "the text must say that no search happened, got {text}"
+        );
+        assert!(
+            text.contains("not an empty result"),
+            "the text must not read as a network with no receivers, got {text}"
+        );
+        assert!(
+            text.contains("Local Network"),
+            "the text must name an achievable recovery, got {text}"
+        );
+        assert!(
+            text.contains(&denied.to_string()),
+            "the text must carry the real reason, got {text}"
+        );
     }
 
     #[test]
@@ -1748,6 +1847,10 @@ mod tests {
         assert!(!capability.verified_on_a_receiver);
         assert!(CAPABILITY_TEXT.contains("fake receiver"));
         assert!(CAPABILITY_TEXT.contains("no real device"));
+        assert!(
+            CAPABILITY_TEXT.contains("no receiver has answered a search"),
+            "the text must carry what the network survey found, got {CAPABILITY_TEXT}"
+        );
         assert!(!CAPABILITY_TEXT.contains("works with"));
     }
 

@@ -22,6 +22,7 @@ ROOT_FILES = ("Cargo.toml",)
 SKIP_PREFIXES = (
     "docs/",
     "reference/",
+    "vendor/",
     ".trail/cache/",
     "target/",
     "node_modules/",

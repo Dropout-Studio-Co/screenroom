@@ -74,6 +74,7 @@ pub fn run() -> iced::Result {
         eprintln!("play check refused: {error}");
         return Ok(());
     }
+    crate::accessibility::install();
     let window = iced::window::Settings {
         visible: !hides_its_window(),
         ..Default::default()
@@ -1049,7 +1050,27 @@ impl App {
         };
         app.sync_language_inputs();
         app.reload();
+        app.open_checked_screen();
         app
+    }
+
+    fn open_checked_screen(&mut self) {
+        if std::env::var_os(crate::accessibility::CHECK_ENV).is_none() {
+            return;
+        }
+        let Some(requested) = std::env::var(crate::accessibility::CHECK_SCREEN_ENV).ok() else {
+            return;
+        };
+        match requested.as_str() {
+            "browse" => self.screen = Screen::Browse,
+            "settings" => self.screen = Screen::Settings,
+            "detail" => {
+                if let Some(file_id) = self.browse.items.first().map(|item| item.id.clone()) {
+                    self.open_detail(&file_id);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn sync_language_inputs(&mut self) {
@@ -1801,24 +1822,31 @@ impl App {
     }
 
     fn cast_action(&mut self, action: CastAction) {
+        if action == CastAction::Disconnect {
+            let Some(session) = self.cast_session.take() else {
+                return;
+            };
+            self.cast_note = Some(match session.disconnect() {
+                Ok(_) => "The receiver was told to stop, and the endpoint is closed.".to_string(),
+                Err(error) => {
+                    format!("The session closed, but the receiver did not confirm: {error}")
+                }
+            });
+            return;
+        }
         let Some(session) = self.cast_session.as_mut() else {
             return;
         };
         let outcome = match action {
             CastAction::Pause => session.pause().map(|state| format!("Receiver: {state:?}")),
             CastAction::Stop => session.stop().map(|state| format!("Receiver: {state:?}")),
-            CastAction::Disconnect => match session.refresh() {
-                Ok(_) => Ok("The cast session ended.".to_string()),
-                Err(error) => Err(error),
-            },
+            CastAction::Disconnect => unreachable!(),
         };
         match outcome {
             Ok(note) => self.cast_note = Some(note),
             Err(error) => self.cast_note = Some(format!("{error}")),
         }
-        if action == CastAction::Disconnect {
-            self.cast_session = None;
-        } else if let Some(session) = self.cast_session.as_ref() {
+        if let Some(session) = self.cast_session.as_ref() {
             self.cast_note = Some(session.summary());
         }
     }
@@ -1925,11 +1953,9 @@ impl App {
             return "Looking for cast receivers on this network…".to_string();
         }
         if !self.cast_searched {
-            return "Nothing has been looked for. Discovery runs only when you press the button, 
-                 and this build cannot cast to anything it finds."
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
+            return "Nothing has been looked for yet. Discovery runs only when you press the \
+                    button below."
+                .to_string();
         }
         crate::casting::summary(self.receivers.len())
     }
@@ -1961,7 +1987,8 @@ impl App {
                 self.status = Some(self.casting_note());
             }
             Ok(Err(error)) => {
-                self.cast_searched = true;
+                self.cast_searched = false;
+                self.receivers.clear();
                 self.error = Some(error);
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -3934,10 +3961,15 @@ impl App {
                 }
             }
             Message::Tick => {
+                let mut tasks = Task::none();
+                for action in crate::accessibility::drain() {
+                    tasks = Task::batch([tasks, self.apply_accessibility(action)]);
+                }
                 self.poll();
                 if self.drive_play_check() {
                     return iced::exit();
                 }
+                return tasks;
             }
             Message::Keyboard(event) => return self.handle_key(event),
             Message::RequestTerminate => {
@@ -3950,6 +3982,7 @@ impl App {
                     .map(|player| player.snapshot().position);
                 self.stop_playback();
                 self.record_terminate_check(reached);
+                crate::accessibility::shutdown();
                 return iced::exit();
             }
         }
@@ -4029,6 +4062,108 @@ impl App {
             }
             Screen::Browse | Screen::Settings => self.screen = Screen::Home,
             Screen::Home => {}
+        }
+    }
+
+    fn apply_accessibility(&mut self, action: crate::accessibility::Action) -> Task<Message> {
+        use crate::accessibility::Action;
+        match action {
+            Action::GoHome => self.update(Message::GoHome),
+            Action::GoLibrary => self.update(Message::GoBrowse),
+            Action::GoSettings => self.update(Message::GoSettings),
+            Action::Refresh => self.update(Message::Refresh),
+            Action::Close => self.update(Message::Close),
+            Action::ChooseFolder => self.update(Message::ChooseFolder),
+            Action::AddFolder => self.update(Message::AddFolder),
+            Action::PreviousPage => self.update(Message::PreviousPage),
+            Action::NextPage => self.update(Message::NextPage),
+            Action::ToggleWatchlistOnly => {
+                let wanted = !self.browse.watchlist_only;
+                self.update(Message::ToggleWatchlistOnly(wanted))
+            }
+            Action::ToggleFavoritesOnly => {
+                let wanted = !self.browse.favorites_only;
+                self.update(Message::ToggleFavoritesOnly(wanted))
+            }
+            Action::ToggleAvailableOnly => {
+                let wanted = !self.browse.available_only;
+                self.update(Message::ToggleAvailableOnly(wanted))
+            }
+            Action::Open(index) => {
+                self.focus = index;
+                self.clamp_focus();
+                self.update(Message::Activate)
+            }
+            Action::PlayDetail | Action::RestartDetail => {
+                let Some(file_id) = self.detail.as_ref().map(|detail| detail.item.id.clone())
+                else {
+                    return Task::none();
+                };
+                self.open_player(&file_id, action == Action::RestartDetail);
+                Task::none()
+            }
+            Action::ToggleFavourite => {
+                self.toggle_focused_flag(Flag::Favorite);
+                Task::none()
+            }
+            Action::ToggleWatchlist => {
+                self.toggle_focused_flag(Flag::Watchlist);
+                Task::none()
+            }
+            Action::ToggleWatched => {
+                self.toggle_focused_watched();
+                Task::none()
+            }
+            Action::HideFromContinue => {
+                let Some(edition_id) = self
+                    .detail
+                    .as_ref()
+                    .map(|detail| detail.item.edition_id.clone())
+                else {
+                    return Task::none();
+                };
+                self.update(Message::HideFromContinue(edition_id))
+            }
+            Action::Settings(index) => {
+                self.settings_focus = index;
+                self.run_settings_action()
+            }
+            Action::TogglePlay => self.update(Message::TogglePlay),
+            Action::SeekBack => self.update(Message::SeekStep(-SEEK_STEP)),
+            Action::SeekForward => self.update(Message::SeekStep(SEEK_STEP)),
+            Action::ToggleMute => self.update(Message::ToggleMute),
+            Action::VolumeDown | Action::VolumeUp => {
+                let step = if action == Action::VolumeUp {
+                    5.0
+                } else {
+                    -5.0
+                };
+                let wanted = (self.volume_percent() + step).clamp(0.0, 100.0);
+                let _ = self.update(Message::Volume(wanted));
+                self.update(Message::VolumeCommit)
+            }
+            Action::ToggleFullscreen => self.update(Message::ToggleFullscreen),
+            Action::MiniPlayer => self.update(Message::ReduceToMini),
+            Action::BackFromPlayer => self.update(Message::BackFromPlayer),
+            Action::PlayNext => self.update(Message::PlayNextNow),
+            Action::CancelNext => self.update(Message::CancelNext),
+            Action::SkipSegment => self.update(Message::SkipSegment),
+            Action::SelectAudio(index) => {
+                let (choices, _selected) = self.track_chooser(TrackKind::Audio);
+                match choices.get(index) {
+                    Some(choice) => self.update(Message::SelectTrack(TrackKind::Audio, choice.id)),
+                    None => Task::none(),
+                }
+            }
+            Action::SelectSubtitle(index) => {
+                let (choices, _selected) = self.track_chooser(TrackKind::Subtitle);
+                match choices.get(index) {
+                    Some(choice) => {
+                        self.update(Message::SelectTrack(TrackKind::Subtitle, choice.id))
+                    }
+                    None => Task::none(),
+                }
+            }
         }
     }
 
@@ -4264,7 +4399,116 @@ impl App {
         design::theme()
     }
 
+    fn accessible_screen(&self) -> crate::accessibility::ScreenFacts<'_> {
+        use crate::accessibility::{Filters, Flags, Page, Player, ScreenFacts, Surface};
+        let surface = match self.screen {
+            Screen::Home => Surface::Home,
+            Screen::Browse => Surface::Browse,
+            Screen::Detail => Surface::Detail,
+            Screen::Player => Surface::Player,
+            Screen::Settings => Surface::Settings,
+        };
+        let mut facts = ScreenFacts::new(surface, self.screen_label());
+        facts.status = self.status.clone();
+        facts.error = self.error.clone();
+        match self.screen {
+            Screen::Home => {
+                facts.items = self
+                    .home
+                    .iter()
+                    .chain(self.suggestions.iter().map(|suggestion| &suggestion.item))
+                    .collect();
+                facts.focus = Some(self.focus);
+            }
+            Screen::Browse => {
+                facts.items = self.browse.items.iter().collect();
+                facts.focus = Some(self.focus);
+                facts.page = Some(Page {
+                    index: self.browse.page,
+                    count: self.browse.page_count(),
+                });
+                facts.filters = Some(Filters {
+                    watchlist: self.browse.watchlist_only,
+                    favourites: self.browse.favorites_only,
+                    available: self.browse.available_only,
+                });
+            }
+            Screen::Detail => {
+                if let Some(detail) = &self.detail {
+                    facts.items = if detail.episodes.is_empty() {
+                        vec![&detail.item]
+                    } else {
+                        detail.episodes.iter().collect()
+                    };
+                    facts.flags = Some(Flags {
+                        favourite: detail.item.favorite,
+                        watchlist: detail.item.watchlisted,
+                        watched: detail.item.watched,
+                    });
+                }
+                facts.focus = Some(self.focus);
+            }
+            Screen::Settings => {
+                facts.settings = self
+                    .settings_actions()
+                    .into_iter()
+                    .map(|(label, _message)| label)
+                    .collect();
+                facts.settings_focus = self.settings_focus;
+            }
+            Screen::Player => {
+                let state = match (&self.snapshot.failure, self.snapshot.state) {
+                    (Some(failure), _) => format!("{}: {}", failure.code, failure.message),
+                    (None, state) => format!("{state:?}"),
+                };
+                let skip = self.active_marker().map(|marker| {
+                    if marker.kind == "intro" {
+                        "Skip intro".to_string()
+                    } else {
+                        "Skip credits".to_string()
+                    }
+                });
+                let (audio, audio_selected) = self.track_chooser(TrackKind::Audio);
+                let (subtitles, subtitle_selected) = self.track_chooser(TrackKind::Subtitle);
+                let audio_selected = audio_selected.map(|choice| choice.id);
+                let subtitle_selected = subtitle_selected.map(|choice| choice.id);
+                facts.player = Some(Player {
+                    title: self
+                        .active
+                        .as_ref()
+                        .map(|active| active.title.clone())
+                        .unwrap_or_else(|| "Player".to_string()),
+                    state,
+                    play: play_action(self.snapshot.state).label().to_string(),
+                    position: self.scrub.unwrap_or(self.snapshot.position),
+                    duration: self.snapshot.duration.max(0.0),
+                    muted: self.snapshot.muted.unwrap_or(false),
+                    volume: round_percent(self.volume_percent(), 0, 100).min(100) as u8,
+                    fullscreen: self.fullscreen,
+                    up_next: self.up_next.as_ref().map(|up| up.title.clone()),
+                    skip,
+                    audio: audio
+                        .into_iter()
+                        .map(|choice| {
+                            let selected = Some(choice.id) == audio_selected;
+                            (choice.label, selected)
+                        })
+                        .collect(),
+                    subtitles: subtitles
+                        .into_iter()
+                        .map(|choice| {
+                            let selected = Some(choice.id) == subtitle_selected;
+                            (choice.label, selected)
+                        })
+                        .collect(),
+                });
+            }
+        }
+        facts
+    }
+
     fn view(&self) -> Element<'_, Message> {
+        crate::accessibility::publish(self.accessible_screen());
         let body = match self.screen {
             Screen::Home => self.home_view(),
             Screen::Browse => self.browse_view(),
