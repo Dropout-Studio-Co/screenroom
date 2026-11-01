@@ -115,3 +115,54 @@ Consequences for the next attempt:
 - The measured trade-off if real time is preferred over resolution: cost tracks
   output pixels, so a smaller delivered size buys frames directly. It was not
   adopted because it lowers picture quality silently.
+
+## Correction (2026-11-01): the 39 ms was frame pacing, not colour conversion
+
+The section above is **superseded**. It timed `mpv_render_context_render` during
+paced 24 fps playback, and that call blocks until the next frame is due, so the
+"40 ms per frame" was mostly *waiting* rather than pixel work: the same traces
+contain individual renders of 2.8 ms. Re-measured with `untimed=yes` (mpv decodes
+and renders as fast as it can, so nothing waits), same Apple M4, same libmpv
+0.41.0, generated 3840×2160 24 fps fixtures, `render_bench` with
+`SCREENROOM_PLAYER_TRACE=1`:
+
+| Target delivered | Render p50 | Render mean | Source | Delivered when paced |
+|---|---:|---:|---|---:|
+| 1920×1080 (the old cap) | 3.17 ms | 20.52 ms | 4K H.264 8-bit | 24.0 fps |
+| 3840×2160 (native) | 11.79 ms | 22.19 ms | 4K H.264 8-bit | 24.2 fps |
+| 1280×720 | 3.34 ms | 20.71 ms | 4K H.264 8-bit | 24.0 fps |
+| 1920×1080 (the old cap) | 2.74 ms | 18.25 ms | 4K HEVC Main10 | 23.8 fps |
+| 3840×2160 (native) | 5.97 ms | 19.78 ms | 4K HEVC Main10 | 23.7 fps |
+
+`mistimed-frame-count` was 0 in every paced run. `--sws-scaler`,
+`--zimg-scaler`, `--zimg-dither` and `--sws-allow-zimg` changed the paced figure
+by less than 1 ms (39.0–39.9 ms), which is what identified a wait rather than a
+filter: a real scaler cost would have moved. Real conversion and scaling is
+**3 ms at 1080p out and 6–12 ms at native 4K**, against a 41.7 ms budget at 24 fps
+The mean is still inflated by periodic stalls (p95 ≈ 45 ms) that appear at every
+output size and with `hwdec=no`, so they belong to decode/demux scheduling, not to
+the render bridge; under paced playback they cost the occasional frame.
+
+Consequences, implemented in this change:
+
+- `render::MAX_DIMENSION` is **3840**, so a 4K source is delivered at its own
+  size (3240×2160 stays 3240×2160). That costs about 8 ms more per frame and loses
+  no frames, where the old 1920 cap silently discarded 4K detail for nothing.
+- Frame rows are **256-byte aligned** (`row_stride`), so `queue.write_texture`
+  receives the frame directly: the upload is legal at any width (3240 needs 13056
+  bytes per row, which 64-byte alignment did not guarantee) and `pack` is a single
+  memcpy instead of a per-row copy.
+- Browse previews ask for at most 960 px, so a 4K card preview does not allocate
+  4K frame buffers. `SCREENROOM_RENDER_MAX` overrides the delivered size for A/B
+  measurement.
+
+Still not proven: **on-screen** 4K presentation (no window was opened), HDR tone
+mapping, and the owner's 3240×2160 Main10 sample, because `/Volumes/bleh` was not
+mounted and the run used generated fixtures instead.
+
+The colour conversion itself cannot be removed here. `render.h` (0.41) says the
+software backend takes formats "internally marked as RGB, has exactly 1 plane", and
+this libmpv exports only `MPV_RENDER_API_TYPE_SW` and `..._OPENGL`. A GPU path
+means an OpenGL render context plus an IOSurface handed to Metal, and wgpu exposes
+no Metal device at the point iced draws, so true zero copy stays blocked; HDR also
+stays untone-mapped on the software path, as `render.h` warns.

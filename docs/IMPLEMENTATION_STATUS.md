@@ -384,7 +384,7 @@ Everything below ran on this macOS host against libmpv 0.41 / client API 2.5.
 | Area | What exists | Verification |
 | --- | --- | --- |
 | Player worker (`screenroom-player/src/worker.rs`) | One thread owns libmpv; commands in, immutable `PlayerSnapshot` out; lifecycle mapped onto `PlayerState` | `tests/worker.rs` — 10 tests |
-| Software render bridge (`src/render.rs`) | mpv `sw` renderer → packed RGBA `Frame`, 64-byte aligned stride, bounded to 1920 px | real frames asserted non-blank with colour; `target_size`/stride unit tests; frame-rate assertion |
+| Software render bridge (`src/render.rs`) | mpv `sw` renderer → packed RGBA `Frame`, 256-byte aligned stride for a direct texture upload, native size up to 3840 px | real frames asserted non-blank with colour; `target_size`/`row_stride` unit tests; frame-rate assertion |
 | Seek / pause / resume-at-load | `seek`, `set_paused`, `load_at(path, Some(seconds))` | position moves after seek, holds while paused, resumes after load |
 | Audio and A/V sync | `audio-pts`, mpv's own `avsync` and `total-avsync-change` in `PlayerSnapshot` | source volume measured, the audio clock advances in real time (0.982× wall), libmpv `avsync` 0.0 ms with a 12 ms cumulative adjustment |
 | Tracks | track list with language/title/selected read from libmpv; `set_audio_track`, `set_subtitle_track` | two audio and two subtitle tracks enumerated and switched; selection read back rather than assumed |
@@ -457,9 +457,11 @@ assumed by the presentation shader.
 - **Audio/video sync** has no measured tolerance (gate G3b).
 - **Offline behaviour** was proven by holding zero network sockets during playback,
   not by disabling this machine's networking.
-- **4K / hardware decode**: measured on 2026-10-29 (`HWDEC_EVIDENCE.md`); macOS now
-  decodes with copy-back (`auto-copy`), but the bridge is still capped at 1920 px
-  and one 4K file is not real-time, so 4K smoothness is not claimed.
+- **4K / hardware decode**: measured on 2026-10-29 and corrected on 2026-11-01
+  (`HWDEC_EVIDENCE.md`). macOS decodes with copy-back (`auto-copy`); the bridge now
+  delivers **native 4K** and paced offscreen delivery is 23.7–23.8 fps of 24. What
+  is still unproven is **on-screen** 4K presentation and HDR, so smoothness in the
+  window is not claimed.
 - **Windows**: nothing here ran on Windows, including the D3D11 path (unbuilt) and
   the case-insensitive path folding. `WINDOWS_VALIDATION.md` is the handoff that
   turns each of these into a runnable check.
@@ -481,9 +483,11 @@ cargo test --release -p screenroom-player --test worker -- --nocapture
 | RSS after playback ended | 108 MB |
 
 The release figure is the one that ships. The software bridge is still a full-frame
-CPU copy per frame by design (bounded to 1920 px; decode is copy-back on macOS since 2026-10-29), so this cost is
-expected and is the reason the zero-copy OpenGL/D3D11 paths remain the plan for 4K
-and HDR rather than an optimisation of this path.
+CPU copy per frame by design (decode is copy-back on macOS since 2026-10-29).
+Measured on 2026-11-01, that copy is **not** what limits 4K: native 3840×2160
+delivery costs 5.97 ms p50 for HEVC Main10 against a 41.7 ms frame budget. What is
+left is mpv's own CPU colour conversion, which only a GPU render API can remove,
+and HDR tone mapping, which this path does not do.
 
 Two libmpv contract bugs were found and fixed while proving the above, and are
 worth remembering: `MPV_RENDER_PARAM_SW_POINTER` takes the pixel buffer address
@@ -577,10 +581,11 @@ they are:
   add cost this measurement cannot see. These are a ceiling on what the display can
   reach, not a substitute for measuring the window. The on-screen budget at 10,000
   items is recorded as **PENDING** in `docs/TEST_PLAN.md`.
-- **The 4K row is not 4K presentation.** `render::MAX_DIMENSION` is 1920 and the
-  software bridge downscales larger sources, so the 4K fixture was decoded at 4K but
-  **rendered at 1920×1080** — the run reports `frame size: 1920x1080`. Native 4K
-  presentation is unmeasured and stays behind gate G2.
+- **The 4K row above predates native delivery.** It was recorded while
+  `render::MAX_DIMENSION` was 1920, so that run decoded 4K but rendered
+  1920×1080. `MAX_DIMENSION` is now 3840 and the same command reports
+  `frame size: 3840x2160`; the 2026-11-01 table further down carries those numbers.
+  **On-screen** 4K presentation is still unmeasured and stays behind gate G2.
 - **Time to first frame has a wide spread** (95 ms to 278 ms across runs on the same
   input). It is the least stable number here and should not be quoted to three
   significant figures.
@@ -889,7 +894,7 @@ media in a temporary folder. `cargo test -p screenroom-desktop --lib acceptance`
 | 4 Space and ←/→ | **PASS** for the mechanism; the listening half is the owner's |
 | 5 audio and subtitle pickers | **PARTIAL** — selection read back from the player; audible change is the owner's |
 | 6 fullscreen | **PARTIAL** — mode, platform exit, Escape order, header return; the fill is the owner's |
-| 7 anamorphic | **PARTIAL** — a 2:1 fixture arrives as 1920×960, not 1.78:1 |
+| 7 anamorphic | **PARTIAL** — a 2:1 fixture arrives at its 2160×1080 display shape, not 1.78:1 |
 | 8 4K HEVC on battery | **HUMAN REQUIRED / open defect** — still 19.4 of 24 fps |
 | 9 up next | **PASS** — offer, cancel, replay, Play now |
 | 10 ⌘Q and reopen | **PASS** — stored and resumed within 1 s |
@@ -1470,3 +1475,29 @@ fake control.**
 - **Not proven:** no receiver was discovered on a real network, because that
   needs a live LAN and would be a network action this session did not take; no
   media has been cast, and no compatibility check exists to claim.
+
+### Native 4K delivery and the frame-pacing correction (2026-11-01)
+
+The 19.4-of-24-fps figure and the "40 ms of CPU YUV→RGB" explanation behind it were
+both measurement artefacts: `mpv_render_context_render` blocks until the next frame
+is due, so a paced run times the wait, not the work. Re-measured with
+`untimed=yes` on the same M4 (libmpv 0.41.0, generated 3840×2160 24 fps fixtures,
+`render_bench` with `SCREENROOM_PLAYER_TRACE=1`):
+
+| Configuration | Render p50 | Paced delivery | Worst gap |
+| --- | ---: | ---: | ---: |
+| 4K H.264, 1920 cap (before) | 3.17 ms | 24.0 fps | 51.7 ms |
+| 4K H.264, native 3840 (after) | 11.79 ms | 24.2 fps | 49.6 ms |
+| 4K HEVC Main10, 1920 cap (before) | 2.74 ms | 23.8 fps | 51.3 ms |
+| 4K HEVC Main10, native 3840 (after) | 5.97 ms | 23.7 fps | 48.8 ms |
+
+`mistimed-frame-count` was 0 in every run, and scaler/dither options changed
+nothing, which is what identified the wait. So `render::MAX_DIMENSION` is now 3840,
+rows are 256-byte aligned for a direct `queue.write_texture`, `pack` is a single
+memcpy, and browse previews cap at 960 px so a 4K card preview does not hold 4K
+buffers. `SCREENROOM_RENDER_MAX` overrides the delivered size for A/B measurement.
+Full detail and caveats: `HWDEC_EVIDENCE.md`.
+
+Not proven: **on-screen** 4K presentation (the window was not opened), HDR tone
+mapping (the software render API is single-plane RGB and does not map HDR), and the
+owner's 3240×2160 Main10 sample, because `/Volumes/bleh` was not mounted.

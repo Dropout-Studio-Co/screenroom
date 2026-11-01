@@ -7,8 +7,9 @@ use crate::{Frame, LibMpv, PlayerError};
 
 pub const UPDATE_FRAME: u64 = 1;
 
-pub const MAX_DIMENSION: u32 = 1920;
+pub const MAX_DIMENSION: u32 = 3840;
 const FRAME_BUFFER_POOL_SIZE: usize = 3;
+const STRIDE_ALIGNMENT: usize = 256;
 
 const PARAM_API_TYPE: c_int = 1;
 const PARAM_SW_SIZE: c_int = 17;
@@ -35,8 +36,9 @@ pub fn target_size(video_width: u32, video_height: u32, max_dimension: u32) -> (
     (scale_axis(video_width), scale_axis(video_height))
 }
 
-fn align64(value: usize) -> usize {
-    value.div_ceil(64) * 64
+fn row_stride(width: u32) -> usize {
+    let bytes = width.max(1) as usize * 4;
+    bytes.div_ceil(STRIDE_ALIGNMENT) * STRIDE_ALIGNMENT
 }
 
 pub struct SoftwareRenderer {
@@ -157,7 +159,7 @@ impl SoftwareRenderer {
         }
         self.width = width;
         self.height = height;
-        self.stride = align64(width as usize * 4);
+        self.stride = row_stride(width);
         let needed = self.stride * height as usize + 64;
         if self.buffer.len() != needed {
             self.buffer = vec![0u8; needed];
@@ -247,12 +249,11 @@ impl SoftwareRenderer {
     }
 
     fn pack(&mut self, _pointer: *mut u8) -> Frame {
-        let width = self.width as usize;
         let height = self.height as usize;
-        let row_bytes = width * 4;
-        let start = self.offset;
         let stride = self.stride;
-        let source = &self.buffer[start..start + stride * height];
+        let needed = stride * height;
+        let start = self.offset;
+        let source = &self.buffer[start..start + needed];
         let output_index = reusable_buffer_index(&self.packed_buffers);
         let mut overflow = output_index.is_none().then(|| Arc::new(Vec::new()));
         {
@@ -262,13 +263,8 @@ impl SoftwareRenderer {
                 None => Arc::get_mut(overflow.as_mut().expect("overflow buffer exists"))
                     .expect("the overflow frame buffer is uniquely owned"),
             };
-            rgba.resize(row_bytes * height, 0);
-            for (row, out_row) in source
-                .chunks_exact(stride)
-                .zip(rgba.chunks_exact_mut(row_bytes))
-            {
-                out_row.copy_from_slice(&row[..row_bytes]);
-            }
+            rgba.resize(needed, 0);
+            rgba.as_mut_slice().copy_from_slice(source);
         }
         let rgba = output_index
             .map(|index| Arc::clone(&self.packed_buffers[index]))
@@ -277,6 +273,7 @@ impl SoftwareRenderer {
         Frame {
             width: self.width,
             height: self.height,
+            stride: stride as u32,
             rgba,
             generation: self.generation,
         }
@@ -309,13 +306,20 @@ mod tests {
     }
 
     #[test]
-    fn large_sources_are_downscaled_without_distortion() {
-        assert_eq!(target_size(3840, 2160, MAX_DIMENSION), (1920, 1080));
-        assert_eq!(target_size(2160, 3840, MAX_DIMENSION), (1080, 1920));
-        let (width, height) = target_size(4096, 1716, MAX_DIMENSION);
-        assert_eq!(width, 1920);
+    fn four_k_sources_keep_their_own_resolution() {
+        assert_eq!(target_size(3840, 2160, MAX_DIMENSION), (3840, 2160));
+        assert_eq!(target_size(3240, 2160, MAX_DIMENSION), (3240, 2160));
+        assert_eq!(target_size(4096, 2160, MAX_DIMENSION), (3840, 2025));
+    }
+
+    #[test]
+    fn sources_beyond_four_k_are_downscaled_without_distortion() {
+        assert_eq!(target_size(7680, 4320, MAX_DIMENSION), (3840, 2160));
+        assert_eq!(target_size(4320, 7680, MAX_DIMENSION), (2160, 3840));
+        let (width, height) = target_size(8192, 3432, MAX_DIMENSION);
+        assert_eq!(width, 3840);
         assert!(height <= MAX_DIMENSION);
-        let source_aspect = 4096.0 / 1716.0;
+        let source_aspect = 8192.0 / 3432.0;
         let target_aspect = width as f64 / height as f64;
         assert!((source_aspect - target_aspect).abs() < 0.01);
     }
@@ -328,12 +332,15 @@ mod tests {
     }
 
     #[test]
-    fn stride_is_aligned_to_64_bytes() {
-        for width in [1u32, 17, 1280, 1919] {
-            let stride = align64(width as usize * 4);
-            assert_eq!(stride % 64, 0);
+    fn row_stride_is_ready_for_a_direct_texture_upload() {
+        for width in [1u32, 17, 1280, 1919, 1920, 3240, 3840] {
+            let stride = row_stride(width);
+            assert_eq!(stride % 256, 0, "wgpu copies need 256-byte rows");
             assert!(stride >= width as usize * 4);
+            assert!(stride - width as usize * 4 < 256);
         }
+        assert_eq!(row_stride(3840), 15360);
+        assert_eq!(row_stride(3240), 13056);
     }
 
     #[test]

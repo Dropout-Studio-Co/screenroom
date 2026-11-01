@@ -127,7 +127,7 @@ fn dump_frame(
         .stderr(Stdio::piped())
         .spawn()?;
 
-    let mut rgba = frame.rgba.as_ref().clone();
+    let mut rgba = frame.tight_pixels();
     for alpha in rgba.iter_mut().skip(3).step_by(4) {
         *alpha = 255;
     }

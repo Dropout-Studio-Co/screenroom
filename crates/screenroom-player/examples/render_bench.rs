@@ -15,10 +15,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(12.0);
     let (width, height) = parse_size(&size)?;
 
+    let supplied = arguments.next().map(PathBuf::from);
     let directory = TempDir::new()?;
-    let path = fixture(&directory, width, height, seconds)?;
+    let path = match supplied {
+        Some(path) if path.is_file() => path,
+        Some(path) => return Err(format!("no such media file: {}", path.display()).into()),
+        None => fixture(&directory, width, height, seconds)?,
+    };
     println!(
-        "fixture:  {size}, {seconds}s, {}",
+        "source:   {} ({size} request, {seconds}s, {})",
+        path.display(),
         human_bytes(file_size(&path)?)
     );
 

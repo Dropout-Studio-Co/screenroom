@@ -1541,7 +1541,7 @@ impl App {
             .and_then(|path| path.parent().map(Path::to_path_buf));
         match crate::picker::choose_subtitle(start.as_deref()) {
             crate::picker::Picked::Path(path) => {
-                self.subtitle_chosen(&path.to_string_lossy().to_string());
+                self.subtitle_chosen(path.to_string_lossy().as_ref());
             }
             crate::picker::Picked::Cancelled => {}
             crate::picker::Picked::Unavailable(reason) => self.status = Some(reason.to_string()),

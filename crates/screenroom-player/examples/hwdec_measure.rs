@@ -96,8 +96,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let frame = final_snapshot.frame.as_ref().ok_or("frame disappeared")?;
     let luma = mean_luma(frame);
     write_png(frame, &png)?;
-    let frame_non_blank = frame
-        .rgba
+    let tight = frame.tight_pixels();
+    let frame_non_blank = tight
         .as_chunks::<4>()
         .0
         .iter()
@@ -147,8 +147,11 @@ fn wait_for_frame(
 }
 
 fn mean_luma(frame: &screenroom_player::Frame) -> f64 {
-    let pixels = frame.rgba.as_chunks::<4>().0.iter();
+    let pixels = frame.tight_pixels();
     let sum = pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|pixel| {
             0.2126 * f64::from(pixel[0])
                 + 0.7152 * f64::from(pixel[1])
@@ -186,7 +189,7 @@ fn write_png(
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let mut rgba = frame.rgba.as_ref().clone();
+    let mut rgba = frame.tight_pixels();
     for alpha in rgba.iter_mut().skip(3).step_by(4) {
         *alpha = 255;
     }

@@ -134,7 +134,7 @@ impl Primitive for VideoPrimitive {
                 &frame.rgba,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(frame.width * 4),
+                    bytes_per_row: Some(frame.stride),
                     rows_per_image: Some(frame.height),
                 },
                 wgpu::Extent3d {
@@ -441,6 +441,7 @@ mod tests {
         let frame = Frame {
             width: 2,
             height: 2,
+            stride: 8,
             rgba: std::sync::Arc::new(vec![7; 16]),
             generation: 3,
         };

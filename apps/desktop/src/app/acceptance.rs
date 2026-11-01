@@ -713,7 +713,7 @@ fn step_7_an_anamorphic_film_is_presented_at_its_display_shape() {
 
     assert_eq!(
         (frame.width, frame.height),
-        (1920, 960),
+        (2160, 1080),
         "an anamorphic frame must be sized for display, not for storage"
     );
     let aspect = frame.width as f32 / frame.height as f32;

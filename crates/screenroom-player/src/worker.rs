@@ -321,6 +321,14 @@ impl Player {
     }
 
     pub fn start_with_hwdec(hwdec: HwdecMode) -> Result<Self, PlayerError> {
+        Self::start_with_limit(hwdec, MAX_DIMENSION)
+    }
+
+    pub fn start_with_max_dimension(max_dimension: u32) -> Result<Self, PlayerError> {
+        Self::start_with_limit(HwdecMode::from_environment()?, max_dimension)
+    }
+
+    fn start_with_limit(hwdec: HwdecMode, max_dimension: u32) -> Result<Self, PlayerError> {
         let shared = Arc::new(Mutex::new(PlayerSnapshot::default()));
         let (commands, queue) = mpsc::channel();
         let (ready_sender, ready) = mpsc::channel();
@@ -330,7 +338,16 @@ impl Player {
 
         let handle = thread::Builder::new()
             .name("screenroom-player".to_string())
-            .spawn(move || run(thread_shared, queue, ready_sender, thread_wake, hwdec))
+            .spawn(move || {
+                run(
+                    thread_shared,
+                    queue,
+                    ready_sender,
+                    thread_wake,
+                    hwdec,
+                    max_dimension,
+                )
+            })
             .map_err(|error| {
                 PlayerError::Unavailable(format!("could not start player: {error}"))
             })?;
@@ -447,8 +464,9 @@ fn run(
     ready: Sender<Result<(), PlayerError>>,
     wake: Arc<WakeSignal>,
     hwdec: HwdecMode,
+    max_dimension: u32,
 ) {
-    let mut runner = match Runner::new(hwdec, Arc::clone(&wake)) {
+    let mut runner = match Runner::new(hwdec, Arc::clone(&wake), max_dimension) {
         Ok(runner) => {
             let _ = ready.send(Ok(()));
             runner
@@ -471,6 +489,7 @@ fn run(
 
 struct Runner {
     renderer: SoftwareRenderer,
+    max_dimension: u32,
     core: Mpv,
     library: Arc<LibMpv>,
     state: PlayerState,
@@ -508,7 +527,11 @@ struct Runner {
 }
 
 impl Runner {
-    fn new(hwdec: HwdecMode, wake: Arc<WakeSignal>) -> Result<Self, PlayerError> {
+    fn new(
+        hwdec: HwdecMode,
+        wake: Arc<WakeSignal>,
+        max_dimension: u32,
+    ) -> Result<Self, PlayerError> {
         let library = LibMpv::load()?;
 
         let mut options = vec![
@@ -550,6 +573,7 @@ impl Runner {
 
         Ok(Self {
             renderer,
+            max_dimension,
             core,
             library,
             state: PlayerState::Idle,
@@ -1059,7 +1083,11 @@ impl Runner {
         } else {
             display_height
         };
-        let (width, height) = target_size(width, height, MAX_DIMENSION);
+        let limit = std::env::var("SCREENROOM_RENDER_MAX")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(self.max_dimension);
+        let (width, height) = target_size(width, height, limit);
         self.renderer.set_target(width, height);
     }
 

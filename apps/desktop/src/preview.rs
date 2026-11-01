@@ -5,6 +5,8 @@ use screenroom_player::{Player, PlayerSnapshot};
 
 pub const PREVIEW_DELAY: Duration = Duration::from_millis(600);
 
+pub const PREVIEW_MAX_DIMENSION: u32 = 960;
+
 pub const PREVIEW_MAX: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,7 +71,8 @@ pub struct Preview {
 
 impl Preview {
     pub fn start(file_id: &str, path: &Path, duration_ms: i64) -> Result<Self, String> {
-        let player = Player::start().map_err(|error| error.to_string())?;
+        let player = Player::start_with_max_dimension(PREVIEW_MAX_DIMENSION)
+            .map_err(|error| error.to_string())?;
         player.set_volume(0.0);
         player.load_at(
             path,
@@ -146,5 +149,14 @@ mod tests {
     fn the_delay_is_long_enough_to_not_fire_while_the_pointer_crosses_a_row() {
         assert!(PREVIEW_DELAY >= Duration::from_millis(400));
         assert!(PREVIEW_MAX > PREVIEW_DELAY);
+    }
+
+    #[test]
+    fn a_card_preview_never_asks_for_four_k_frames() {
+        assert!(PREVIEW_MAX_DIMENSION >= 480);
+        assert!(
+            PREVIEW_MAX_DIMENSION <= 1920,
+            "a card preview must not pay for frames larger than a card"
+        );
     }
 }
