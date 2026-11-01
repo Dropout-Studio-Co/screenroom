@@ -1749,3 +1749,129 @@ blocker and what would close it. It is the place to start the next session.
 `preferred_bridge()` was also corrected: it answered `OpenGl` on every non-Windows
 host while the player renders through libmpv's software API. It is now
 `render_bridge()` and answers `Software`, which is what the code does.
+
+### Two fullscreen and quit defects closed (2026-11-01, P2-02 and P2-04)
+
+**P2-02 — an Escape during the fullscreen animation no longer dismisses the film.**
+`toggle_fullscreen` used to invent the new state, ask the window for it, and let
+`ModeChanged` correct it later. Two presses of Escape during the animation therefore
+looked like "leave fullscreen" followed by "leave the player", and a second `f` could
+reverse a change the window had not applied yet. The application now records the mode
+it asked for with the instant it asked (`mode_change`), ignores a second request while
+one is in flight, clears the record when the window reports that mode, expires it after
+1.5 s so a lost report cannot wedge the key, and treats Escape during a transition as
+"leave fullscreen" rather than "leave the film". Three tests hold it down:
+`fullscreen_is_a_window_mode_the_player_can_leave_with_escape`,
+`a_second_fullscreen_request_while_one_is_in_flight_is_ignored` and
+`a_late_fullscreen_report_does_not_dismiss_a_film_that_was_being_left`.
+
+**P2-04 — Dock Quit, AppleScript quit and logout run the same close path as ⌘Q.**
+Re-pointing the menu bar's Quit item at `performClose:` only covered the menu item.
+The Dock's Quit and `osascript -e 'quit app "Screenroom"'` send `-terminate:` to
+`NSApplication` directly, which bypassed `Message::Close` and left the viewing to be
+tidied up on the next launch. `quit::install_terminate_routing()` replaces the
+implementation of `-[NSApplication terminate:]` once at start-up with one that closes
+the key window, the main window, or — for a hidden window, which has neither — the
+first closable window in `[NSApp windows]`. When no closable window exists it calls the
+original implementation, so the application can never become unquittable. The close
+request then arrives through the path that already stores the place reached and ends
+the session.
+
+`scripts/check-terminate-routing.sh` proves it without touching the desktop: it runs
+the real binary with `SCREENROOM_WINDOW=hidden` and `SCREENROOM_TERMINATE_CHECK`, the
+application asks AppKit to terminate itself, the swap turns that into a window close,
+`Message::Close` writes `closed routed <seconds>` and exits. The script fails if the
+process does not exit on its own or the receipt is missing.
+
+## Second session: the GPU path, the online halves, and what review found
+
+The first session ended with a canonical backlog and a probe that proved a path but
+was not in the application. This session put it in the application, and then spent
+most of its time on what that exposed.
+
+### The 4K render path, measured in the application
+
+`MPV_RENDER_API_TYPE_OPENGL` renders into a pool of `IOSurface`s; the desktop wraps
+each one as a `wgpu::Texture` with `texture_from_raw` and `create_texture_from_hal`
+and samples it in the existing fit shader, so no pixel crosses the CPU. The
+application's own `SCREENROOM_PLAY_CHECK`, release build, 4K HEVC Main10 at 24 fps:
+
+| | delivered fps | mean CPU | peak CPU | uploads |
+| --- | ---: | ---: | ---: | ---: |
+| OpenGL → IOSurface → wgpu | 24.39 | 13.95 % | 53.10 % | 0 |
+| software renderer | 24.24 | 89.82 % | 190.50 % | 139 |
+
+Four defects had to be found first, and every one of them looked like something
+else:
+
+1. **The picture was upside down.** `FLIP_Y` is 1 for an OpenGL *default*
+   framebuffer and 0 for a texture-backed FBO that is read top-down. A symmetric
+   test pattern cannot show this. The Bengali subtitle check did: the cue lit 173
+   pixels in the top band where the software path lights them at the bottom.
+2. **`ADVANCED_CONTROL` hard-deadlocked the mpv core.** libmpv's own header says a
+   render thread that also calls other libmpv functions must not rely on it, and
+   this worker calls `render` beside `mpv_command` and `mpv_get_property`. libmpv
+   said so itself: `mpv_render_context_render() not being called or stuck`, with
+   playback at 4 fps and the audio clock at 0.4× real time.
+3. **A three-slot pool starved.** Once published frames were held by the snapshot
+   and the widget, no slot was free, so `render` returned nothing *after* mpv had
+   already been told the frame was consumed. The pool now grows on demand and
+   reaps only when every slot is free, so the high-water mark survives playback
+   instead of allocating an `IOSurface` per frame.
+4. **`hwdec=auto-copy` is only needed by the software path.** The OpenGL path takes
+   zero-copy decode, which is what moved CPU from 28 % to 14 % and fps from 22.5
+   to 24.4.
+
+`Frame` now carries an optional surface, `pixel` and `tight_pixels` normalise BGRA
+to RGBA so both renderers hand out the same channel order, and
+`SCREENROOM_RENDER=software` keeps the old path reachable, which is also the
+fallback when the GL context cannot be created at start.
+
+### What independent review changed
+
+Five separate reviews ran against the real diffs. They found, and this session
+fixed:
+
+- **Backups lost data.** `TABLES` omitted `subtitles` and `source_bookmarks`, so
+  every backup silently dropped imported subtitles and saved sources, and a restore
+  could not commit at all once a subtitle existed for a file absent from the
+  backup. Both tables are in `TABLES` now, with a test that populates all 21 tables.
+- **A restore left work wedged.** Enrichment, job and conversion rows restored as
+  `running` were never resumed until the next launch; the reset now happens inside
+  the restore transaction.
+- **A backup could fail a concurrent writer** on `SQLITE_BUSY` where it used to wait.
+  The writer's grace is now bounded, raised for the copy and restored exactly, and
+  the copy retries.
+- **The HTTP reader could be crashed or stalled** by a hostile chunk size (an
+  `usize` overflow that panics in debug and attempts a huge allocation in release)
+  and by a server dribbling bytes, because only each `read` was timed. There is now
+  an overall deadline, a trailer cap, and a test with a real socket for each.
+- **A `failed` enrichment task could never be re-armed**, so "retry" was
+  unimplementable. `failed` is no longer active, and re-enqueueing resets the
+  attempt budget.
+- **A cast endpoint could be starved** by any LAN peer, because a connection was
+  charged against the slot limit before its token was checked; and a
+  device-supplied `controlURL` could point at any internal host. Both are fixed.
+- **Our own backup cancel reported `database_error`.** An interrupt is
+  `SQLITE_INTERRUPT`; that is now mapped to `backup_cancelled` only when the cancel
+  flag is set, so a real disk error that coincides with a cancel still reports
+  itself.
+
+### Reachable in the application
+
+Settings gained *Online metadata* (the provider's own capability, an *Enrich the
+library* action, and an artwork-retention switch that defaults to **do not store**),
+*Subtitle search* (query, results with language/release/format, and *Download and
+use*), and *Casting* now lists receivers with *Cast the playing film* plus
+pause/stop/disconnect. Every one of those is also in the keyboard action strip, and
+an acceptance test asserts that the panels describe themselves honestly and that no
+pass starts without a provider.
+
+### What is still not true
+
+HDR is still tone-mapped to SDR. There is no OS-wide Picture-in-Picture. No live
+provider call has been made, because no key is configured and the std-only transport
+cannot carry https. No media has been played on a real cast receiver. No VoiceOver
+pass is possible on iced 0.14, which ships no accessibility tree at all — recorded
+as ADR-017 with the exact evidence. And the owner's own 4K sample and five-minute
+battery observation still need the external SSD and the owner.

@@ -60,6 +60,13 @@ pub fn surface_key(frame: &Frame) -> Option<usize> {
 
 const MAX_IMPORTED_SURFACES: usize = 12;
 
+pub fn frame_tag(frame: &Frame) -> usize {
+    if let Some(key) = surface_key(frame) {
+        return key;
+    }
+    std::sync::Arc::as_ptr(&frame.rgba) as usize
+}
+
 pub fn holds_a_gpu_surface(frame: &Frame) -> bool {
     surface_key(frame).is_some()
 }
@@ -103,7 +110,7 @@ impl Primitive for VideoPrimitive {
         );
         if pipeline.uploaded_generation == Some(frame.generation)
             && pipeline.texture_size == (frame.width, frame.height)
-            && pipeline.uploaded_surface == surface_key(frame)
+            && pipeline.uploaded_surface == Some(frame_tag(frame))
         {
             return;
         }
@@ -196,7 +203,7 @@ impl Primitive for VideoPrimitive {
         }
 
         pipeline.uploaded_generation = Some(frame.generation);
-        pipeline.uploaded_surface = None;
+        pipeline.uploaded_surface = Some(frame_tag(frame));
     }
 
     fn draw(&self, pipeline: &Self::Pipeline, render_pass: &mut wgpu::RenderPass<'_>) -> bool {
@@ -288,7 +295,24 @@ mod macos {
     use metal::foreign_types::ForeignType;
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
-    use screenroom_player::SurfaceFrame;
+    use screenroom_player::{PixelFormat, SurfaceFrame};
+
+    fn texture_formats(format: PixelFormat) -> (metal::MTLPixelFormat, wgpu::TextureFormat) {
+        match format {
+            PixelFormat::Bgra8 => (
+                metal::MTLPixelFormat::BGRA8Unorm_sRGB,
+                wgpu::TextureFormat::Bgra8UnormSrgb,
+            ),
+            PixelFormat::Rgba8 => (
+                metal::MTLPixelFormat::RGBA8Unorm_sRGB,
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+            ),
+            PixelFormat::Rgba16Float => (
+                metal::MTLPixelFormat::RGBA16Float,
+                wgpu::TextureFormat::Rgba16Float,
+            ),
+        }
+    }
 
     pub fn texture_from_surface(
         device: &wgpu::Device,
@@ -311,10 +335,12 @@ mod macos {
             return None;
         }
 
+        let (metal_format, wgpu_format) = texture_formats(surface.format());
+
         let descriptor = metal::TextureDescriptor::new();
         descriptor.set_width(width as u64);
         descriptor.set_height(height as u64);
-        descriptor.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm_sRGB);
+        descriptor.set_pixel_format(metal_format);
         descriptor.set_texture_type(metal::MTLTextureType::D2);
         descriptor.set_usage(metal::MTLTextureUsage::ShaderRead);
         descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
@@ -338,7 +364,7 @@ mod macos {
         let hal_texture = unsafe {
             wgpu::hal::metal::Device::texture_from_raw(
                 texture,
-                wgpu::TextureFormat::Bgra8UnormSrgb,
+                wgpu_format,
                 metal::MTLTextureType::D2,
                 1,
                 1,
@@ -360,7 +386,7 @@ mod macos {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            format: wgpu_format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         };

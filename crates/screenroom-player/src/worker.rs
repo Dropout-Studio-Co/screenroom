@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use crate::frame::OutputDescription;
 use crate::render::{MAX_DIMENSION, SoftwareRenderer, UPDATE_FRAME, target_size};
 use crate::{Frame, LibMpv, Mpv, PlayerError, PlayerState, WakeSignal, event};
 
@@ -35,11 +36,26 @@ const ID_TRACK_LIST: u64 = 11;
 const ID_HWDEC_CURRENT: u64 = 12;
 const ID_DWIDTH: u64 = 13;
 const ID_DHEIGHT: u64 = 14;
+const ID_VIDEO_GAMMA: u64 = 15;
+const ID_VIDEO_MAX_CLL: u64 = 16;
+const ID_VIDEO_MAX_LUMA: u64 = 17;
+
+fn gamma_is_extended_range(gamma: Option<&str>) -> bool {
+    matches!(gamma, Some("pq"))
+}
 
 fn is_load_time_property(id: u64) -> bool {
     matches!(
         id,
-        ID_TIME_POS | ID_DURATION | ID_DWIDTH | ID_DHEIGHT | ID_HWDEC_CURRENT | ID_TRACK_LIST
+        ID_TIME_POS
+            | ID_DURATION
+            | ID_DWIDTH
+            | ID_DHEIGHT
+            | ID_HWDEC_CURRENT
+            | ID_TRACK_LIST
+            | ID_VIDEO_GAMMA
+            | ID_VIDEO_MAX_CLL
+            | ID_VIDEO_MAX_LUMA
     )
 }
 
@@ -121,6 +137,8 @@ pub struct PlayerSnapshot {
     pub muted: Option<bool>,
 
     pub hardware_decoder: Option<String>,
+
+    pub output: OutputDescription,
 }
 
 impl Default for PlayerSnapshot {
@@ -146,6 +164,7 @@ impl Default for PlayerSnapshot {
             volume: None,
             muted: None,
             hardware_decoder: None,
+            output: OutputDescription::default(),
         }
     }
 }
@@ -321,6 +340,37 @@ impl HwdecMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HdrMode {
+    #[default]
+    Sdr,
+
+    Extended,
+}
+
+impl HdrMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Sdr => "sdr",
+            Self::Extended => "extended",
+        }
+    }
+
+    fn from_environment() -> Result<Self, PlayerError> {
+        match std::env::var("SCREENROOM_HDR").as_deref() {
+            Ok("sdr") => Ok(Self::Sdr),
+            Ok("extended") => Ok(Self::Extended),
+            Ok(value) => Err(PlayerError::Argument(format!(
+                "unsupported SCREENROOM_HDR value {value:?}; use sdr or extended"
+            ))),
+            Err(std::env::VarError::NotPresent) => Ok(Self::default()),
+            Err(error) => Err(PlayerError::Argument(format!(
+                "could not read SCREENROOM_HDR: {error}"
+            ))),
+        }
+    }
+}
+
 pub struct Player {
     shared: Arc<Mutex<PlayerSnapshot>>,
     commands: Sender<PlayerCommand>,
@@ -343,14 +393,26 @@ impl Player {
     }
 
     pub fn start_with_hwdec(hwdec: HwdecMode) -> Result<Self, PlayerError> {
-        Self::start_with_limit(hwdec, MAX_DIMENSION)
+        Self::start_with_limit(hwdec, HdrMode::from_environment()?, MAX_DIMENSION)
+    }
+
+    pub fn start_with_hdr(hwdec: HwdecMode, hdr: HdrMode) -> Result<Self, PlayerError> {
+        Self::start_with_limit(hwdec, hdr, MAX_DIMENSION)
     }
 
     pub fn start_with_max_dimension(max_dimension: u32) -> Result<Self, PlayerError> {
-        Self::start_with_limit(HwdecMode::from_environment()?, max_dimension)
+        Self::start_with_limit(
+            HwdecMode::from_environment()?,
+            HdrMode::from_environment()?,
+            max_dimension,
+        )
     }
 
-    fn start_with_limit(hwdec: HwdecMode, max_dimension: u32) -> Result<Self, PlayerError> {
+    fn start_with_limit(
+        hwdec: HwdecMode,
+        hdr: HdrMode,
+        max_dimension: u32,
+    ) -> Result<Self, PlayerError> {
         let shared = Arc::new(Mutex::new(PlayerSnapshot::default()));
         let (commands, queue) = mpsc::channel();
         let (ready_sender, ready) = mpsc::channel();
@@ -369,7 +431,7 @@ impl Player {
                     ready_sender,
                     thread_wake,
                     thread_ticks,
-                    hwdec,
+                    OutputPolicy { hwdec, hdr },
                     max_dimension,
                 )
             })
@@ -488,16 +550,23 @@ impl Drop for Player {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OutputPolicy {
+    hwdec: HwdecMode,
+
+    hdr: HdrMode,
+}
+
 fn run(
     shared: Arc<Mutex<PlayerSnapshot>>,
     commands: Receiver<PlayerCommand>,
     ready: Sender<Result<(), PlayerError>>,
     wake: Arc<WakeSignal>,
     ticks: crate::FrameTicks,
-    hwdec: HwdecMode,
+    policy: OutputPolicy,
     max_dimension: u32,
 ) {
-    let mut runner = match Runner::new(hwdec, Arc::clone(&wake), ticks, max_dimension) {
+    let mut runner = match Runner::new(policy, Arc::clone(&wake), ticks, max_dimension) {
         Ok(runner) => {
             let _ = ready.send(Ok(()));
             runner
@@ -585,6 +654,53 @@ impl FrameRenderer {
             Self::Gpu(renderer) => renderer.render(),
         }
     }
+
+    fn output(&self) -> OutputDescription {
+        match self {
+            Self::Software(_) => OutputDescription::default(),
+            #[cfg(target_os = "macos")]
+            Self::Gpu(renderer) => renderer.output().clone(),
+        }
+    }
+
+    fn supports_extended_range(&self) -> bool {
+        match self {
+            Self::Software(_) => false,
+            #[cfg(target_os = "macos")]
+            Self::Gpu(_) => true,
+        }
+    }
+
+    fn enable_extended_range(
+        &mut self,
+        core: &Mpv,
+        peak_nits: Option<u32>,
+    ) -> Result<OutputDescription, PlayerError> {
+        match self {
+            Self::Software(_) => Err(PlayerError::Unavailable(
+                "the software renderer cannot carry an extended range picture".to_string(),
+            )),
+            #[cfg(target_os = "macos")]
+            Self::Gpu(renderer) => {
+                let output = crate::gl_render::enable_extended_range(core, peak_nits)?;
+                renderer.set_output(output.clone());
+                Ok(output)
+            }
+        }
+    }
+
+    fn disable_extended_range(&mut self, core: &Mpv) -> Result<OutputDescription, PlayerError> {
+        match self {
+            Self::Software(_) => Ok(OutputDescription::default()),
+            #[cfg(target_os = "macos")]
+            Self::Gpu(renderer) => {
+                crate::gl_render::reset_extended_range(core)?;
+                let output = OutputDescription::default();
+                renderer.set_output(output.clone());
+                Ok(output)
+            }
+        }
+    }
 }
 
 struct Runner {
@@ -633,11 +749,14 @@ struct Runner {
     suppressed: [bool; 3],
     metadata_retries: u8,
     ticks: crate::FrameTicks,
+    hdr: HdrMode,
+    source_extended: Option<bool>,
+    source_peak_nits: Option<u32>,
 }
 
 impl Runner {
     fn new(
-        hwdec: HwdecMode,
+        policy: OutputPolicy,
         wake: Arc<WakeSignal>,
         ticks: crate::FrameTicks,
         max_dimension: u32,
@@ -653,7 +772,7 @@ impl Runner {
             ("osc", "no"),
             ("input-default-bindings", "no"),
             ("input-vo-keyboard", "no"),
-            ("hwdec", hwdec.as_option()),
+            ("hwdec", policy.hwdec.as_option()),
             ("audio-client-name", "Screenroom"),
             ("video-sync", "audio"),
         ];
@@ -664,7 +783,7 @@ impl Runner {
         let mut core = Mpv::new_with_options(&library, &options)?;
         core.set_wakeup_signal(Arc::clone(&wake));
         let renderer = FrameRenderer::create(&core, Arc::clone(&wake))?;
-        core.set_property("hwdec", renderer.decode_policy(hwdec))?;
+        core.set_property("hwdec", renderer.decode_policy(policy.hwdec))?;
 
         core.observe("time-pos", FORMAT_DOUBLE, ID_TIME_POS)?;
         core.observe("duration", FORMAT_DOUBLE, ID_DURATION)?;
@@ -683,6 +802,9 @@ impl Runner {
         core.observe("hwdec-current", FORMAT_STRING, ID_HWDEC_CURRENT)?;
         core.observe("dwidth", FORMAT_INT64, ID_DWIDTH)?;
         core.observe("dheight", FORMAT_INT64, ID_DHEIGHT)?;
+        core.observe("video-params/gamma", FORMAT_STRING, ID_VIDEO_GAMMA)?;
+        core.observe("video-params/max-cll", FORMAT_DOUBLE, ID_VIDEO_MAX_CLL)?;
+        core.observe("video-params/max-luma", FORMAT_DOUBLE, ID_VIDEO_MAX_LUMA)?;
 
         Ok(Self {
             renderer,
@@ -721,6 +843,9 @@ impl Runner {
             suppressed: [false; 3],
             metadata_retries: 0,
             ticks,
+            hdr: policy.hdr,
+            source_extended: None,
+            source_peak_nits: None,
         })
     }
 
@@ -852,6 +977,8 @@ impl Runner {
         self.avsync = None;
         self.total_avsync_change = None;
         self.mistimed_frames = None;
+        self.source_extended = None;
+        self.source_peak_nits = None;
         let load_id_for_snapshot = self.load_id;
         publish(shared, |snapshot| {
             snapshot.load_id = load_id_for_snapshot;
@@ -1223,6 +1350,25 @@ impl Runner {
                         .into_owned()
                 });
             }
+            ID_VIDEO_GAMMA => {
+                let value = unsafe { *(property.data.cast::<*const std::ffi::c_char>()) };
+                let gamma = (!value.is_null()).then(|| {
+                    unsafe { std::ffi::CStr::from_ptr(value) }
+                        .to_string_lossy()
+                        .into_owned()
+                });
+                self.source_extended = Some(gamma_is_extended_range(gamma.as_deref()));
+                self.settle_output(shared);
+            }
+            ID_VIDEO_MAX_CLL | ID_VIDEO_MAX_LUMA => {
+                let value = unsafe { *(property.data as *const f64) };
+                if value.is_finite() && value >= 1.0 {
+                    let nits = value.round().clamp(1.0, 10_000.0) as u32;
+                    self.source_peak_nits =
+                        Some(self.source_peak_nits.map_or(nits, |known| known.max(nits)));
+                    self.settle_output(shared);
+                }
+            }
             _ => {}
         }
         self.publish_snapshot(shared);
@@ -1428,6 +1574,54 @@ impl Runner {
         });
     }
 
+    fn settle_output(&mut self, shared: &Arc<Mutex<PlayerSnapshot>>) {
+        if self.hdr != HdrMode::Extended {
+            return;
+        }
+        let Some(extended) = self.source_extended else {
+            return;
+        };
+        trace!(
+            "output settle: hdr mode {}, source extended {extended}, current {}",
+            self.hdr.as_str(),
+            self.renderer.output().label()
+        );
+        let current = self.renderer.output();
+        if extended == current.format.is_extended_range() {
+            if extended
+                && self.source_peak_nits.is_some()
+                && self.source_peak_nits != current.target_peak_nits
+            {
+                match self
+                    .renderer
+                    .enable_extended_range(&self.core, self.source_peak_nits)
+                {
+                    Ok(output) => trace!("output peak is now {}", output.label()),
+                    Err(error) => trace!("the peak update was refused: {error}"),
+                }
+            }
+            return;
+        }
+        if extended && !self.renderer.supports_extended_range() {
+            trace!("the source is HDR but this renderer cannot carry extended range");
+            return;
+        }
+        let outcome = if extended {
+            self.renderer
+                .enable_extended_range(&self.core, self.source_peak_nits)
+        } else {
+            self.renderer.disable_extended_range(&self.core)
+        };
+        match outcome {
+            Ok(output) => {
+                trace!("output is now {}", output.label());
+                self.update_target();
+                self.publish_snapshot(shared);
+            }
+            Err(error) => trace!("the extended range request was refused: {error}"),
+        }
+    }
+
     fn publish_snapshot(&self, shared: &Arc<Mutex<PlayerSnapshot>>) {
         let (position, duration, state, loaded) =
             (self.position, self.duration, self.state, self.loaded);
@@ -1437,6 +1631,7 @@ impl Runner {
         let (subtitle_scale, subtitle_position) = (self.subtitle_scale, self.subtitle_position);
         let (volume, muted) = (self.volume, self.muted);
         let hardware_decoder = self.hardware_decoder.clone();
+        let output = self.renderer.output();
         let (load_id, position_ready, seek_serial) =
             (self.load_id, self.position_ready, self.seek_serial);
         publish(shared, |snapshot| {
@@ -1457,6 +1652,7 @@ impl Runner {
             snapshot.volume = volume;
             snapshot.muted = muted;
             snapshot.hardware_decoder = hardware_decoder;
+            snapshot.output = output;
         });
     }
 }
@@ -1521,6 +1717,25 @@ fn publish(shared: &Arc<Mutex<PlayerSnapshot>>, update: impl FnOnce(&mut PlayerS
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_pq_source_asks_for_extended_range() {
+        assert!(gamma_is_extended_range(Some("pq")));
+        assert!(!gamma_is_extended_range(Some("bt.1886")));
+        assert!(!gamma_is_extended_range(Some("hlg")));
+        assert!(!gamma_is_extended_range(Some("")));
+        assert!(!gamma_is_extended_range(None));
+    }
+
+    #[test]
+    fn hdr_is_opt_in_so_the_shipped_app_keeps_eight_bit_output() {
+        assert_eq!(HdrMode::default(), HdrMode::Sdr);
+        assert_eq!(HdrMode::Sdr.as_str(), "sdr");
+        assert_eq!(HdrMode::Extended.as_str(), "extended");
+        let snapshot = PlayerSnapshot::default();
+        assert_eq!(snapshot.output, OutputDescription::default());
+        assert!(!snapshot.output.is_extended_range());
+    }
 
     #[test]
     fn snapshot_converts_seconds_to_milliseconds() {

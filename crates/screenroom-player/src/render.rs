@@ -253,16 +253,14 @@ impl SoftwareRenderer {
                 self.width, self.height, self.stride, offset, drawn
             );
         }
-        Ok(Some(Frame {
-            width: self.width,
-            height: self.height,
-            stride: stride as u32,
+        Ok(Some(Frame::cpu(
+            self.width,
+            self.height,
+            stride as u32,
             rgba,
             offset,
-            generation: self.generation,
-            #[cfg(target_os = "macos")]
-            surface: None,
-        }))
+            self.generation,
+        )))
     }
 
     #[allow(dead_code)]

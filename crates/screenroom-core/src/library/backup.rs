@@ -424,7 +424,12 @@ fn copy_once(
             }
             Ok(())
         }
-        Ok(Err(error)) => Err(CoreError::Sqlite(error)),
+        Ok(Err(error)) => {
+            if cancel.is_cancelled() && interrupted(&error) {
+                return Err(cancelled());
+            }
+            Err(CoreError::Sqlite(error))
+        }
         Err(_) => Err(CoreError::library(
             "backup_failed",
             "The backup stopped unexpectedly. Nothing was written.",
@@ -492,6 +497,14 @@ fn written_bytes(path: &Path) -> u64 {
     std::fs::metadata(path)
         .map(|metadata| metadata.len())
         .unwrap_or_default()
+}
+
+fn interrupted(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(failure, _)
+            if failure.code == rusqlite::ffi::ErrorCode::OperationInterrupted
+    )
 }
 
 fn cancelled() -> CoreError {

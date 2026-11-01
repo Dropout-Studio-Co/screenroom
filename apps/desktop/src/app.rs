@@ -12,9 +12,12 @@ use iced::widget::{
 };
 use iced::{Alignment, ContentFit, Element, Length, Subscription, Task, keyboard};
 use screenroom_core::{
-    ConversionJob, ConversionProfile, ConversionStatus, CoreError, Library, LibraryItem,
-    LibraryQuery, LibraryScanner, MediaKind, OutputFacts, Preferences, Profile, Recommendation,
-    ScanToken, SegmentMarker, Sort, Source, SourceState, verify_output,
+    ArtworkRetention, CatalogueMetadataProvider, ConversionJob, ConversionProfile,
+    ConversionStatus, CoreError, EnrichmentDrainReport, Library, LibraryItem, LibraryQuery,
+    LibraryScanner, MediaKind, OpenSubtitlesProvider, OutputFacts, Preferences, Profile,
+    ProviderCapability, ProviderConfig, Recommendation, ScanToken, SegmentMarker, Sort, Source,
+    SourceState, StoredSubtitle, SubtitleProvider, SubtitleProviderConfig, SubtitleSearch,
+    TmdbProvider, verify_output,
 };
 use screenroom_player::{
     MediaTrack, NO_TRACK, Player, PlayerCapability, PlayerSnapshot, TrackKind,
@@ -325,6 +328,9 @@ struct Active {
     tracker: PlaybackTracker,
     file_id: String,
     title: String,
+    year: Option<i64>,
+    season: Option<i64>,
+    episode: Option<i64>,
     resume_from_ms: i64,
 
     origin: Screen,
@@ -499,6 +505,18 @@ pub struct App {
     scan_refresh_ms: i64,
     status: Option<String>,
     error: Option<String>,
+
+    metadata_capability: ProviderCapability,
+    subtitle_capability: ProviderCapability,
+    artwork_retention: ArtworkRetention,
+    enrichment: Option<Receiver<Result<EnrichmentDrainReport, String>>>,
+    subtitle_query: String,
+    subtitle_results: Vec<screenroom_core::SubtitleMatch>,
+    subtitle_search: Option<Receiver<Result<Vec<screenroom_core::SubtitleMatch>, String>>>,
+    subtitle_download: Option<Receiver<Result<StoredSubtitle, String>>>,
+    cast_session: Option<crate::cast_session::CastSession>,
+    cast_connect: Option<Receiver<Result<crate::cast_session::CastSession, String>>>,
+    cast_note: Option<String>,
 
     quit_routing_budget: u8,
     quit_routing: crate::quit::QuitRouting,
@@ -739,6 +757,24 @@ pub enum Message {
 
     CancelBackup,
 
+    EnrichmentNow,
+
+    ToggleArtworkRetention,
+
+    SubtitleQueryChanged(String),
+
+    SubtitleSearchNow,
+
+    SubtitleDownload(i64),
+
+    CastTo(String),
+
+    CastPause,
+
+    CastStop,
+
+    CastDisconnect,
+
     Close,
 }
 
@@ -801,6 +837,20 @@ fn ticks(
         });
         receiver.map(|()| Message::Tick)
     })
+}
+
+fn epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or_default()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CastAction {
+    Pause,
+    Stop,
+    Disconnect,
 }
 
 fn contained_media_path(root: &Path, relative: &str) -> Option<PathBuf> {
@@ -885,6 +935,13 @@ impl App {
         let library = Arc::new(library);
 
         let preferences = library.preferences().unwrap_or_default();
+        let metadata_capability =
+            TmdbProvider::new(ProviderConfig::from_environment()).capability();
+        let subtitle_capability =
+            OpenSubtitlesProvider::new(SubtitleProviderConfig::from_environment()).capability();
+        let artwork_retention = library
+            .artwork_retention()
+            .unwrap_or(ArtworkRetention::DoNotStore);
         let conversion_folder = preferences
             .conversion_folder
             .clone()
@@ -969,6 +1026,18 @@ impl App {
             scan_refresh_ms: 0,
             status: None,
             error,
+
+            metadata_capability,
+            subtitle_capability,
+            artwork_retention,
+            enrichment: None,
+            subtitle_query: String::new(),
+            subtitle_results: Vec::new(),
+            subtitle_search: None,
+            subtitle_download: None,
+            cast_session: None,
+            cast_connect: None,
+            cast_note: None,
 
             quit_routing_budget: 0,
             quit_routing: crate::quit::QuitRouting::Unsupported,
@@ -1501,7 +1570,11 @@ impl App {
         self.active = Some(Active {
             tracker: opened.tracker,
             file_id: item.id.clone(),
+
             title: item.title.clone(),
+            year: item.year,
+            season: item.season,
+            episode: item.episode,
             resume_from_ms: resume,
             origin,
             load_id,
@@ -1534,6 +1607,317 @@ impl App {
             return self.toggle_fullscreen();
         }
         Task::none()
+    }
+
+    fn enrichment_now(&mut self) {
+        if self.enrichment.is_some() {
+            self.status = Some("An enrichment pass is already running.".to_string());
+            return;
+        }
+        if !self.metadata_capability.is_configured() {
+            self.error = None;
+            self.status = Some(self.metadata_capability.detail.clone());
+            return;
+        }
+        self.error = None;
+        self.status = Some("Queueing the library for online metadata…".to_string());
+        let library = Arc::clone(&self.library);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let provider = TmdbProvider::new(ProviderConfig::from_environment());
+            let result = library
+                .enqueue_whole_library("en-US")
+                .and_then(|queued| {
+                    library
+                        .drain_enrichment_queue(&provider, 40, epoch_ms())
+                        .map(|report| (queued, report))
+                })
+                .map_err(|error| format!("{}: {error}", error.code()))
+                .map(|(queued, report)| {
+                    let _ = queued;
+                    report
+                });
+            let _ = sender.send(result);
+        });
+        self.enrichment = Some(receiver);
+    }
+
+    fn toggle_artwork_retention(&mut self) {
+        let next = if self.artwork_retention == ArtworkRetention::KeepLocally {
+            ArtworkRetention::DoNotStore
+        } else {
+            ArtworkRetention::KeepLocally
+        };
+        match self.library.set_artwork_retention(next) {
+            Ok(()) => {
+                self.artwork_retention = next;
+                self.error = None;
+                self.status = Some(match next {
+                    ArtworkRetention::KeepLocally => {
+                        "Provider artwork will be kept on this machine within the provider's terms."
+                            .to_string()
+                    }
+                    ArtworkRetention::DoNotStore => {
+                        "Provider artwork will not be downloaded or kept.".to_string()
+                    }
+                });
+            }
+            Err(error) => self.report(&error),
+        }
+    }
+
+    fn subtitle_language(&self) -> String {
+        self.preferences
+            .subtitle_language
+            .clone()
+            .filter(|code| !code.trim().is_empty())
+            .unwrap_or_else(|| "bn".to_string())
+    }
+
+    fn subtitle_search_now(&mut self) {
+        if self.subtitle_search.is_some() {
+            self.status = Some("A subtitle search is already running.".to_string());
+            return;
+        }
+        if !self.subtitle_capability.is_configured() {
+            self.error = None;
+            self.status = Some(self.subtitle_capability.detail.clone());
+            return;
+        }
+        let Some(active) = self.active.as_ref() else {
+            self.status = Some("Play something first, then search for its subtitles.".to_string());
+            return;
+        };
+        let typed = self.subtitle_query.trim().to_string();
+        let title = if typed.is_empty() {
+            active.title.clone()
+        } else {
+            typed
+        };
+        let year = active.year;
+        let season = active.season;
+        let episode = active.episode;
+        let language = self.subtitle_language();
+        let request = match (season, episode) {
+            (Some(season), Some(episode)) => {
+                SubtitleSearch::episode(&title, year, season, episode, &language)
+            }
+            _ => SubtitleSearch::movie(&title, year, &language),
+        };
+        self.error = None;
+        self.subtitle_results.clear();
+        self.status = Some("Asking the subtitle provider…".to_string());
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let provider = OpenSubtitlesProvider::new(SubtitleProviderConfig::from_environment());
+            let result = provider
+                .search(&request)
+                .map_err(|error| format!("{}: {}", error.code(), error.message()));
+            let _ = sender.send(result);
+        });
+        self.subtitle_search = Some(receiver);
+    }
+
+    fn subtitle_download(&mut self, file_id: i64) {
+        if self.subtitle_download.is_some() {
+            self.status = Some("A subtitle download is already running.".to_string());
+            return;
+        }
+        let Some(active) = self.active.as_ref() else {
+            self.status = Some("Play something first.".to_string());
+            return;
+        };
+        let target = active.file_id.clone();
+        let language = self.subtitle_language();
+        let library = Arc::clone(&self.library);
+        self.error = None;
+        self.status = Some("Downloading the subtitle…".to_string());
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let provider = OpenSubtitlesProvider::new(SubtitleProviderConfig::from_environment());
+            let result = provider
+                .download(file_id, &language, "")
+                .map_err(|error| format!("{}: {}", error.code(), error.message()))
+                .and_then(|downloaded| {
+                    library
+                        .import_downloaded_subtitle(&target, &downloaded)
+                        .map_err(|error| format!("{}: {error}", error.code()))
+                });
+            let _ = sender.send(result);
+        });
+        self.subtitle_download = Some(receiver);
+    }
+
+    fn cast_to(&mut self, receiver_id: &str) {
+        let Some(receiver) = self
+            .receivers
+            .iter()
+            .find(|candidate| candidate.id == receiver_id)
+            .cloned()
+        else {
+            return;
+        };
+        if self.cast_session.is_some() {
+            self.status = Some("A cast session is already running. Stop it first.".to_string());
+            return;
+        }
+        let Some(active) = self.active.as_ref() else {
+            self.status = Some("Play something first, then choose a receiver.".to_string());
+            return;
+        };
+        let Some(path) = self
+            .library
+            .item(&active.file_id, Some(&self.profile_id))
+            .ok()
+            .flatten()
+            .and_then(|item| self.media_path(&item))
+        else {
+            self.status = Some("That file is not on an available source any more.".to_string());
+            return;
+        };
+        let title = active.title.clone();
+        let extension = path
+            .extension()
+            .map(|value| value.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        let facts = crate::casting::MediaFacts {
+            container: extension,
+            video_codec: None,
+            audio_codec: None,
+        };
+        self.error = None;
+        self.cast_note = Some(format!(
+            "Connecting to {} — this machine serves that one file from a temporary endpoint.",
+            receiver.name
+        ));
+        let mut request = crate::cast_session::SessionRequest::new(receiver, path, facts, title);
+        request.allow_unverified = true;
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = crate::cast_session::connect(request).map_err(|error| format!("{error}"));
+            let _ = sender.send(result);
+        });
+        self.cast_connect = Some(receiver);
+    }
+
+    fn cast_action(&mut self, action: CastAction) {
+        let Some(session) = self.cast_session.as_mut() else {
+            return;
+        };
+        let outcome = match action {
+            CastAction::Pause => session.pause().map(|state| format!("Receiver: {state:?}")),
+            CastAction::Stop => session.stop().map(|state| format!("Receiver: {state:?}")),
+            CastAction::Disconnect => match session.refresh() {
+                Ok(_) => Ok("The cast session ended.".to_string()),
+                Err(error) => Err(error),
+            },
+        };
+        match outcome {
+            Ok(note) => self.cast_note = Some(note),
+            Err(error) => self.cast_note = Some(format!("{error}")),
+        }
+        if action == CastAction::Disconnect {
+            self.cast_session = None;
+        } else if let Some(session) = self.cast_session.as_ref() {
+            self.cast_note = Some(session.summary());
+        }
+    }
+
+    fn drain_enrichment(&mut self) {
+        let Some(receiver) = &self.enrichment else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok(Ok(report)) => {
+                self.enrichment = None;
+                self.error = None;
+                self.status = Some(format!(
+                    "Enrichment: {} attempted, {} updated, {} failed, {} waiting for the network, {} still queued.",
+                    report.attempted,
+                    report.succeeded,
+                    report.failed,
+                    report.waiting_network,
+                    report.remaining
+                ));
+                self.reload();
+            }
+            Ok(Err(message)) => {
+                self.enrichment = None;
+                self.error = Some(message);
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                self.enrichment = None;
+                self.error = Some("The enrichment pass stopped unexpectedly.".to_string());
+            }
+        }
+    }
+
+    fn drain_subtitles(&mut self) {
+        if let Some(receiver) = &self.subtitle_search {
+            match receiver.try_recv() {
+                Ok(Ok(results)) => {
+                    self.subtitle_search = None;
+                    self.error = None;
+                    self.status = Some(match results.len() {
+                        0 => "No subtitle matched that search.".to_string(),
+                        count => format!("{count} subtitles matched."),
+                    });
+                    self.subtitle_results = results;
+                }
+                Ok(Err(message)) => {
+                    self.subtitle_search = None;
+                    self.error = Some(message);
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    self.subtitle_search = None;
+                    self.error = Some("The subtitle search stopped unexpectedly.".to_string());
+                }
+            }
+        }
+        if let Some(receiver) = &self.subtitle_download {
+            match receiver.try_recv() {
+                Ok(Ok(stored)) => {
+                    self.subtitle_download = None;
+                    self.error = None;
+                    self.status = Some(format!("Downloaded {}.", stored.language));
+                    self.reload_subtitles(&stored.file_id.clone());
+                    let _ = self.update(Message::UseSubtitle(stored.id.clone()));
+                }
+                Ok(Err(message)) => {
+                    self.subtitle_download = None;
+                    self.error = Some(message);
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    self.subtitle_download = None;
+                    self.error = Some("The subtitle download stopped unexpectedly.".to_string());
+                }
+            }
+        }
+    }
+
+    fn drain_cast(&mut self) {
+        let Some(receiver) = &self.cast_connect else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok(Ok(session)) => {
+                self.cast_connect = None;
+                self.cast_note = Some(session.summary());
+                self.cast_session = Some(session);
+            }
+            Ok(Err(message)) => {
+                self.cast_connect = None;
+                self.cast_note = Some(message);
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                self.cast_connect = None;
+                self.cast_note = Some("The cast attempt stopped unexpectedly.".to_string());
+            }
+        }
     }
 
     fn casting_note(&self) -> String {
@@ -1839,6 +2223,9 @@ impl App {
         }
 
         self.drain_backup();
+        self.drain_enrichment();
+        self.drain_subtitles();
+        self.drain_cast();
         if self.restore_job.is_some() {
             return;
         }
@@ -3478,6 +3865,15 @@ impl App {
             Message::RemoveSubtitle(id) => self.remove_subtitle(&id),
             Message::LookForReceivers => self.look_for_receivers(),
             Message::BackupNow => self.backup_now(),
+            Message::EnrichmentNow => self.enrichment_now(),
+            Message::ToggleArtworkRetention => self.toggle_artwork_retention(),
+            Message::SubtitleQueryChanged(value) => self.subtitle_query = value,
+            Message::SubtitleSearchNow => self.subtitle_search_now(),
+            Message::SubtitleDownload(file_id) => self.subtitle_download(file_id),
+            Message::CastTo(id) => self.cast_to(&id),
+            Message::CastPause => self.cast_action(CastAction::Pause),
+            Message::CastStop => self.cast_action(CastAction::Stop),
+            Message::CastDisconnect => self.cast_action(CastAction::Disconnect),
             Message::CancelBackup => self.cancel_backup(),
             Message::RestorePathChanged(value) => {
                 self.restore_path = value;
@@ -4914,10 +5310,12 @@ impl App {
         }
 
         let mut casting = column![
+            note(crate::casting::CAPABILITY_TEXT),
             note(
                 "Receivers are looked for on this network only when you press the button below. \
-                 Finding one is not casting: this build has no stream endpoint, so nothing is sent \
-                 to a device and no media leaves this machine.",
+                 A cast session starts only when you choose one and a film is playing: this \
+                 machine then serves that one file from a temporary endpoint that closes itself, \
+                 and sends AVTransport controls to the receiver.",
             ),
             row![
                 button(text("Look for receivers").size(tokens.type_scale.label))
@@ -4934,14 +5332,117 @@ impl App {
         .spacing(tokens.spacing.field_y);
         for receiver in &self.receivers {
             casting = casting.push(
-                column![
-                    text(receiver.name.clone()).size(tokens.type_scale.body),
-                    note(&format!(
-                        "{} · {} · {}",
-                        receiver.kind, receiver.address, receiver.from
-                    )),
+                row![
+                    column![
+                        text(receiver.name.clone()).size(tokens.type_scale.body),
+                        note(&format!(
+                            "{} · {} · {}",
+                            receiver.kind, receiver.address, receiver.from
+                        )),
+                    ]
+                    .spacing(tokens.spacing.field_y / 2.0)
+                    .width(Length::Fill),
+                    button(text("Cast the playing film").size(tokens.type_scale.label))
+                        .on_press(Message::CastTo(receiver.id.clone()))
+                        .style(design::action_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
                 ]
-                .spacing(tokens.spacing.field_y / 2.0),
+                .spacing(tokens.spacing.field_x)
+                .align_y(Alignment::Center),
+            );
+        }
+        if let Some(note_text) = &self.cast_note {
+            casting = casting.push(note(note_text));
+        }
+        if self.cast_session.is_some() {
+            casting = casting.push(
+                row![
+                    button(text("Pause").size(tokens.type_scale.label))
+                        .on_press(Message::CastPause)
+                        .style(design::quiet_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                    button(text("Stop").size(tokens.type_scale.label))
+                        .on_press(Message::CastStop)
+                        .style(design::quiet_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                    button(text("Disconnect").size(tokens.type_scale.label))
+                        .on_press(Message::CastDisconnect)
+                        .style(design::danger_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                ]
+                .spacing(tokens.spacing.field_x)
+                .align_y(Alignment::Center),
+            );
+        }
+
+        let online = column![
+            note(&self.metadata_capability.detail),
+            row![
+                button(text("Enrich the library").size(tokens.type_scale.label))
+                    .on_press(Message::EnrichmentNow)
+                    .style(design::action_style(false))
+                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                checkbox(self.artwork_retention == ArtworkRetention::KeepLocally)
+                    .label("Keep provider artwork on this machine")
+                    .on_toggle(|_| Message::ToggleArtworkRetention)
+                    .size(18.0),
+            ]
+            .spacing(tokens.spacing.field_x)
+            .align_y(Alignment::Center),
+            note(
+                "A manual match is never overwritten, and a value from a local NFO beats a \
+                 provider unless you ask for the provider's version. Nothing is fetched while \
+                 no key is configured.",
+            ),
+        ]
+        .spacing(tokens.spacing.field_y);
+
+        let mut online_subtitles = column![
+            note(&self.subtitle_capability.detail),
+            row![
+                text_input(
+                    "Title to search for, or leave empty to use the film playing",
+                    &self.subtitle_query,
+                )
+                .on_input(Message::SubtitleQueryChanged)
+                .on_submit(Message::SubtitleSearchNow)
+                .style(design::input_style())
+                .padding(tokens.spacing.field_y)
+                .width(Length::Fill),
+                button(text("Search").size(tokens.type_scale.label))
+                    .on_press(Message::SubtitleSearchNow)
+                    .style(design::action_style(false))
+                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+            ]
+            .spacing(tokens.spacing.field_x)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(tokens.spacing.field_y);
+        if self.subtitle_search.is_some() {
+            online_subtitles = online_subtitles.push(note("Searching…"));
+        }
+        if self.subtitle_results.is_empty() && self.subtitle_search.is_none() {
+            online_subtitles = online_subtitles.push(note("No result yet."));
+        }
+        for result in &self.subtitle_results {
+            online_subtitles = online_subtitles.push(
+                row![
+                    column![
+                        text(result.release_name.clone()).size(tokens.type_scale.body),
+                        note(&format!(
+                            "{} · {} · {} downloads",
+                            result.language_name, result.format, result.downloads
+                        )),
+                    ]
+                    .spacing(tokens.spacing.field_y / 2.0)
+                    .width(Length::Fill),
+                    button(text("Download and use").size(tokens.type_scale.label))
+                        .on_press(Message::SubtitleDownload(result.file_id))
+                        .style(design::action_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                ]
+                .spacing(tokens.spacing.field_x)
+                .align_y(Alignment::Center),
             );
         }
 
@@ -5016,6 +5517,7 @@ impl App {
         };
         let library_fact = format!("Library: {}", self.library_label);
         let tokens_fact = format!("Design tokens: {}", design::provenance());
+        let picture_fact = format!("Picture: {}", self.snapshot.output.label());
 
         let body = column![
             heading("Viewer"),
@@ -5026,6 +5528,10 @@ impl App {
             panel(folders.into()),
             heading("Saved sources"),
             panel(saved.into()),
+            heading("Online metadata"),
+            panel(online.into()),
+            heading("Subtitle search"),
+            panel(online_subtitles.into()),
             heading("Casting"),
             panel(casting.into()),
             heading("Data"),
@@ -5036,6 +5542,7 @@ impl App {
             panel(
                 column![
                     note(&playback_fact),
+                    note(&picture_fact),
                     note(&library_fact),
                     note(&tokens_fact),
                     note(
@@ -5074,6 +5581,27 @@ impl App {
                 "Cancel the backup that is running".to_string(),
                 Message::CancelBackup,
             ));
+        }
+        actions.push((
+            "Enrich the library online now".to_string(),
+            Message::EnrichmentNow,
+        ));
+        actions.push((
+            if self.artwork_retention == ArtworkRetention::KeepLocally {
+                "Stop keeping provider artwork".to_string()
+            } else {
+                "Keep provider artwork on this machine".to_string()
+            },
+            Message::ToggleArtworkRetention,
+        ));
+        actions.push((
+            "Search the subtitle provider".to_string(),
+            Message::SubtitleSearchNow,
+        ));
+        if self.cast_session.is_some() {
+            actions.push(("Pause the cast".to_string(), Message::CastPause));
+            actions.push(("Stop the cast".to_string(), Message::CastStop));
+            actions.push(("Disconnect the cast".to_string(), Message::CastDisconnect));
         }
         for profile in &self.profiles {
             if profile.id != self.profile_id {
@@ -6420,7 +6948,11 @@ mod tests {
         app.active = Some(Active {
             tracker: opened.tracker,
             file_id,
+
             title: "Film".to_string(),
+            year: Some(2020),
+            season: None,
+            episode: None,
             resume_from_ms: 1_500_000,
             origin: Screen::Browse,
             load_id: 1,
@@ -6808,6 +7340,9 @@ mod tests {
         let opened =
             PlaybackTracker::open(&app.library, &app.profile_id, &ids[0]).expect("a session");
         app.active = Some(Active {
+            year: Some(2020),
+            season: None,
+            episode: None,
             tracker: opened.tracker,
             file_id: ids[0].clone(),
             title: "Pilot".to_string(),
@@ -6842,6 +7377,9 @@ mod tests {
         let opened =
             PlaybackTracker::open(&app.library, &app.profile_id, &ids[0]).expect("a session");
         app.active = Some(Active {
+            year: Some(2020),
+            season: None,
+            episode: None,
             tracker: opened.tracker,
             file_id: ids[0].clone(),
             title: "Pilot".to_string(),
@@ -7301,6 +7839,9 @@ mod tests {
         let opened =
             PlaybackTracker::open(&app.library, &app.profile_id, &item.id).expect("a session");
         app.active = Some(Active {
+            year: Some(2020),
+            season: None,
+            episode: None,
             tracker: opened.tracker,
             file_id: item.id.clone(),
             title: item.title.clone(),
@@ -7341,6 +7882,9 @@ mod tests {
             let opened =
                 PlaybackTracker::open(&app.library, &app.profile_id, &item.id).expect("a session");
             app.active = Some(Active {
+                year: Some(2020),
+                season: None,
+                episode: None,
                 tracker: opened.tracker,
                 file_id: item.id.clone(),
                 title: item.title.clone(),
@@ -7374,7 +7918,11 @@ mod tests {
         let active = Active {
             tracker: opened.tracker,
             file_id: item.id.clone(),
+
             title: item.title.clone(),
+            year: item.year,
+            season: item.season,
+            episode: item.episode,
             resume_from_ms: 0,
             origin: Screen::Browse,
             load_id: 7,

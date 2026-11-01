@@ -15,7 +15,7 @@ pub mod gl_render;
 #[cfg(target_os = "macos")]
 pub mod surface;
 
-pub use frame::Frame;
+pub use frame::{Frame, OutputDescription, OutputTransfer, PixelFormat, ToneMapping, half_to_f32};
 
 #[cfg(target_os = "macos")]
 pub use gl_render::GlRenderer;
@@ -24,7 +24,7 @@ pub use gl_render::GlRenderer;
 pub use surface::SurfaceFrame;
 
 pub use worker::{
-    HwdecMode, MediaTrack, NO_TRACK, Player, PlayerCommand, PlayerFailure, PlayerSnapshot,
+    HdrMode, HwdecMode, MediaTrack, NO_TRACK, Player, PlayerCommand, PlayerFailure, PlayerSnapshot,
     SUB_POSITION_RANGE, SUB_SCALE_RANGE, TrackKind,
 };
 
@@ -251,6 +251,7 @@ pub(crate) struct RenderSymbols {
     free: unsafe extern "C" fn(*mut c_void),
     render: unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int,
     update: unsafe extern "C" fn(*mut c_void) -> u64,
+    #[cfg(target_os = "macos")]
     report_swap: Option<unsafe extern "C" fn(*mut c_void)>,
     set_update_callback:
         unsafe extern "C" fn(*mut c_void, Option<unsafe extern "C" fn(*mut c_void)>, *mut c_void),
@@ -417,6 +418,7 @@ fn render_symbols(library: &Library) -> Option<RenderSymbols> {
             free: *library.get(b"mpv_render_context_free\0").ok()?,
             render: *library.get(b"mpv_render_context_render\0").ok()?,
             update: *library.get(b"mpv_render_context_update\0").ok()?,
+            #[cfg(target_os = "macos")]
             report_swap: library
                 .get(b"mpv_render_context_report_swap\0")
                 .ok()

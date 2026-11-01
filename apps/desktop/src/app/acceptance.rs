@@ -1245,8 +1245,10 @@ fn settings_are_operable_without_a_pointer() {
         actions.len()
     );
 
-    let autoplay = app.profiles.len().saturating_sub(1);
-    assert!(autoplay < actions.len(), "the autoplay action must exist");
+    let autoplay = actions
+        .iter()
+        .position(|(label, _)| label.to_lowercase().contains("next episode"))
+        .expect("the autoplay action must exist");
     let before = app.preferences.autoplay_next;
     app.settings_focus = autoplay;
     let _ = app.update(key("enter"));
@@ -1770,4 +1772,62 @@ fn step_22_receiver_discovery_is_your_choice_and_never_claims_that_casting_works
     assert!(note.contains("no stream has been sent"), "got {note}");
     assert_eq!(app.receivers[0].kind, "DLNA MediaRenderer");
     assert!(app.error.is_none(), "{:?}", app.error);
+}
+
+#[test]
+fn the_online_panels_explain_themselves_and_never_start_a_call_they_cannot_make() {
+    let mut app = fresh_app();
+
+    assert!(
+        !app.metadata_capability.detail.trim().is_empty(),
+        "the metadata panel must say something even with nothing configured"
+    );
+    assert!(
+        !app.subtitle_capability.detail.trim().is_empty(),
+        "the subtitle panel must say something even with nothing configured"
+    );
+
+    if !app.metadata_capability.is_configured() {
+        let detail = app.metadata_capability.detail.clone();
+        let _ = app.update(Message::EnrichmentNow);
+        assert!(
+            app.enrichment.is_none(),
+            "no enrichment pass may start without a provider"
+        );
+        assert_eq!(
+            app.status.as_deref(),
+            Some(detail.as_str()),
+            "the panel's own words are the reason"
+        );
+    }
+
+    if !app.subtitle_capability.is_configured() {
+        let _ = app.update(Message::SubtitleSearchNow);
+        assert!(
+            app.subtitle_search.is_none(),
+            "no subtitle search may start without a provider"
+        );
+    }
+
+    let actions: Vec<String> = app
+        .settings_actions()
+        .into_iter()
+        .map(|(label, _)| label)
+        .collect();
+    assert!(
+        actions.iter().any(|label| label.contains("Enrich")),
+        "enrichment must be reachable from the keyboard action strip: {actions:?}"
+    );
+    assert!(
+        actions
+            .iter()
+            .any(|label| label.contains("subtitle provider")),
+        "subtitle search must be reachable from the keyboard action strip: {actions:?}"
+    );
+    assert!(
+        actions
+            .iter()
+            .any(|label| label.contains("provider artwork")),
+        "the artwork retention choice must be reachable: {actions:?}"
+    );
 }

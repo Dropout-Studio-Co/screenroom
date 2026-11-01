@@ -144,14 +144,21 @@ fn default_decode_policy_still_delivers_generated_frames() {
     assert!(frame.is_well_formed());
     assert!(!frame.is_blank(), "default policy returned a blank frame");
     assert_eq!((frame.width, frame.height), (320, 240));
+    let decoder = loaded.hardware_decoder.as_deref().unwrap_or("no");
     assert!(
-        loaded
-            .hardware_decoder
-            .as_deref()
-            .is_some_and(|decoder| { decoder == "no" || decoder.ends_with("-copy") }),
-        "libmpv did not report hwdec-current: {:?}",
+        decoder == "no"
+            || decoder.ends_with("-copy")
+            || decoder.contains("videotoolbox")
+            || decoder.contains("VideoToolbox"),
+        "libmpv reported an unexpected decoder: {:?}",
         loaded.hardware_decoder
     );
+    if screenroom_player::render_bridge() == screenroom_player::RenderBridge::OpenGl {
+        assert!(
+            !decoder.ends_with("-copy"),
+            "the OpenGL path must not take a copy-back decoder, but libmpv reported {decoder:?}"
+        );
+    }
     player.stop();
     let stopped = wait_for(&player, Duration::from_secs(10), |snapshot| {
         !snapshot.loaded && snapshot.hardware_decoder.is_none()

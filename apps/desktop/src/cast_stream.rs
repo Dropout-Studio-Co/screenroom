@@ -975,6 +975,40 @@ mod tests {
     }
 
     #[test]
+    fn a_panicking_serving_thread_releases_its_slot() {
+        let state = ServerState {
+            stop: AtomicBool::new(false),
+            active: AtomicUsize::new(1),
+            handshakes: AtomicUsize::new(1),
+            limit: 1,
+            deadline: Instant::now() + Duration::from_secs(60),
+            workers: Mutex::new(Vec::new()),
+        };
+        let slot = Arc::new(state);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
+            let slot = Arc::clone(&slot);
+            move || {
+                let _handshake = HandshakeSlot {
+                    state: Arc::clone(&slot),
+                };
+                let _active = ActiveClient { state: &slot };
+                panic!("a serving thread failed");
+            }
+        }));
+        assert!(outcome.is_err());
+        assert_eq!(
+            slot.active.load(Ordering::SeqCst),
+            0,
+            "a panic must release the client slot"
+        );
+        assert_eq!(
+            slot.handshakes.load(Ordering::SeqCst),
+            0,
+            "a panic must release the header slot"
+        );
+    }
+
+    #[test]
     fn dropping_the_server_closes_it_even_without_an_explicit_stop() {
         let (_directory, server, _media) = server(32, Duration::from_secs(60), 1);
         let address = server.address();

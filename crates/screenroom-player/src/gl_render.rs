@@ -3,18 +3,22 @@ use std::ptr::{self, NonNull};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::frame::{OutputDescription, PixelFormat};
 use crate::surface::SurfaceFrame;
 use crate::{Frame, LibMpv, Mpv, PlayerError, RenderSymbols, WakeSignal};
 
 pub const UPDATE_FRAME: u64 = 1;
 
+pub const DEFAULT_TARGET_PEAK_NITS: u32 = 1000;
+
 const SURFACE_POOL_SIZE: usize = 3;
-const MAX_SURFACE_POOL_SIZE: usize = 8;
+const MAX_SURFACE_POOL_SIZE: usize = 16;
 
 const PARAM_API_TYPE: c_int = 1;
 const PARAM_OPENGL_INIT_PARAMS: c_int = 2;
 const PARAM_OPENGL_FBO: c_int = 3;
 const PARAM_FLIP_Y: c_int = 4;
+const PARAM_DEPTH: c_int = 5;
 
 const CGL_PFA_OPENGL_PROFILE: u32 = 99;
 const CGL_PFA_ACCELERATED: u32 = 73;
@@ -23,8 +27,12 @@ const CGL_OPENGL_VERSION_3_2_CORE: u32 = 0x3200;
 
 const GL_TEXTURE_RECTANGLE: u32 = 0x84f5;
 const GL_RGBA8: u32 = 0x8058;
+const GL_RGBA16F: u32 = 0x881a;
+const GL_RGBA: u32 = 0x1908;
 const GL_BGRA: u32 = 0x80e1;
+const GL_UNSIGNED_BYTE: u32 = 0x1401;
 const GL_UNSIGNED_INT_8_8_8_8_REV: u32 = 0x8367;
+const GL_HALF_FLOAT: u32 = 0x140b;
 const GL_FRAMEBUFFER: u32 = 0x8d40;
 const GL_COLOR_ATTACHMENT0: u32 = 0x8ce0;
 const GL_FRAMEBUFFER_COMPLETE: u32 = 0x8cd5;
@@ -189,6 +197,18 @@ impl Drop for CglContext {
     }
 }
 
+fn gl_formats(format: PixelFormat) -> (u32, u32, u32) {
+    match format {
+        PixelFormat::Bgra8 => (GL_RGBA8, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV),
+        PixelFormat::Rgba16Float => (GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT),
+        PixelFormat::Rgba8 => (GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE),
+    }
+}
+
+pub fn target_internal_format(format: PixelFormat) -> u32 {
+    gl_formats(format).0
+}
+
 struct Slot {
     surface: Arc<SurfaceFrame>,
     texture: u32,
@@ -196,8 +216,14 @@ struct Slot {
 }
 
 impl Slot {
-    fn create(cgl: &CglContext, width: u32, height: u32) -> Result<Self, PlayerError> {
-        let surface = Arc::new(SurfaceFrame::new(width, height)?);
+    fn create(
+        cgl: &CglContext,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+    ) -> Result<Self, PlayerError> {
+        let surface = Arc::new(SurfaceFrame::new_with_format(width, height, format)?);
+        let (internal_format, channels, samples) = gl_formats(format);
         let mut texture: u32 = 0;
         unsafe { glGenTextures(1, &mut texture) };
         if texture == 0 {
@@ -210,11 +236,11 @@ impl Slot {
             CGLTexImageIOSurface2D(
                 cgl.handle(),
                 GL_TEXTURE_RECTANGLE,
-                GL_RGBA8,
+                internal_format,
                 width as i32,
                 height as i32,
-                GL_BGRA,
-                GL_UNSIGNED_INT_8_8_8_8_REV,
+                channels,
+                samples,
                 surface.as_ptr(),
                 0,
             )
@@ -289,6 +315,8 @@ pub struct GlRenderer {
     height: u32,
     generation: u64,
     skipped: u64,
+    previous_surface: Option<Arc<SurfaceFrame>>,
+    output: OutputDescription,
     target_failure: Option<String>,
 }
 
@@ -305,6 +333,44 @@ impl std::fmt::Debug for GlRenderer {
 
 pub fn clamp_target(width: u32, height: u32) -> (u32, u32) {
     (width.max(1), height.max(1))
+}
+
+fn extended_range_values(peak_nits: u32) -> [(&'static str, String); 5] {
+    [
+        ("target-prim", "bt.2020".to_string()),
+        ("target-trc", "pq".to_string()),
+        ("target-peak", peak_nits.to_string()),
+        ("tone-mapping", "clip".to_string()),
+        ("hdr-compute-peak", "no".to_string()),
+    ]
+}
+
+fn extended_range_reset_values() -> [(&'static str, &'static str); 5] {
+    [
+        ("target-prim", "auto"),
+        ("target-trc", "auto"),
+        ("target-peak", "auto"),
+        ("tone-mapping", "auto"),
+        ("hdr-compute-peak", "auto"),
+    ]
+}
+
+pub fn enable_extended_range(
+    core: &Mpv,
+    peak_nits: Option<u32>,
+) -> Result<OutputDescription, PlayerError> {
+    let peak = peak_nits.unwrap_or(DEFAULT_TARGET_PEAK_NITS);
+    for (name, value) in extended_range_values(peak) {
+        core.set_property(name, &value)?;
+    }
+    Ok(OutputDescription::extended_float(Some(peak)))
+}
+
+pub fn reset_extended_range(core: &Mpv) -> Result<(), PlayerError> {
+    for (name, value) in extended_range_reset_values() {
+        core.set_property(name, value)?;
+    }
+    Ok(())
 }
 
 fn free_slot<T>(slots: &[T], shared: impl Fn(&T) -> usize) -> Option<usize> {
@@ -378,6 +444,8 @@ impl GlRenderer {
             height: 0,
             generation: 0,
             skipped: 0,
+            previous_surface: None,
+            output: OutputDescription::sdr_bgra8(),
             target_failure: None,
         })
     }
@@ -388,6 +456,24 @@ impl GlRenderer {
 
     pub fn update_flags(&self) -> Result<u64, PlayerError> {
         Ok(unsafe { (self.symbols.update)(self.context.as_ptr()) })
+    }
+
+    pub fn output(&self) -> &OutputDescription {
+        &self.output
+    }
+
+    pub fn set_output(&mut self, output: OutputDescription) {
+        if self.output.format == output.format {
+            self.output = output;
+            return;
+        }
+        self.output = output;
+        self.target_failure = None;
+        if self.cgl.make_current().is_ok() {
+            self.release_slots();
+        }
+        self.width = 0;
+        self.height = 0;
     }
 
     pub fn set_target(&mut self, width: u32, height: u32) {
@@ -407,7 +493,7 @@ impl GlRenderer {
         self.release_slots();
         let mut slots = Vec::with_capacity(SURFACE_POOL_SIZE);
         for _ in 0..SURFACE_POOL_SIZE {
-            match Slot::create(&self.cgl, width, height) {
+            match Slot::create(&self.cgl, width, height, self.output.format) {
                 Ok(slot) => slots.push(slot),
                 Err(error) => {
                     self.target_failure = Some(error.to_string());
@@ -436,14 +522,14 @@ impl GlRenderer {
         let index = match free_slot(&self.slots, |slot| Arc::strong_count(&slot.surface)) {
             Some(index) => index,
             None if self.slots.len() < MAX_SURFACE_POOL_SIZE => {
-                match Slot::create(&self.cgl, self.width, self.height) {
+                match Slot::create(&self.cgl, self.width, self.height, self.output.format) {
                     Ok(slot) => {
                         self.slots.push(slot);
                         self.slots.len() - 1
                     }
-                    Err(error) => {
-                        self.target_failure = Some(error.to_string());
-                        return Err(error);
+                    Err(_) => {
+                        self.skipped += 1;
+                        return Ok(None);
                     }
                 }
             }
@@ -453,14 +539,20 @@ impl GlRenderer {
             }
         };
         let framebuffer = self.slots[index].framebuffer;
+        let (internal_format, _, _) = gl_formats(self.output.format);
         let mut fbo = OpenGlFbo {
             fbo: framebuffer as c_int,
             w: self.width as c_int,
             h: self.height as c_int,
-            internal_format: GL_RGBA8 as c_int,
+            internal_format: internal_format as c_int,
         };
         let mut flip_y: c_int = 0;
-        let mut params = [
+        let mut depth: c_int = if self.output.format.is_extended_range() {
+            c_int::from(self.output.format.bits_per_channel())
+        } else {
+            0
+        };
+        let mut params = vec![
             RenderParam {
                 kind: PARAM_OPENGL_FBO,
                 data: (&mut fbo as *mut OpenGlFbo).cast(),
@@ -468,6 +560,10 @@ impl GlRenderer {
             RenderParam {
                 kind: PARAM_FLIP_Y,
                 data: (&mut flip_y as *mut c_int).cast(),
+            },
+            RenderParam {
+                kind: PARAM_DEPTH,
+                data: (&mut depth as *mut c_int).cast(),
             },
             RenderParam {
                 kind: 0,
@@ -496,6 +592,7 @@ impl GlRenderer {
             );
         }
         let surface = Arc::clone(&self.slots[index].surface);
+        self.previous_surface = Some(Arc::clone(&surface));
         if let Some(report_swap) = self.symbols.report_swap {
             unsafe { report_swap(self.context.as_ptr()) };
         }
@@ -508,15 +605,18 @@ impl GlRenderer {
     }
 
     fn reap_surplus_slots(&mut self) {
+        if self.slots.len() <= SURFACE_POOL_SIZE {
+            return;
+        }
+        if self
+            .slots
+            .iter()
+            .any(|slot| Arc::strong_count(&slot.surface) != 1)
+        {
+            return;
+        }
         while self.slots.len() > SURFACE_POOL_SIZE {
-            let Some(index) = self
-                .slots
-                .iter()
-                .rposition(|slot| Arc::strong_count(&slot.surface) == 1)
-            else {
-                return;
-            };
-            let slot = self.slots.remove(index);
+            let slot = self.slots.pop().expect("a slot was just counted");
             slot.destroy();
         }
     }
@@ -589,5 +689,58 @@ mod tests {
     #[test]
     fn the_pool_is_three_surfaces_deep() {
         assert_eq!(SURFACE_POOL_SIZE, 3);
+    }
+
+    #[test]
+    fn the_eight_bit_gl_texture_is_the_bgra_format_the_shipped_path_uses() {
+        assert_eq!(
+            gl_formats(PixelFormat::Bgra8),
+            (GL_RGBA8, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV)
+        );
+        assert_eq!(GL_RGBA8, 0x8058);
+        assert_eq!(GL_BGRA, 0x80e1);
+        assert_eq!(GL_UNSIGNED_INT_8_8_8_8_REV, 0x8367);
+    }
+
+    #[test]
+    fn the_extended_texture_is_a_half_float_rgba_target() {
+        assert_eq!(
+            gl_formats(PixelFormat::Rgba16Float),
+            (GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT)
+        );
+        assert_eq!(GL_RGBA16F, 0x881a);
+        assert_eq!(GL_RGBA, 0x1908);
+        assert_eq!(GL_HALF_FLOAT, 0x140b);
+    }
+
+    #[test]
+    fn extended_range_asks_mpv_for_pq_without_tone_mapping() {
+        let values = extended_range_values(1000);
+        let lookup = |key: &str| {
+            values
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(lookup("target-prim"), Some("bt.2020"));
+        assert_eq!(lookup("target-trc"), Some("pq"));
+        assert_eq!(lookup("target-peak"), Some("1000"));
+        assert_eq!(lookup("tone-mapping"), Some("clip"));
+        assert_eq!(lookup("hdr-compute-peak"), Some("no"));
+    }
+
+    #[test]
+    fn a_reset_restores_every_extended_range_option_to_auto() {
+        let reset = extended_range_reset_values();
+        for (name, value) in reset {
+            assert_eq!(value, "auto", "{name} must return to auto");
+        }
+        assert_eq!(reset.len(), extended_range_values(1000).len());
+    }
+
+    #[test]
+    fn the_default_output_of_a_fresh_renderer_is_eight_bit_sdr() {
+        assert_eq!(OutputDescription::default().format, PixelFormat::Bgra8);
+        assert_eq!(DEFAULT_TARGET_PEAK_NITS, 1000);
     }
 }

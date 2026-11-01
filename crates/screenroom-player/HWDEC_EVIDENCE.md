@@ -376,3 +376,268 @@ Two traps for the next measurement: libmpv auto-loads a sidecar named after the
 video (`<name>.bn.srt`), so a control run needs a differently named file, and
 `--sub-file` as a startup option did not take effect in these probes where
 `sub-add … select` did.
+
+## HDR10 on the OpenGL path: an extended-range surface, measured (2026-11-01)
+
+Everything below ran headless. No window was opened, nothing was raised, and no
+desktop state was touched. The media was opened read-only and looped.
+
+### What the installed headers define, read rather than recalled
+
+mpv/libmpv 0.41.0 (client API 2.5), `/opt/homebrew/include/mpv/render.h`:
+the whole `mpv_render_param_type` enum runs from `MPV_RENDER_PARAM_INVALID = 0`
+to `MPV_RENDER_PARAM_SW_POINTER = 20`. **There is no colourspace, HDR-metadata or
+target-peak render parameter in it.** The HDR-relevant entries that do exist are:
+
+| Enum | Value | What the header says it is |
+|---|---:|---|
+| `MPV_RENDER_PARAM_OPENGL_FBO` | 3 | `mpv_opengl_fbo*`, whose `internal_format` is "Underlying texture internal format (e.g. `GL_RGBA8`), or 0 if unknown" |
+| `MPV_RENDER_PARAM_DEPTH` | 5 | "Control surface depth… the depth of the surface passed to the render function in bits per channel. If omitted or set to 0, the renderer will assume 8. Typically used to control dithering." |
+| `MPV_RENDER_PARAM_ICC_PROFILE` | 6 | ICC blob for `--icc-profile-auto` only; unrelated to HDR output |
+
+`render_gl.h` adds no HDR fields: `mpv_opengl_fbo` is `{int fbo; int w, h; int
+internal_format;}`. `mpv master`'s `render.h` fetched during this session also has
+no target-colourspace parameter, so this is not a version lag in the Homebrew build.
+
+The target colourspace is therefore **an mpv option, not a render parameter**.
+Three further facts decide the design:
+
+- The manual states `--target-colorspace-hint` is "supported on Wayland, D3D11 and
+  winvk contexts" and "Requires a supporting driver and `--vo=gpu-next`". macOS/CGL
+  is not in that list, so there is no swapchain colours-space hint available from
+  libmpv here.
+- `video/out/gpu/libmpv_gpu.c` (v0.41.0, lines 182–190) feeds
+  `MPV_RENDER_PARAM_DEPTH` into `gl_video_set_fb_depth()`, and
+  `video/out/opengl/ra_gl.c` (lines 420–458) wraps the caller's FBO with
+  `fbo_dummy_format`, which carries no bit depth. So `internal_format` alone does
+  **not** tell mpv the target precision; `MPV_RENDER_PARAM_DEPTH` is the parameter
+  that does.
+- The libmpv GL render API runs **vo_gpu** (`gl_video_render_frame`), not
+  vo_gpu-next. `--target-prim`, `--target-trc`, `--target-peak`, `--tone-mapping`
+  and `--hdr-compute-peak` are all live on that path; `--target-colorspace-hint`
+  is not (see above).
+
+### What was implemented
+
+- `PixelFormat { Rgba8, Bgra8, Rgba16Float }` with `bytes_per_pixel`,
+  `bits_per_channel` and `is_extended_range`, and `Frame::format`, so a delivered
+  frame states its own precision instead of the desktop layer assuming BGRA.
+- `OutputDescription { format, extended_range_requested, target_peak_nits,
+  transfer, tone_mapping }` with `label()`, published as
+  `PlayerSnapshot.output` for Settings to show. It says what was requested and
+  what the surface carries; it does not claim that a display received HDR.
+- `SurfaceFrame::new_with_format`. The eight-bit path is byte-identical to before:
+  pixel format `BGRA` (`0x42475241`), 4 bytes per element, row = width × 4. The new
+  path uses CoreVideo's `kCVPixelFormatType_64RGBAHalf`, quoted from
+  `CVPixelBuffer.h`: `'RGhA'`, "64 bit RGBA IEEE half-precision float, 16-bit
+  little-endian samples", i.e. `0x52476841`, 8 bytes per element, row = width × 8
+  (3840 → 30720). `IOSurfaceCreate` returning non-null **and** `IOSurfaceGetPixelFormat`
+  reading back `0x52476841` is the acceptance, and both are asserted in
+  `surface::tests::a_half_float_surface_is_created_with_the_core_video_pixel_format`
+  and `…row_stride_holds_eight_bytes_per_pixel` (16×9 and 3840×2160).
+- `GlRenderer` carries an `OutputDescription`. SDR keeps `GL_RGBA8` (`0x8058`) with
+  `GL_BGRA`/`GL_UNSIGNED_INT_8_8_8_8_REV` and passes that as
+  `MPV_RENDER_PARAM_OPENGL_FBO.internal_format`. Extended uses `GL_RGBA16F`
+  (`0x881a`) with `GL_RGBA`/`GL_HALF_FLOAT` (`0x140b`) and adds
+  `MPV_RENDER_PARAM_DEPTH = 16`. On the SDR path the param array now carries
+  `MPV_RENDER_PARAM_DEPTH = 0`, which the header documents as equivalent to
+  omitting it; the surface format, FBO format and pixel path are unchanged.
+- `enable_extended_range()` sets, on the live core: `target-prim=bt.2020`,
+  `target-trc=pq`, `target-peak=<the file's own tag, default 1000>`,
+  `tone-mapping=clip`, `hdr-compute-peak=no`. `clip` with no peak computation is
+  deliberately "do not compress": mpv is told the target accepts the file's own
+  peak, so the master's codes are passed through instead of being tone-mapped into
+  the SDR range. `reset_extended_range()` returns all five to `auto`.
+- The worker observes `video-params/gamma`, `video-params/max-cll` and
+  `video-params/max-luma` (no blocking reads were added to the render loop), treats
+  **only** `pq` as extended range, switches the surface when the first tag arrives,
+  and reverts when an SDR file loads. `HdrMode` is **opt-in**: `Player::start()`
+  and `start_with_hwdec()` stay on `HdrMode::Sdr`, and
+  `SCREENROOM_HDR=extended` or `Player::start_with_hdr(…, HdrMode::Extended)` turns
+  it on. See "what the lead must wire" for why that default must not be flipped yet.
+
+### The headless receipt
+
+`crates/screenroom-player/examples/hdr_check.rs`. Three passes over the same file in
+one process, each with its own `Mpv` and `GlRenderer`: `sdr` (8-bit BGRA, mpv's
+defaults), `float8` (a 16F surface **without** any HDR request — the control that
+separates "float container" from "HDR signal"), and `extended` (16F plus the options
+above). It samples 169,641 pixels per pass on a 7-pixel grid, reports the surface
+fourcc read back from the `IOSurface`, the FBO internal format, distinct green
+values, how many values sit off the 8-bit grid, how many exceed the container's
+1.0 ceiling, and — for the PQ pass only — luma in nits from the PQ EOTF.
+
+Command, on the generated 3840×2160 24 fps HEVC Main10 HDR10 fixture
+(`bt2020nc`/`smpte2084`, BT.2020, 1000-nit MaxCLL, `ffprobe` above):
+
+```
+cargo run -p screenroom-player --example hdr_check -- .artifacts/media/bench-4k-hdr10.mp4 2 all
+```
+
+M4 MacBook Air, libmpv 2.5 via `/opt/homebrew/lib/libmpv.2.dylib`, debug build,
+`hwdec=auto-copy`, audio and subtitles disabled, `vo=libmpv`, no window:
+
+| Measurement | `sdr` | `float8` (control) | `extended` |
+|---|---:|---:|---:|
+| Surface pixel format (read back) | `BGRA` `0x42475241` | `RGhA` `0x52476841` | `RGhA` `0x52476841` |
+| Bits per channel | 8 | 16 | 16 |
+| `GL` internal format | `0x8058` | `0x881a` | `0x881a` |
+| Bytes per row at 3840 | 15360 | 30720 | 30720 |
+| `MPV_RENDER_PARAM_DEPTH` | 0 | 16 | 16 |
+| Extended range requested | no | **no** | **yes** |
+| Distinct green values | **245** | **2105** | **4509** |
+| Samples off the 8-bit grid | **0** | 113558 | 169116 |
+| Samples above code 1.0 | 0 | 0 | **13** |
+| Mean green code | 0.512115 | 0.512021 | 0.509543 |
+| Peak green code | 1.000000 | 1.000000 | **1.076172** |
+| Peak luma | — | — | 9407.0 nits |
+| Peak vs SDR white (100 nits) | — | — | **94.1×** |
+| Samples above SDR white | — | — | 168970 of 169641 |
+
+Repeat runs move a little, because each pass samples whichever frames arrive during
+its own two-second window of a noise clip: across four runs the `extended` pass
+reported 4485–4606 distinct green values, a peak green code of 1.026–1.076, 13–14
+samples above 1.0 and 8128–9407 peak nits. The `sdr` pass stayed at 245–250 distinct
+values with zero off-grid samples and zero values above 1.0 in every run, and
+`float8` at 2105 distinct values with zero above 1.0. The numbers in the table are
+one complete run, not a best-of.
+
+Three things in that table are the actual evidence:
+
+1. **More than eight bits survived.** 4509 distinct green values against 245 on the
+   SDR surface, and 169,116 of 169,641 samples are not on the 8-bit grid. The
+   `float8` control (2105 distinct, also off-grid) proves that "off-grid" alone is
+   not HDR — it is what a float target does to any signal — which is why the two
+   controls and the distinct-value count are reported together.
+2. **The surface carries code values the SDR container cannot hold.** 13 samples
+   exceed 1.0 (peak code 1.076172); the eight-bit path is capped at exactly
+   1.000000 by construction.
+3. **The HDR target options are live, not ignored.** Re-running the same pass with
+   the peak forced to 100 moves the peak from code 1.076172 to **0.580078** and the
+   peak luma from 9407 nits to **176.4 nits** while the surface format is unchanged:
+
+   ```
+   cargo run -p screenroom-player --example hdr_check -- .artifacts/media/bench-4k-hdr10.mp4 2 extended 100
+   → [extended] output 16 bits per channel, pq/bt.2020, tone mapping none, target peak 100 nits
+   → [extended] peak_green_code 0.580078
+   → [extended] distinct_green 4016
+   → [extended] peak_nits 176.4
+   ```
+
+   So the delivered range follows mpv's target configuration rather than being a
+   fixed SDR envelope.
+
+The SDR path is unchanged on the SDR fixture. Command:
+
+```
+cargo run -p screenroom-player --example hdr_check -- .artifacts/media/bench-4k-hevc-10bit.mp4 2 sdr
+→ [sdr] surface_fourcc BGRA number 0x42475241
+→ [sdr] surface_bits_per_channel 8
+→ [sdr] surface_bytes_per_row 15360
+→ [sdr] fbo_internal_format 0x8058
+→ [sdr] samples 169641
+→ [sdr] mean_green_code 0.509241
+→ [sdr] peak_green_code 1.000000
+→ [sdr] distinct_green 255
+→ [sdr] off_grid 0
+→ [sdr] above_one 0
+```
+
+The same fixture also reaches BGRA8 when the file itself is SDR even with HDR
+enabled, which is the "SDR path is unchanged when the file is SDR" half:
+
+```
+… -- .artifacts/media/bench-4k-hevc-10bit.mp4 0.1 player
+→ [player] output 8 bits per channel, srgb, tone mapping mpv default
+→ [player] frame_format BGRA8
+```
+
+And the real `Player`, headless, on the HDR10 fixture:
+
+```
+… -- .artifacts/media/bench-4k-hdr10.mp4 0.1 player
+→ [player] output 16 bits per channel, pq/bt.2020, tone mapping none, target peak 1000 nits
+→ [player] extended_range_requested true
+→ [player] frame_format RGBA16Float
+→ [player] frame_bytes_per_pixel 8
+
+… -- .artifacts/media/bench-4k-hdr10.mp4 0.1 player-sdr
+→ [player] output 8 bits per channel, srgb, tone mapping mpv default
+→ [player] frame_format BGRA8
+→ [player] frame_bytes_per_pixel 4
+```
+
+The second run is the shipped default: the same HDR file through `HdrMode::Sdr`
+still delivers BGRA8, so a caller that has not opted in cannot get a 16F frame it
+cannot display.
+
+### What is not proven, and the one thing that blocks HDR on screen
+
+- **Nothing has been presented. No window was opened, so no EDR layer exists and no
+  panel received anything.** The 16F `IOSurface` is a prerequisite, not HDR on
+  screen.
+- **`wantsExtendedDynamicRangeContent` cannot be reached through iced 0.14 as
+  shipped.** Checked in the installed crates, not recalled:
+  - `wgpu-hal 27.0.4`, `src/metal/surface.rs:168–173`, already does the right thing:
+    `let wants_edr = config.format == wgt::TextureFormat::Rgba16Float;` and sets the
+    layer property accordingly, and `src/metal/adapter.rs:362–366` lists
+    `Rgba16Float` among the macOS surface formats. So wgpu 27 supports an EDR
+    swapchain.
+  - `iced_wgpu 0.14.0`, `src/window/compositor.rs:107–121`, picks the first format
+    with `is_srgb()` (`Bgra8UnormSrgb`) and offers no override;
+    `iced_wgpu::Settings` has no format field. So the swapchain iced creates is
+    always 8-bit sRGB, and `Rgba16Float` — non-sRGB — can never be selected.
+  - Consequence: an EDR layer requires either a patched/vendored `iced_wgpu` format
+    choice, or an application-owned `CAMetalLayer` / view whose
+    `wantsExtendedDynamicRangeContent` and `colorspace` (`kCGColorSpaceITUR_2100_PQ`
+    for a PQ surface) the app sets itself. Neither exists, and neither can be added
+    from this crate.
+- **Absolute luminance is not calibrated.** The nits above are the PQ EOTF applied
+  to the codes that arrived; they are not a display measurement and not a reference
+  render. A libplacebo/reference comparison was attempted and is unavailable
+  headlessly on this machine: `mpv --vo=image -o …` fails with "Error
+  opening/initializing the selected video_out (--vo) device" and every other capture
+  VO needs a window. The fixture is generated noise tagged PQ, not a graded master,
+  so "9407 nits peak" is what its own codes mean, not a highlight anyone graded.
+  For the same reason the receipt's reconstructed luma code (0.8489 mean) does not
+  reconcile with the file's own `signalstats` luma (YAVG 504.5/1023 = 0.503
+  normalized, YMAX 1009/1023 = 1.079) — the source is synthetic and the YCbCr→RGB
+  round trip is not luma-preserving on noise. Only the container, precision and
+  target-behaviour facts above are claimed.
+- **HLG is not treated as HDR.** Only `gamma = pq` selects the extended surface; an
+  HLG file stays on the SDR path and is tone-mapped there. That is a decision, not
+  an oversight, and it is labelled by the output description.
+- **No real HDR10 film and no HDR display were involved.** The owner's media was not
+  mounted and nothing was shown.
+
+### What the lead must wire in `apps/desktop` (not changed here)
+
+1. `apps/desktop/src/video_surface.rs` hardcodes the imported format:
+   `metal::MTLPixelFormat::BGRA8Unorm_sRGB` and `wgpu::TextureFormat::Bgra8UnormSrgb`
+   (lines 317, 341, 363). It must map `surface.format()`:
+   `PixelFormat::Bgra8 → Bgra8UnormSrgb`, `PixelFormat::Rgba16Float → Rgba16Float`.
+   Sampling a PQ surface through an sRGB view is wrong even before EDR.
+2. The app's own `CAMetalLayer` (or a patched `iced_wgpu`) must set
+   `wantsExtendedDynamicRangeContent = YES` and
+   `colorspace = kCGColorSpaceITUR_2100_PQ` when the published
+   `OutputDescription.transfer` is `Pq`; wgpu only flips the EDR flag, never the
+   colours space.
+3. Settings should print `PlayerSnapshot.output.label()`, so the app states what the
+   surface carries instead of implying HDR.
+4. Do **not** set `SCREENROOM_HDR=extended` until 1 and 2 exist; today that would
+   hand the desktop layer a 16F `IOSurface` it imports as 8-bit sRGB.
+
+### One concurrent-edit note
+
+`crates/screenroom-player/tests/worker.rs::default_decode_policy_still_delivers_generated_frames`
+failed partway through this session (the OpenGL path's `decode_policy` returns
+`"auto"`, which this libmpv answers with `hwdec-current = videotoolbox`, while the
+assertion then accepted only `no` or `*-copy`). The file belongs to another agent,
+it was fixed in place at 23:24 while this work continued, and with that fix
+`cargo test -p screenroom-player` passes 22/22. Recorded so the failure seen in the
+transcript is not mistaken for a regression in this change.
+
+`crates/screenroom-player/src/gl_render.rs` and `src/lib.rs` were also edited
+concurrently (surface pool to 16, `previous_surface`, a `cfg(macos)` on
+`report_swap`). This change is additive on top of that work and keeps it; the
+extended-range format is a separate axis from the surface pool.

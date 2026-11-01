@@ -124,7 +124,7 @@ mod receipt {
             .pixel(frame.width / 2, frame.height / 2)
             .ok_or("the centre of the surface could not be read")?;
         println!(
-            "centre BGRA {},{},{},{}",
+            "centre RGBA {},{},{},{}",
             centre[0], centre[1], centre[2], centre[3]
         );
         let (non_black, sampled) = sample(&frame);
