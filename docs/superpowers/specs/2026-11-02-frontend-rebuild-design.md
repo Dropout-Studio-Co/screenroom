@@ -315,3 +315,41 @@ of the video shader, is more code and more risk for the same pixels.
    mockups' letter-spacing, because iced has no tracking and reaching it would
    mean a custom text widget for a refinement rather than a structure. Sizes snap
    to the design system's scale.
+
+## 14. Responsiveness
+
+The window is resizable from roughly 900×600 to an ultrawide 3440×1440, so the
+layout is defined by breakpoints rather than by the 1440×900 mockup alone. The
+mockup is the 1440 case; every other size is derived from it.
+
+| Width | Grid columns | Hero height | Rail card | Nav |
+| --- | --- | --- | --- | --- |
+| ≥ 1760 | 7, content capped at 1760 and centred | 600 | 268 | full |
+| 1440–1759 | 6 | 530 | 240 | full |
+| 1200–1439 | 5 | 480 | 224 | full |
+| 1000–1199 | 4 | 430 | 208 | nav labels collapse to icons |
+| 900–999 | 3 | 380 | 192 | wordmark shortens to a mark |
+| < 900 | 2 | 340 | 176 | nav behind one control |
+
+Rules that hold at every size: the 40 px gutter is constant; a rail never shows a
+partially clipped *last* card — it is either fully visible or fully off; a card's
+title truncates rather than wrapping; the settings content column stops growing at
+780 px and the section list stops shrinking at 160 px; the player's control row
+drops subtitles-then-audio then volume as the width falls, never the scrub.
+
+## 15. What "premium" means as a testable bar
+
+Not an adjective. A build is premium when all of these hold, and each is checked
+on a real screenshot rather than asserted:
+
+1. **Optical alignment.** Every left edge in a screen sits on the 40 px gutter or
+   on a multiple of the card pitch. No element is off by one or two pixels.
+2. **One type rhythm.** Display sizes track tight; small labels track open; no
+   three sizes within 2 px of each other competing in one block.
+3. **Contrast at a glance.** Body and caption text clear WCAG AA on `#171717`;
+   nothing important is below `#8f8f8f`.
+4. **No orphan space.** A screen never ends in a large dead band; content either
+   fills it or the composition is deliberately centred.
+5. **Artwork is the colour.** Nothing in the chrome competes with a poster; the
+   only saturated ink anywhere is the destructive red.
+6. **Focus is unmistakable** without a ring, at every size, in a screenshot.
