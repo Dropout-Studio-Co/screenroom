@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use iced::widget::shader;
 use iced::widget::{
-    Space, button, checkbox, column, container, image, pick_list, row, scrollable, slider, stack,
-    text, text_input,
+    Id, Space, button, checkbox, column, container, image, operation, pick_list, row, scrollable,
+    slider, stack, text, text_input,
 };
 use iced::{Alignment, ContentFit, Element, Length, Subscription, Task, keyboard};
 use screenroom_core::{
@@ -419,6 +419,29 @@ pub struct App {
     quit_check: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsField {
+    ProfileName,
+    SubtitleLanguage,
+    AudioLanguage,
+    FolderPath,
+    BackupPath,
+    RestorePath,
+}
+
+impl SettingsField {
+    fn id(self) -> &'static str {
+        match self {
+            Self::ProfileName => "settings-profile-name",
+            Self::SubtitleLanguage => "settings-subtitle-language",
+            Self::AudioLanguage => "settings-audio-language",
+            Self::FolderPath => "settings-folder-path",
+            Self::BackupPath => "settings-backup-path",
+            Self::RestorePath => "settings-restore-path",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     GoHome,
@@ -512,6 +535,8 @@ pub enum Message {
     MarkSegment(String),
 
     FinishSegment,
+
+    FocusSettingsField(SettingsField),
 
     ApplySubtitleLanguage,
 
@@ -2376,6 +2401,9 @@ impl App {
                     Preferences::SUBTITLE_POSITION_MAX_PERCENT,
                 ),
             ),
+            Message::FocusSettingsField(field) => {
+                return operation::focus(Id::new(field.id()));
+            }
             Message::ApplySubtitleLanguage => self.apply_language(true),
             Message::ApplyAudioLanguage => self.apply_language(false),
             Message::BackupPathChanged(value) => self.backup_path = value,
@@ -3418,6 +3446,7 @@ impl App {
             .push(
                 row![
                     text_input("New profile name", &self.new_profile)
+                        .id(SettingsField::ProfileName.id())
                         .on_input(Message::NewProfileChanged)
                         .on_submit(Message::AddProfile)
                         .style(design::input_style())
@@ -3450,7 +3479,7 @@ impl App {
             note("Only a segment you marked is skipped; an intro is never guessed."),
             row![
                 text("Subtitle language".to_string()).size(tokens.type_scale.label),
-                text_input("e.g. en", &self.subtitle_input)
+                text_input("e.g. en", &self.subtitle_input).id(SettingsField::SubtitleLanguage.id())
                     .on_input(Message::SubtitleLanguageChanged)
                     .on_submit(Message::ApplySubtitleLanguage)
                     .style(design::input_style())
@@ -3465,7 +3494,7 @@ impl App {
             .align_y(Alignment::Center),
             row![
                 text("Audio language".to_string()).size(tokens.type_scale.label),
-                text_input("e.g. en", &self.audio_input)
+                text_input("e.g. en", &self.audio_input).id(SettingsField::AudioLanguage.id())
                     .on_input(Message::AudioLanguageChanged)
                     .on_submit(Message::ApplyAudioLanguage)
                     .style(design::input_style())
@@ -3599,7 +3628,7 @@ impl App {
                             .on_press(Message::ChooseRelinkFolder)
                             .style(design::quiet_style(false))
                             .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                        text_input("New location, for example /Volumes/Media", &self.relink_path)
+                        text_input("New location, for example /Volumes/Media", &self.relink_path).id(SettingsField::FolderPath.id())
                             .on_input(Message::RelinkPathChanged)
                             .on_submit(Message::RelinkSource)
                             .style(design::input_style())
@@ -3627,6 +3656,7 @@ impl App {
                     .style(design::quiet_style(false))
                     .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
                 text_input("Backup file path", &self.backup_path)
+                    .id(SettingsField::BackupPath.id())
                     .on_input(Message::BackupPathChanged)
                     .on_submit(Message::BackupNow)
                     .style(design::input_style())
@@ -3647,6 +3677,7 @@ impl App {
                     .style(design::quiet_style(false))
                     .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
                 text_input("Backup file to restore from", &self.restore_path)
+                    .id(SettingsField::RestorePath.id())
                     .on_input(Message::RestorePathChanged)
                     .on_submit(Message::InspectRestore)
                     .style(design::input_style())
@@ -3723,6 +3754,17 @@ impl App {
 
     fn settings_actions(&self) -> Vec<(String, Message)> {
         let mut actions: Vec<(String, Message)> = Vec::new();
+        let scale_step = 10;
+        let larger = (self.preferences.subtitle_scale_percent + scale_step)
+            .min(Preferences::SUBTITLE_SCALE_MAX_PERCENT);
+        let smaller = self
+            .preferences
+            .subtitle_scale_percent
+            .saturating_sub(scale_step)
+            .max(Preferences::SUBTITLE_SCALE_MIN_PERCENT);
+        let higher = (self.preferences.subtitle_position_percent + 5)
+            .min(Preferences::SUBTITLE_POSITION_MAX_PERCENT);
+        let lower = self.preferences.subtitle_position_percent.saturating_sub(5);
         for profile in &self.profiles {
             if profile.id != self.profile_id {
                 actions.push((
@@ -3746,6 +3788,46 @@ impl App {
                 "Skip marked intros automatically".to_string()
             },
             Message::ToggleAutoSkip(!self.preferences.auto_skip_intro),
+        ));
+        actions.push((
+            format!("Larger subtitles ({larger}%)"),
+            Message::SubtitleScale(f64::from(larger)),
+        ));
+        actions.push((
+            format!("Smaller subtitles ({smaller}%)"),
+            Message::SubtitleScale(f64::from(smaller)),
+        ));
+        actions.push((
+            format!("Subtitles higher ({higher}%)"),
+            Message::SubtitlePosition(f64::from(higher)),
+        ));
+        actions.push((
+            format!("Subtitles lower ({lower}%)"),
+            Message::SubtitlePosition(f64::from(lower)),
+        ));
+        actions.push((
+            "Type the profile name".to_string(),
+            Message::FocusSettingsField(SettingsField::ProfileName),
+        ));
+        actions.push((
+            "Type the subtitle language".to_string(),
+            Message::FocusSettingsField(SettingsField::SubtitleLanguage),
+        ));
+        actions.push((
+            "Type the audio language".to_string(),
+            Message::FocusSettingsField(SettingsField::AudioLanguage),
+        ));
+        actions.push((
+            "Type the folder path".to_string(),
+            Message::FocusSettingsField(SettingsField::FolderPath),
+        ));
+        actions.push((
+            "Type the backup file path".to_string(),
+            Message::FocusSettingsField(SettingsField::BackupPath),
+        ));
+        actions.push((
+            "Type the restore file path".to_string(),
+            Message::FocusSettingsField(SettingsField::RestorePath),
         ));
         actions.push((
             "Apply the subtitle language".to_string(),

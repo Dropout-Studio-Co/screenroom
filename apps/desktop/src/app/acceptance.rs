@@ -1189,6 +1189,14 @@ fn settings_are_operable_without_a_pointer() {
         "Enter must run the focused Settings action instead of doing nothing"
     );
 
+    let scale_before = app.preferences.subtitle_scale_percent;
+    app.settings_focus = autoplay + 2;
+    let _ = app.update(key("enter"));
+    assert!(
+        app.preferences.subtitle_scale_percent > scale_before,
+        "a keyboard action must raise the subtitle size without a pointer"
+    );
+
     app.settings_focus = 0;
     let _ = app.update(key("down"));
     assert_eq!(app.settings_focus, 1, "Down moves to the next action");
