@@ -12,9 +12,9 @@ use super::artwork::MAX_ARTWORK_BYTES;
 use super::provider_http::{
     BASE_BACKOFF_MS, Clock, DEFAULT_BUDGET_PER_MINUTE, DEFAULT_MAX_ATTEMPTS, DEFAULT_TIMEOUT,
     HttpRequest, HttpTransport, MAX_BACKOFF_MS, MAX_RESPONSE_BYTES, Pacer, ProviderError, Secret,
-    Sleeper, SystemClock, TcpTransport, ThreadSleeper, encode_query_value, join_url,
-    scheme_is_carried,
+    Sleeper, SystemClock, ThreadSleeper, encode_query_value, join_url, scheme_is_carried,
 };
+use super::provider_tls::HttpsTransport;
 
 pub const TMDB_PROVIDER: &str = "tmdb";
 
@@ -433,7 +433,7 @@ impl TmdbProvider {
         );
         Self {
             config,
-            transport: Box::new(TcpTransport::default()),
+            transport: Box::new(HttpsTransport::default()),
             pacer: RefCell::new(pacer),
         }
     }
@@ -920,7 +920,10 @@ mod tests {
     fn a_read_token_becomes_a_bearer_header_rather_than_a_query_parameter() {
         let config = ProviderConfig::configured(ApiCredential::ReadToken(Secret::new("token-abc")))
             .with_base_url("http://provider.invalid/3");
-        let provider = TmdbProvider::with_system_clock(config, Box::new(TcpTransport::default()));
+        let provider = TmdbProvider::with_system_clock(
+            config,
+            Box::new(crate::library::provider_http::TcpTransport::default()),
+        );
         let request = provider.endpoint("/movie/55001", &[]);
         assert!(!request.url.contains("token-abc"));
         assert!(request.headers.iter().any(|(name, value)| {

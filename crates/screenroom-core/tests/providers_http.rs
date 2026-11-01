@@ -130,3 +130,32 @@ fn a_well_formed_chunked_answer_still_reads_in_full() {
     assert!(response.header("x-checksum").is_none());
     handle.join().expect("server thread");
 }
+
+#[test]
+fn a_declared_length_is_read_exactly_without_waiting_for_the_connection_to_close() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+    let address = listener.local_addr().expect("bound address");
+    let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+    let handle = thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut request = [0_u8; 2_048];
+            let _ = stream.read(&mut request);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello");
+            let _ = stream.flush();
+            let _ = closed_rx.recv_timeout(Duration::from_secs(5));
+            drop(stream);
+        }
+    });
+    let mut request = HttpRequest::get(format!("http://{address}/hello"));
+    request.timeout = Duration::from_secs(10);
+    let started = Instant::now();
+    let response = TcpTransport::default()
+        .send(&request)
+        .expect("a declared body");
+    let elapsed = started.elapsed();
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body, b"hello");
+    assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
+    let _ = closed_tx.send(());
+    handle.join().expect("server thread");
+}

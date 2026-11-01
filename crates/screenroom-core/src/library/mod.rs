@@ -12,6 +12,7 @@ mod provider_http;
 mod provider_metadata;
 mod provider_queue;
 mod provider_subtitles;
+mod provider_tls;
 mod provider_tmdb;
 mod recommend;
 mod settings;
@@ -59,6 +60,7 @@ pub use provider_subtitles::{
     BENGALI_CODES, DownloadedSubtitle, OpenSubtitlesProvider, SubtitleMatch, SubtitleProvider,
     SubtitleProviderConfig, SubtitleSearch, subtitle_language_codes, subtitle_language_name,
 };
+pub use provider_tls::{HttpsTransport, MAX_REDIRECTS};
 pub use provider_tmdb::{
     ApiCredential, CatalogueEpisode, CatalogueMatch, CatalogueMetadataProvider, CatalogueSeason,
     CatalogueSeasonSummary, CatalogueSeries, CatalogueWork, ImageSize, MetadataQuery,

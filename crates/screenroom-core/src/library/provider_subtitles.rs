@@ -10,9 +10,9 @@ use serde_json::{Value, json};
 use super::provider_http::{
     BASE_BACKOFF_MS, Clock, DEFAULT_BUDGET_PER_MINUTE, DEFAULT_MAX_ATTEMPTS, DEFAULT_TIMEOUT,
     HttpRequest, HttpTransport, MAX_BACKOFF_MS, MAX_RESPONSE_BYTES, Pacer, ProviderError, Secret,
-    Sleeper, SystemClock, TcpTransport, ThreadSleeper, encode_query_value, join_url,
-    scheme_is_carried,
+    Sleeper, SystemClock, ThreadSleeper, encode_query_value, join_url, scheme_is_carried,
 };
+use super::provider_tls::HttpsTransport;
 use super::provider_tmdb::ProviderCapability;
 use super::subtitles::{MAX_SUBTITLE_BYTES, SUBTITLE_EXTENSIONS, StoredSubtitle};
 use super::{Library, new_id};
@@ -339,7 +339,7 @@ impl OpenSubtitlesProvider {
         );
         Self {
             config,
-            transport: Box::new(TcpTransport::default()),
+            transport: Box::new(HttpsTransport::default()),
             pacer: RefCell::new(pacer),
         }
     }

@@ -1070,7 +1070,9 @@ fn a_whole_library_pass_rearms_an_exhausted_task() {
 
 #[test]
 fn capability_fails_closed_when_the_base_address_needs_a_transport_it_does_not_have() {
-    let capability = TmdbProvider::new(https_config()).capability();
+    let capability =
+        TmdbProvider::with_system_clock(https_config(), Box::new(TcpTransport::default()))
+            .capability();
     assert!(!capability.is_configured());
     assert!(capability.detail.contains("https"), "{}", capability.detail);
     assert_eq!(capability.provider, "tmdb");

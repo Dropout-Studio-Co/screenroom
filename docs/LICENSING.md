@@ -1,6 +1,6 @@
 # Licensing and redistribution policy
 
-Checked 2026-10-26 against the resolved dependency graph on this host. This records
+Checked 2026-11-02 against the resolved dependency graph on this host. This records
 evidence and release requirements. It grants no new rights in third-party code,
 brands, codecs, media or private design material.
 
@@ -11,21 +11,21 @@ per the ROOT `LICENSE` file. Third-party files keep their own notices.
 
 ## Resolved Rust dependency graph
 
-`cargo metadata --format-version 1` reports **408 packages** in the desktop
-workspace. License expression distribution:
+`cargo metadata --format-version 1` reports **550 packages** in the desktop
+workspace. License expression distribution (top rows):
 
 | License expression | Packages |
 | --- | --- |
-| MIT OR Apache-2.0 | 180 |
-| MIT | 110 |
-| Apache-2.0 OR MIT | 35 |
-| MIT/Apache-2.0 | 16 |
+| MIT OR Apache-2.0 | 230 |
+| MIT | 140 |
+| Apache-2.0 OR MIT | 42 |
+| MIT/Apache-2.0 | 22 |
+| Unicode-3.0 | 18 |
+| Zlib OR Apache-2.0 OR MIT | 15 |
 | Apache-2.0 | 14 |
-| Zlib OR Apache-2.0 OR MIT | 14 |
-| MIT OR Apache-2.0 OR Zlib | 6 |
-| Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | 6 |
-| Unlicense OR MIT | 4 |
-| Zlib | 3 |
+| MIT OR Apache-2.0 OR Zlib | 9 |
+| BSD-3-Clause | 7 |
+| ISC | 4 |
 | BSL-1.0 | 2 |
 | ISC | 2 |
 
@@ -47,6 +47,29 @@ product as long as notices are retained; it does not relicense first-party code.
 
 `uniffi` (MPL-2.0) is no longer planned: its only consumers were the iOS/Android
 apps removed by [ADR-003](ADR-003_DESKTOP_AND_TV_SCOPE.md).
+
+## Dependencies added for the online providers and for HDR
+
+Two changes in the 2026-11-02 session brought new third-party code in, and both are
+permissive and compatible with an MIT-licensed product.
+
+**TLS for the metadata and subtitle providers.** `rustls 0.23` with the `ring`
+provider, plus `rustls-pki-types`, `rustls-webpki`, `ring`, `subtle`, `zeroize`,
+`untrusted`, `getrandom` and `webpki-roots`, and `rcgen` as a test-only dependency.
+Licences: Apache-2.0 OR ISC OR MIT (`rustls`), MIT OR Apache-2.0 (most of the rest),
+ISC (`rustls-webpki`), Apache-2.0 AND ISC (`ring`), BSD-3-Clause (`subtle`), and
+**CDLA-Permissive-2.0** for `webpki-roots`, which is a data licence covering a
+certificate list rather than code. That is the first CDLA-licensed component in this
+graph; it is permissive, imposes no source obligation, and is recorded here because a
+release notice should name it.
+
+**A vendored `iced_wgpu` for the HDR swapchain.** `vendor/iced_wgpu` is upstream
+`iced_wgpu` 0.14.0, MIT as declared in its own `Cargo.toml` (upstream ships no
+separate LICENSE file), carried under a root `[patch.crates-io]` entry. Only
+`Cargo.toml` and `src/window/compositor.rs` differ, and the reasoning, the patch and
+the update procedure are in `vendor/README.md`. A redistributed binary must treat
+this fork as third-party source: keep the MIT notice and the upstream attribution,
+and ship the patched source alongside any binary release.
 
 ## Native media components: source license is not binary clearance
 

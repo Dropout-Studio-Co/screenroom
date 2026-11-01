@@ -63,7 +63,7 @@ pub enum HttpMethod {
 }
 
 impl HttpMethod {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Get => "GET",
             Self::Post => "POST",
@@ -123,7 +123,7 @@ impl HttpRequest {
         redact_url(&self.url)
     }
 
-    fn validate(&self) -> Result<(), TransportError> {
+    pub(crate) fn validate(&self) -> Result<(), TransportError> {
         if self.body.len() > self.max_bytes {
             return Err(TransportError::InvalidRequest(
                 "the request body is larger than the response budget",
@@ -232,6 +232,8 @@ pub enum TransportError {
     Timeout { after: Duration },
 
     TooLarge { limit: usize },
+
+    CertificateNotTrusted,
 }
 
 impl TransportError {
@@ -246,7 +248,7 @@ impl TransportError {
         }
     }
 
-    fn into_timeout(self, after: Duration) -> Self {
+    pub(crate) fn into_timeout(self, after: Duration) -> Self {
         match self {
             Self::Io(error)
                 if matches!(
@@ -283,6 +285,8 @@ impl fmt::Display for TransportError {
                     "the answer was larger than the {limit} byte budget"
                 )
             }
+            Self::CertificateNotTrusted => formatter
+                .write_str("the server certificate was not trusted, so the request was refused"),
         }
     }
 }
@@ -333,20 +337,20 @@ pub fn scheme_is_carried(
     }
 }
 
-struct Deadline {
+pub(crate) struct Deadline {
     start: Instant,
     timeout: Duration,
 }
 
 impl Deadline {
-    fn after(timeout: Duration) -> Self {
+    pub(crate) fn after(timeout: Duration) -> Self {
         Self {
             start: Instant::now(),
             timeout,
         }
     }
 
-    fn remaining(&self) -> Option<Duration> {
+    pub(crate) fn remaining(&self) -> Option<Duration> {
         let elapsed = self.start.elapsed();
         if elapsed >= self.timeout {
             return None;
@@ -398,18 +402,26 @@ impl TcpTransport {
     }
 }
 
-struct HttpTarget {
-    host: String,
-    port: u16,
-    path: String,
+pub(crate) struct HttpTarget {
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    pub(crate) path: String,
 }
 
 fn parse_target(url: &str) -> Result<HttpTarget, TransportError> {
+    parse_target_with(url, "http", 80)
+}
+
+pub(crate) fn parse_target_with(
+    url: &str,
+    required_scheme: &str,
+    default_port: u16,
+) -> Result<HttpTarget, TransportError> {
     if url.chars().any(|character| character.is_control()) {
         return Err(TransportError::InvalidUrl);
     }
     let (scheme, rest) = url.split_once("://").ok_or(TransportError::InvalidUrl)?;
-    if !scheme.eq_ignore_ascii_case("http") {
+    if !scheme.eq_ignore_ascii_case(required_scheme) {
         return Err(TransportError::UnsupportedScheme(
             scheme.to_ascii_lowercase(),
         ));
@@ -428,7 +440,7 @@ fn parse_target(url: &str) -> Result<HttpTarget, TransportError> {
                 .map_err(|_| TransportError::InvalidUrl)?;
             (host.to_string(), port)
         }
-        None => (authority.to_string(), 80),
+        None => (authority.to_string(), default_port),
     };
     if host.is_empty() {
         return Err(TransportError::InvalidUrl);
@@ -511,7 +523,10 @@ fn read_chunked(reader: &mut impl BufRead, limit: usize) -> Result<Vec<u8>, Tran
     }
 }
 
-fn read_response(reader: &mut impl BufRead, limit: usize) -> Result<HttpResponse, TransportError> {
+pub(crate) fn read_response(
+    reader: &mut impl BufRead,
+    limit: usize,
+) -> Result<HttpResponse, TransportError> {
     let status_line = read_line_bounded(reader, 4_096)?;
     let mut parts = status_line.split_whitespace();
     let protocol = parts.next().unwrap_or("");
@@ -547,8 +562,19 @@ fn read_response(reader: &mut impl BufRead, limit: usize) -> Result<HttpResponse
         name.eq_ignore_ascii_case("transfer-encoding")
             && value.to_ascii_lowercase().contains("chunked")
     });
+    let content_length = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, value)| value.trim().parse::<usize>().ok());
     let body = if chunked {
         read_chunked(reader, limit)?
+    } else if let Some(length) = content_length {
+        if length > limit {
+            return Err(TransportError::TooLarge { limit });
+        }
+        let mut body = vec![0_u8; length];
+        reader.read_exact(&mut body)?;
+        body
     } else {
         read_bounded(reader, limit)?
     };

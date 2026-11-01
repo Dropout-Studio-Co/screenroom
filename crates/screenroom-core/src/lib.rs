@@ -23,14 +23,14 @@ pub use library::{
     ConversionJob, ConversionPlan, ConversionProfile, ConversionStatus, DownloadedSubtitle,
     EnrichmentDrainReport, EnrichmentQueueDepth, EnrichmentState, EnrichmentSummary,
     EnrichmentTarget, EnrichmentTask, HttpMethod, HttpRequest, HttpResponse, HttpTransport,
-    ImageSize, Ingest, Library, LibraryQuery, METADATA_ORIGIN_PROVIDER, MetadataOrigin,
-    MetadataPatch, MetadataQuery, MetadataSnapshot, OpenSubtitlesProvider, OutputFacts,
-    PathSemantics, Preferences, ProviderCapability, ProviderConfig, ProviderError, ProviderImage,
-    ReconcileDecision, ReconcileMode, RestoreReport, Secret, Sleeper, Sort, StoredSubtitle,
-    SubtitleMatch, SubtitleProvider, SubtitleProviderConfig, SubtitleSearch, SystemClock,
-    TMDB_PROVIDER, TcpTransport, ThreadSleeper, TmdbProvider, TransportError, UnprobedFile,
-    describe_enrichment_target, reconcile, replacement_allowed, subtitle_language_codes,
-    subtitle_language_name, verify_output,
+    HttpsTransport, ImageSize, Ingest, Library, LibraryQuery, MAX_REDIRECTS,
+    METADATA_ORIGIN_PROVIDER, MetadataOrigin, MetadataPatch, MetadataQuery, MetadataSnapshot,
+    OpenSubtitlesProvider, OutputFacts, PathSemantics, Preferences, ProviderCapability,
+    ProviderConfig, ProviderError, ProviderImage, ReconcileDecision, ReconcileMode, RestoreReport,
+    Secret, Sleeper, Sort, StoredSubtitle, SubtitleMatch, SubtitleProvider, SubtitleProviderConfig,
+    SubtitleSearch, SystemClock, TMDB_PROVIDER, TcpTransport, ThreadSleeper, TmdbProvider,
+    TransportError, UnprobedFile, describe_enrichment_target, reconcile, replacement_allowed,
+    subtitle_language_codes, subtitle_language_name, verify_output,
 };
 pub use paths::{PathStyle, location_key};
 pub use scanner::{

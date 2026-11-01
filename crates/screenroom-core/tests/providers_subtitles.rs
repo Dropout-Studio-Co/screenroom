@@ -5,7 +5,7 @@ use std::rc::Rc;
 use screenroom_core::{
     Clock, DownloadedSubtitle, HttpMethod, HttpRequest, HttpResponse, HttpTransport, Ingest,
     Library, LibraryQuery, MediaKind, OpenSubtitlesProvider, SubtitleProvider,
-    SubtitleProviderConfig, SubtitleSearch, TransportError, parse_filename,
+    SubtitleProviderConfig, SubtitleSearch, TcpTransport, TransportError, parse_filename,
     subtitle_language_codes, subtitle_language_name,
 };
 use tempfile::TempDir;
@@ -600,7 +600,9 @@ fn a_download_link_to_the_configured_provider_host_is_allowed() {
 
 #[test]
 fn subtitle_capability_fails_closed_when_the_base_address_needs_a_transport_it_does_not_have() {
-    let capability = OpenSubtitlesProvider::new(https_config()).capability();
+    let capability =
+        OpenSubtitlesProvider::with_system_clock(https_config(), Box::new(TcpTransport::default()))
+            .capability();
     assert!(!capability.is_configured());
     assert!(capability.detail.contains("https"), "{}", capability.detail);
     assert_eq!(capability.provider, "opensubtitles");
