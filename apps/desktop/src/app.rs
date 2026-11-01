@@ -441,6 +441,11 @@ pub struct App {
 
     backup_path: String,
 
+    bookmarks: Vec<screenroom_core::Bookmark>,
+    bookmark_label: String,
+    bookmark_address: String,
+    bookmark_access: String,
+
     restore_path: String,
     armed_restore: Option<String>,
 
@@ -487,6 +492,9 @@ pub enum SettingsField {
     BackupPath,
     RestorePath,
     ConversionFolder,
+    BookmarkLabel,
+    BookmarkAddress,
+    BookmarkAccess,
 }
 
 impl SettingsField {
@@ -499,6 +507,9 @@ impl SettingsField {
             Self::BackupPath => "settings-backup-path",
             Self::RestorePath => "settings-restore-path",
             Self::ConversionFolder => "settings-conversion-folder",
+            Self::BookmarkLabel => "settings-bookmark-label",
+            Self::BookmarkAddress => "settings-bookmark-address",
+            Self::BookmarkAccess => "settings-bookmark-access",
         }
     }
 }
@@ -562,6 +573,18 @@ pub enum Message {
     ChooseBackupPath,
 
     ChooseRestoreFile,
+
+    BookmarkLabelChanged(String),
+
+    BookmarkAddressChanged(String),
+
+    BookmarkAccessChanged(String),
+
+    AddBookmark,
+
+    RemoveBookmark(String),
+
+    OpenBookmark(String),
 
     CancelScan,
 
@@ -826,6 +849,10 @@ impl App {
             relink_target: None,
             relink_path: String::new(),
             backup_path: default_backup_path(),
+            bookmarks: Vec::new(),
+            bookmark_label: String::new(),
+            bookmark_address: String::new(),
+            bookmark_access: String::new(),
             restore_path: String::new(),
             armed_restore: None,
             conversion_folder,
@@ -892,6 +919,65 @@ impl App {
         match self.library.recent_conversions(8) {
             Ok(jobs) => self.conversions = jobs,
             Err(error) => self.report(&error),
+        }
+        self.reload_bookmarks();
+    }
+
+    fn reload_bookmarks(&mut self) {
+        match self.library.bookmarks() {
+            Ok(bookmarks) => self.bookmarks = bookmarks,
+            Err(error) => self.report(&error),
+        }
+    }
+
+    fn add_bookmark(&mut self) {
+        let draft = screenroom_core::BookmarkDraft {
+            label: self.bookmark_label.clone(),
+            address: self.bookmark_address.clone(),
+            access: self.bookmark_access.clone(),
+        };
+        match self.library.add_bookmark(&draft) {
+            Ok(bookmark) => {
+                self.bookmark_label.clear();
+                self.bookmark_address.clear();
+                self.bookmark_access.clear();
+                self.reload_bookmarks();
+                self.status = Some(format!("Saved {}.", bookmark.label));
+            }
+            Err(error) => self.report(&error),
+        }
+    }
+
+    fn remove_bookmark(&mut self, id: &str) {
+        match self.library.remove_bookmark(id) {
+            Ok(true) => {
+                self.reload_bookmarks();
+                self.status = Some("Saved source removed.".to_string());
+            }
+            Ok(false) => {}
+            Err(error) => self.report(&error),
+        }
+    }
+
+    fn open_bookmark(&mut self, id: &str) {
+        let Some(bookmark) = self
+            .bookmarks
+            .iter()
+            .find(|bookmark| bookmark.id == id)
+            .cloned()
+        else {
+            return;
+        };
+        match crate::external::open_url(&bookmark.address) {
+            Ok(()) => {
+                self.status = Some(format!("Handed {} to your browser.", bookmark.label));
+            }
+            Err(error) => {
+                self.error = Some(format!(
+                    "Could not hand {} to the system: {error}",
+                    bookmark.label
+                ));
+            }
         }
     }
 
@@ -2938,6 +3024,12 @@ impl App {
             Message::ApplySubtitleLanguage => self.apply_language(true),
             Message::ApplyAudioLanguage => self.apply_language(false),
             Message::BackupPathChanged(value) => self.backup_path = value,
+            Message::BookmarkLabelChanged(value) => self.bookmark_label = value,
+            Message::BookmarkAddressChanged(value) => self.bookmark_address = value,
+            Message::BookmarkAccessChanged(value) => self.bookmark_access = value,
+            Message::AddBookmark => self.add_bookmark(),
+            Message::RemoveBookmark(id) => self.remove_bookmark(&id),
+            Message::OpenBookmark(id) => self.open_bookmark(&id),
             Message::BackupNow => self.backup_now(),
             Message::RestorePathChanged(value) => {
                 self.restore_path = value;
@@ -4214,6 +4306,79 @@ impl App {
                 ));
         }
 
+        let mut saved: iced::widget::Column<'_, Message> = column![
+            note(
+                "Your own list of places you may look for a film. Screenroom saves the address \
+                 and what you say about it. It never visits, scrapes or downloads anything, and \
+                 nothing here has been verified from this machine.",
+            ),
+            row![
+                text_input("Name, for example an ISP portal", &self.bookmark_label)
+                    .id(SettingsField::BookmarkLabel.id())
+                    .on_input(Message::BookmarkLabelChanged)
+                    .style(design::input_style())
+                    .padding(tokens.spacing.field_y)
+                    .width(Length::Fill),
+                text_input("https://…", &self.bookmark_address)
+                    .id(SettingsField::BookmarkAddress.id())
+                    .on_input(Message::BookmarkAddressChanged)
+                    .on_submit(Message::AddBookmark)
+                    .style(design::input_style())
+                    .padding(tokens.spacing.field_y)
+                    .width(Length::Fill),
+            ]
+            .spacing(tokens.spacing.field_x),
+            row![
+                text_input(
+                    "Access note, optional: account, ISP, plan",
+                    &self.bookmark_access
+                )
+                .id(SettingsField::BookmarkAccess.id())
+                .on_input(Message::BookmarkAccessChanged)
+                .style(design::input_style())
+                .padding(tokens.spacing.field_y)
+                .width(Length::Fill),
+                button(text("Save source").size(tokens.type_scale.label))
+                    .on_press(Message::AddBookmark)
+                    .style(design::action_style(false))
+                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+            ]
+            .spacing(tokens.spacing.field_x)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(tokens.spacing.field_y);
+        if self.bookmarks.is_empty() {
+            saved = saved.push(note("No source saved yet."));
+        }
+        for bookmark in &self.bookmarks {
+            let mut facts = vec![bookmark.protocol.clone()];
+            if !bookmark.access.is_empty() {
+                facts.push(bookmark.access.clone());
+            }
+            facts.push(bookmark.address.clone());
+            saved = saved.push(
+                row![
+                    column![
+                        text(bookmark.label.clone()).size(tokens.type_scale.body),
+                        note(&facts.join(" · ")),
+                        note(&bookmark.provenance),
+                    ]
+                    .spacing(tokens.spacing.field_y / 2.0)
+                    .width(Length::Fill),
+                    button(text("Open").size(tokens.type_scale.label))
+                        .on_press(Message::OpenBookmark(bookmark.id.clone()))
+                        .style(design::action_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                    button(text("Remove").size(tokens.type_scale.label))
+                        .on_press(Message::RemoveBookmark(bookmark.id.clone()))
+                        .style(design::danger_style(false))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                ]
+                .spacing(tokens.spacing.field_x)
+                .align_y(Alignment::Center),
+            );
+        }
+
         let restore_armed = self.armed_restore.is_some();
         let data = column![
             text("Back up".to_string()).size(tokens.type_scale.label),
@@ -4293,6 +4458,8 @@ impl App {
             panel(playback.into()),
             heading("Folders"),
             panel(folders.into()),
+            heading("Saved sources"),
+            panel(saved.into()),
             heading("Data"),
             panel(data.into()),
             heading("Conversion"),
@@ -4426,6 +4593,29 @@ impl App {
             actions.push((
                 format!("Rescan {}", source.label),
                 Message::RescanSource(source.id.clone()),
+            ));
+        }
+        actions.push((
+            "Type the saved source's name".to_string(),
+            Message::FocusSettingsField(SettingsField::BookmarkLabel),
+        ));
+        actions.push((
+            "Type the saved source's address".to_string(),
+            Message::FocusSettingsField(SettingsField::BookmarkAddress),
+        ));
+        actions.push((
+            "Type the saved source's access note".to_string(),
+            Message::FocusSettingsField(SettingsField::BookmarkAccess),
+        ));
+        actions.push(("Save that source".to_string(), Message::AddBookmark));
+        for bookmark in &self.bookmarks {
+            actions.push((
+                format!("Open {}", bookmark.label),
+                Message::OpenBookmark(bookmark.id.clone()),
+            ));
+            actions.push((
+                format!("Remove {}", bookmark.label),
+                Message::RemoveBookmark(bookmark.id.clone()),
             ));
         }
         actions.push(("Back up now".to_string(), Message::BackupNow));

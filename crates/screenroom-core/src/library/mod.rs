@@ -1,5 +1,6 @@
 mod artwork;
 mod backup;
+mod bookmarks;
 mod catalog;
 mod conversion;
 mod lists;
@@ -25,6 +26,7 @@ use crate::{SCHEMA_VERSION, schema};
 
 pub use artwork::{Artwork, ArtworkCandidate};
 pub use backup::{BackupInfo, BackupReport, RestoreReport};
+pub use bookmarks::{Bookmark, BookmarkDraft, protocol_of};
 pub use catalog::Ingest;
 pub use conversion::{
     ConversionJob, ConversionPlan, ConversionProfile, ConversionStatus, OutputFacts, verify_output,
@@ -132,6 +134,20 @@ impl std::fmt::Debug for Library {
     }
 }
 
+fn add_bookmarks_table(tx: &Connection) -> Result<()> {
+    let present: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'source_bookmarks'",
+        [],
+        |row| row.get(0),
+    )?;
+    if present == 0 {
+        for statement in schema::MIGRATE_6_TO_7 {
+            tx.execute(statement, [])?;
+        }
+    }
+    Ok(())
+}
+
 fn add_metadata_origin(tx: &Connection) -> Result<()> {
     let mut statement = tx.prepare("PRAGMA table_info(works)")?;
     let columns = statement
@@ -219,6 +235,7 @@ impl Library {
                     tx.execute(statement, [])?;
                 }
                 add_metadata_origin(&tx)?;
+                add_bookmarks_table(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -231,6 +248,7 @@ impl Library {
                     tx.execute(statement, [])?;
                 }
                 add_metadata_origin(&tx)?;
+                add_bookmarks_table(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -240,12 +258,20 @@ impl Library {
                     tx.execute(statement, [])?;
                 }
                 add_metadata_origin(&tx)?;
+                add_bookmarks_table(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
             5 => {
                 let tx = connection.transaction()?;
                 add_metadata_origin(&tx)?;
+                add_bookmarks_table(&tx)?;
+                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+                tx.commit()?;
+            }
+            6 => {
+                let tx = connection.transaction()?;
+                add_bookmarks_table(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }

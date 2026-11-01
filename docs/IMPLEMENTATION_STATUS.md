@@ -1346,3 +1346,38 @@ done.
 - **Not proven:** no sidecar has been read from the owner's own library, because
   none of its files has an NFO beside it yet; the genre dropdown has not been
   looked at in a window.
+
+## F23 and F24 — an owner-written source directory and an honest handoff (2026-11-01)
+
+**Implemented on macOS, verified headlessly. The directory itself stays BLOCKED.**
+
+- ADR-011 records the blocker plainly: no verified nationwide list of Bangladeshi
+  sources, no operator permission, no measured ISP reachability. Rather than seed
+  a list I cannot verify, the app now implements the part that is legitimate — a
+  directory the owner writes themselves, which is exactly what ADR-011 asks for
+  ("start from owner-added bookmarks and verifiable evidence only").
+- `crates/screenroom-core/src/library/bookmarks.rs` stores a bookmark with its
+  protocol and a fixed provenance sentence. Only `https`, `http` and `ftp` are
+  accepted; an address with a space, a control character, `file:`, `magnet:` or
+  `javascript:` is refused with a reason, and a duplicate address is refused
+  rather than silently merged. Name, address and access note are all bounded.
+  Schema 7 adds `source_bookmarks` additively, guarded by a table check so a
+  database that already has it migrates cleanly.
+- Settings → *Saved sources* is the whole interface: three typed fields, a
+  *Save source* action, and a row per source showing name, protocol, access
+  note, address and provenance with *Open* and *Remove*. Every typed field and
+  every row action is also in the keyboard action list, so nothing here needs a
+  pointer — this is the F21 rule applied to the new controls.
+- The handoff (`apps/desktop/src/external.rs`) spawns the system opener with the
+  address as a single argument — no shell, no interpolation — and refuses
+  anything that is not a web or ftp address before spawning. `SCREENROOM_OPEN_LOG`
+  records the exact address to a file in tests, so the handoff is proven without
+  opening a browser or touching the owner's desktop.
+- **Tests added:** five bookmark tests (saving with protocol and provenance,
+  refused schemes and spaces, duplicate and bounds, removal, schema 6 → 7 with a
+  kept row), two handoff tests (refusals, the log hook), and `step_19`.
+- **Not proven, and not claimed:** no source in this build has been checked for
+  reachability, catalogue, cost, legality or ISP exclusivity; there is no
+  bundled list, no floating "verified" badge and no automatic probe. The panel
+  has not been looked at in a window. Embedded BitTorrent remains the separate
+  decision the PRD says it is, and is not implemented.

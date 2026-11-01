@@ -78,6 +78,8 @@ pub const CREATE: &[&str] = &[
 
     CONVERSION_JOBS,
 
+    SOURCE_BOOKMARKS,
+
     "CREATE INDEX IF NOT EXISTS editions_work ON editions(work_id)",
     "CREATE INDEX IF NOT EXISTS files_edition ON files(edition_id)",
     "CREATE INDEX IF NOT EXISTS file_episodes_episode ON file_episodes(episode_id)",
@@ -93,6 +95,10 @@ pub const MIGRATE_4_TO_5: &[&str] = &[
 
 pub const MIGRATE_5_TO_6: &[&str] =
     &["ALTER TABLE works ADD COLUMN metadata_origin TEXT NOT NULL DEFAULT 'legacy'"];
+
+pub const SOURCE_BOOKMARKS: &str = "CREATE TABLE IF NOT EXISTS source_bookmarks(id TEXT PRIMARY KEY,\n      label TEXT NOT NULL,address TEXT NOT NULL,protocol TEXT NOT NULL,\n      access TEXT NOT NULL DEFAULT '',provenance TEXT NOT NULL DEFAULT '',\n      added_ms INTEGER NOT NULL,UNIQUE(address))";
+
+pub const MIGRATE_6_TO_7: &[&str] = &[SOURCE_BOOKMARKS];
 
 pub const MIGRATE_3_TO_4: &[&str] = &[
     CREATE[CREATE.len() - 4],

@@ -1444,3 +1444,37 @@ fn step_18_a_local_nfo_gives_a_film_its_real_title_and_the_browse_filter_real_ge
     assert_eq!(detail.item.genres, vec!["Drama".to_string()]);
     assert_eq!(detail.item.metadata_origin, "nfo");
 }
+
+#[test]
+fn step_19_a_saved_source_keeps_its_provenance_and_refuses_a_bad_address() {
+    let mut app = fresh_app();
+    app.bookmark_label = "ISP portal".to_string();
+    app.bookmark_address = "https://example.org/media".to_string();
+    app.bookmark_access = "needs the home connection".to_string();
+    let _ = app.update(Message::AddBookmark);
+
+    assert_eq!(app.bookmarks.len(), 1, "the source was not saved");
+    let saved = app.bookmarks[0].clone();
+    assert_eq!(saved.protocol, "HTTPS");
+    assert_eq!(saved.access, "needs the home connection");
+    assert!(
+        saved
+            .provenance
+            .contains("nothing about it has been verified"),
+        "provenance must admit it is unverified, got {:?}",
+        saved.provenance
+    );
+    assert!(
+        app.bookmark_label.is_empty(),
+        "the fields are cleared after saving"
+    );
+
+    app.bookmark_label = "Local folder".to_string();
+    app.bookmark_address = "file:///Volumes/bleh".to_string();
+    let _ = app.update(Message::AddBookmark);
+    assert_eq!(app.bookmarks.len(), 1, "an unusable address was saved");
+    assert!(app.error.is_some(), "the refusal must be reported");
+
+    let _ = app.update(Message::RemoveBookmark(saved.id));
+    assert!(app.bookmarks.is_empty());
+}
