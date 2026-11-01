@@ -1702,3 +1702,50 @@ reported `routed` from the bundle binary itself, and the same bundle reported
 `.artifacts/evidence/walk/`. The window did hold focus for the duration, which is what
 was asked for, and the frontmost application was `Finder` afterwards rather than the
 one that had it before.
+
+### Two intermittent failures fixed, and the zero-copy path proven (2026-11-01)
+
+Both failures that had been written off as load sensitivity were real, and both
+were in the application rather than in the test harness.
+
+**`step_20_…_mini_player…` — a short viewing stored 0 ms.** `PlaybackTracker`
+throttles checkpoints to one write per second, and the two stopping paths (leaving
+the player, closing the mini player / quitting) went through the same throttle. A
+viewing shorter than a second therefore kept only its first checkpoint, which lands
+at 0 ms, and `Continue Watching` resumed from the beginning. `record` now takes a
+`force` flag that the stopping paths set, so the place actually reached is written
+whatever the interval says. `stopping_a_viewing_stores_where_it_reached_even_inside_the_throttle`
+holds it down.
+
+**`tracks_are_enumerated_and_can_be_switched` — a track list with nothing
+selected.** The metadata refresh ran on `FILE_LOADED`, which can arrive before
+libmpv resolves its default audio selection, so the published list showed two audio
+tracks and none selected; if no further `track-list` change arrived, it stayed that
+way. The refresh now waits for `PLAYBACK_RESTART`, reads a list with no selection up
+to six times until it settles (mpv resolves it within milliseconds of playback
+starting), and keeps the previous list rather than publishing an unresolved one. A
+deliberate "no audio" choice is remembered per kind so it is not mistaken for an
+unresolved one.
+
+Evidence: the failure reproduced 6 of 6 runs of the player suite at
+`--test-threads=22` before the change and 0 of 6 after; `step_20` failed on every
+`cargo test --workspace` before and passed on three consecutive full runs after
+(358 tests, 0 failures each). `cargo fmt --all --check`, `cargo clippy --workspace
+--all-targets -D warnings` and `python3 scripts/no_comments.py check` are clean.
+
+**The GPU path is proven in isolation.** `examples/gl-path-probe/probe.m` renders
+decoded frames through `MPV_RENDER_API_TYPE_OPENGL` into an `IOSurface` and reads
+them back through a Metal texture created from that same surface: identical bytes,
+no CPU copy. On generated 3840×2160 fixtures it delivers 22.91–23.74 fps at 26.7–32.1 %
+CPU, against 18.7–22.0 fps at 116–186 % for the shipped software path. What it does
+not prove — presentation through iced/wgpu, synchronisation without a per-frame
+`glFinish`, HDR, and the owner's own file — is stated in `HWDEC_EVIDENCE.md` and
+carried as P1-01/P1-02/P1-03/P1-11 in [`MACOS_REMAINING_WORK.md`](MACOS_REMAINING_WORK.md).
+
+That document is now the canonical backlog: 25 functional requirements, 10 quality
+requirements and the 15 acceptance steps, each with its status, its evidence, its
+blocker and what would close it. It is the place to start the next session.
+
+`preferred_bridge()` was also corrected: it answered `OpenGl` on every non-Windows
+host while the player renders through libmpv's software API. It is now
+`render_bridge()` and answers `Software`, which is what the code does.
