@@ -217,13 +217,23 @@ mod imp {
         unsafe { msg_send![class, sharedApplication] }
     }
 
+    unsafe fn closable(window: *mut AnyObject) -> bool {
+        if window.is_null() {
+            return false;
+        }
+        let close = Sel::register(CLOSE_SELECTOR);
+        let responds: objc2::runtime::Bool =
+            unsafe { msg_send![window, respondsToSelector: close] };
+        responds.as_bool()
+    }
+
     unsafe fn close_target(application: *mut AnyObject) -> *mut AnyObject {
         let key: *mut AnyObject = unsafe { msg_send![application, keyWindow] };
-        if !key.is_null() {
+        if unsafe { closable(key) } {
             return key;
         }
         let main: *mut AnyObject = unsafe { msg_send![application, mainWindow] };
-        if !main.is_null() {
+        if unsafe { closable(main) } {
             return main;
         }
         let windows: *mut AnyObject = unsafe { msg_send![application, windows] };
@@ -233,11 +243,7 @@ mod imp {
         let count: isize = unsafe { msg_send![windows, count] };
         for index in 0..count {
             let window: *mut AnyObject = unsafe { msg_send![windows, objectAtIndex: index] };
-            if window.is_null() {
-                continue;
-            }
-            let closable: objc2::runtime::Bool = unsafe { msg_send![window, isClosable] };
-            if closable.as_bool() {
+            if unsafe { closable(window) } {
                 return window;
             }
         }
@@ -260,11 +266,6 @@ mod imp {
     ) {
         let window = unsafe { close_target(application) };
         if window.is_null() {
-            unsafe { forward_termination(application, command) };
-            return;
-        }
-        let closable: objc2::runtime::Bool = unsafe { msg_send![window, isClosable] };
-        if !closable.as_bool() {
             unsafe { forward_termination(application, command) };
             return;
         }
