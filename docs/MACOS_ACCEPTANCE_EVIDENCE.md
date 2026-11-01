@@ -30,7 +30,7 @@ written outside temporary directories.
 cargo test -p screenroom-desktop --lib acceptance -- --test-threads=1
 ```
 
-**15 tests, 0 failures.** They are a normal part of `cargo test --workspace`, so
+**16 tests, 0 failures.** They are a normal part of `cargo test --workspace`, so
 they run on every future change instead of once.
 
 ## Result per step
@@ -60,6 +60,13 @@ or the sound was heard; that is named in the last column.
 **Tally: 7 steps fully passed automatically (1, 3, 9, 10, 11, 13, 14); 7 have
 their objective half closed and one human observation left (2, 4, 5, 6, 7, 12,
 15); 1 needs the owner and the hardware (8).**
+
+Added on 2026-11-01, after the audit's accepted limit named Settings as
+mouse-only: `settings_are_operable_without_a_pointer` drives ⌘3 → Up/Down →
+Enter against the real application and asserts that Enter toggles the focused
+action, that the cursor stops at both ends instead of running past them, and
+that Escape still leaves the screen. It found nothing broken because the action
+strip did not exist yet; it is the test for the behaviour added with it.
 
 ## Defects found and fixed
 

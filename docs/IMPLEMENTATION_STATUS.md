@@ -1115,9 +1115,13 @@ a file if libmpv sends no change after load.
   through the routed menu item, so the open session is not closed cleanly. The
   position loss is bounded by the 1 s checkpoint interval, and the stale session
   is closed on the next open.
-- **Accessibility:** iced 0.14 exposes no accessibility tree to VoiceOver, and
-  buttons take no keyboard focus, so Settings is mouse-only. Browse, Detail and
-  the player are fully keyboard-driven.
+- **Accessibility:** iced 0.14 exposes no accessibility tree to VoiceOver. Until
+  2026-11-01 buttons took no keyboard focus, so Settings was mouse-only; it now
+  carries a focused action strip — one ordered list drives what is drawn, where
+  the cursor is and what Enter runs — so every Settings action is reachable by
+  Up/Down and Enter. Typed fields (profile name, language codes, paths) and the
+  two sliders still need the pointer or typing, and the missing accessibility
+  tree is unchanged. Browse, Detail and the player stay fully keyboard-driven.
 - **Backup and restore run on the UI thread.** The real catalogue's backup is
   1.5 MB, so the pause is short; a far larger library would need them moved off
   it.

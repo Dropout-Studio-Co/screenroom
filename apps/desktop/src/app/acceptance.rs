@@ -1165,3 +1165,46 @@ fn step_15_the_journey_is_reachable_from_the_keyboard_alone() {
         "Back returns to the card the viewer left"
     );
 }
+
+#[test]
+fn settings_are_operable_without_a_pointer() {
+    let mut app = fresh_app();
+    let _ = app.update(command_key("3"));
+    assert_eq!(app.screen, Screen::Settings, "⌘3 reaches Settings");
+
+    let actions = app.settings_actions();
+    assert!(
+        actions.len() >= 4,
+        "Settings must offer actions, found {}",
+        actions.len()
+    );
+
+    let autoplay = app.profiles.len().saturating_sub(1);
+    assert!(autoplay < actions.len(), "the autoplay action must exist");
+    let before = app.preferences.autoplay_next;
+    app.settings_focus = autoplay;
+    let _ = app.update(key("enter"));
+    assert_ne!(
+        app.preferences.autoplay_next, before,
+        "Enter must run the focused Settings action instead of doing nothing"
+    );
+
+    app.settings_focus = 0;
+    let _ = app.update(key("down"));
+    assert_eq!(app.settings_focus, 1, "Down moves to the next action");
+    let _ = app.update(key("up"));
+    assert_eq!(app.settings_focus, 0, "Up returns to the first action");
+    let _ = app.update(key("up"));
+    assert_eq!(app.settings_focus, 0, "the cursor never leaves the list");
+
+    for _ in 0..24 {
+        let _ = app.update(key("down"));
+    }
+    assert!(
+        app.settings_focus + 1 == app.settings_actions().len(),
+        "repeated Down stops on the last action rather than running past it"
+    );
+
+    let _ = app.update(key("escape"));
+    assert_eq!(app.screen, Screen::Home, "Escape still leaves Settings");
+}

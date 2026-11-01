@@ -8,7 +8,7 @@ step below is ticked by the owner, its status is **PENDING**, not passed.
 
 **2026-11-01:** the mechanism under each step is now executed by
 `apps/desktop/src/app/acceptance.rs` against the real application, a real player
-and real generated media — 15 tests, part of `cargo test --workspace`. The
+and real generated media — 16 tests, part of `cargo test --workspace`. The
 `Automated` column says what that run settled and what it did not; the evidence,
 the two defects it found and the reduced manual session are in
 [`MACOS_ACCEPTANCE_EVIDENCE.md`](MACOS_ACCEPTANCE_EVIDENCE.md). An automated
@@ -42,7 +42,7 @@ every build.
 | 12 | Unplug the SSD mid-film, then plug it back in and Rescan | A clear failure, not a hang; cards show "unavailable" and keep their history; after Rescan they play again. | **PARTIAL** — folder-away keeps cards and history and a rescan recovers playback. **Pulling the cable is yours.** |
 | 13 | Settings › Back up, change something, Restore that backup (press twice) | The change is undone, and the status names the `…before-restore` safety copy. | **PASS** — change undone, safety copy named and present. |
 | 14 | Add a second profile and switch to it; quit and reopen | It reopens on that profile. Remove asks twice. | **PASS** — reopens on the profile; removal arms then removes. |
-| 15 | Keyboard only: Home → Library → open → play → Escape → Escape | Every step is reachable, and the focused card is visible and readable. | **PARTIAL** — the whole journey runs on key events alone. Readability is yours. |
+| 15 | Keyboard only: Home → Library → open → play → Escape → Escape | Every step is reachable, and the focused card is visible and readable. | **PARTIAL** — the whole journey runs on key events alone, and since 2026-11-01 ⌘3 → Settings → Up/Down → Enter also runs Settings actions. Readability is yours. |
 
 Record the result of each step (pass, fail plus what was seen) under the
 "Owner session" heading in `IMPLEMENTATION_STATUS.md`. A failed step is a defect to

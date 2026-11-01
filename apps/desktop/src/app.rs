@@ -330,6 +330,8 @@ pub struct App {
 
     focus: usize,
 
+    settings_focus: usize,
+
     home: Vec<LibraryItem>,
 
     suggestions: Vec<Recommendation>,
@@ -711,6 +713,7 @@ impl App {
             window_width: INITIAL_WINDOW_WIDTH,
             preferences,
             profiles: Vec::new(),
+            settings_focus: 0,
             sources: Vec::new(),
             new_profile: String::new(),
             relink_target: None,
@@ -2591,11 +2594,13 @@ impl App {
                 _ => {}
             },
 
-            Screen::Settings => {
-                if let Key::Named(Named::Escape) = key {
-                    self.back();
-                }
-            }
+            Screen::Settings => match key {
+                Key::Named(Named::Escape) => self.back(),
+                Key::Named(Named::Enter) => return self.run_settings_action(),
+                Key::Named(Named::ArrowUp) => self.move_settings_focus(false),
+                Key::Named(Named::ArrowDown) => self.move_settings_focus(true),
+                _ => {}
+            },
             _ => match key {
                 Key::Named(Named::Escape) => self.back(),
                 Key::Named(Named::Enter) => self.activate(),
@@ -3710,9 +3715,105 @@ impl App {
         ]
         .spacing(tokens.spacing.field_x);
 
-        scrollable(body)
+        scrollable(column![self.settings_action_strip(), body].spacing(tokens.spacing.field_x))
             .height(Length::Fill)
             .width(Length::Fill)
+            .into()
+    }
+
+    fn settings_actions(&self) -> Vec<(String, Message)> {
+        let mut actions: Vec<(String, Message)> = Vec::new();
+        for profile in &self.profiles {
+            if profile.id != self.profile_id {
+                actions.push((
+                    format!("Switch to {}", profile.name),
+                    Message::ProfileChosen(profile.id.clone()),
+                ));
+            }
+        }
+        actions.push((
+            if self.preferences.autoplay_next {
+                "Stop playing the next episode automatically".to_string()
+            } else {
+                "Play the next episode automatically".to_string()
+            },
+            Message::ToggleAutoplay(!self.preferences.autoplay_next),
+        ));
+        actions.push((
+            if self.preferences.auto_skip_intro {
+                "Stop skipping marked intros".to_string()
+            } else {
+                "Skip marked intros automatically".to_string()
+            },
+            Message::ToggleAutoSkip(!self.preferences.auto_skip_intro),
+        ));
+        actions.push((
+            "Apply the subtitle language".to_string(),
+            Message::ApplySubtitleLanguage,
+        ));
+        actions.push((
+            "Apply the audio language".to_string(),
+            Message::ApplyAudioLanguage,
+        ));
+        actions.push(("Grant a folder".to_string(), Message::AddFolder));
+        for source in &self.sources {
+            actions.push((
+                format!("Rescan {}", source.label),
+                Message::RescanSource(source.id.clone()),
+            ));
+        }
+        actions.push(("Back up now".to_string(), Message::BackupNow));
+        if !self.restore_path.trim().is_empty() {
+            actions.push((
+                "Restore from that file".to_string(),
+                Message::InspectRestore,
+            ));
+        }
+        actions
+    }
+
+    fn move_settings_focus(&mut self, down: bool) {
+        let len = self.settings_actions().len();
+        if len == 0 {
+            self.settings_focus = 0;
+            return;
+        }
+        let current = self.settings_focus.min(len - 1);
+        self.settings_focus = if down {
+            (current + 1).min(len - 1)
+        } else {
+            current.saturating_sub(1)
+        };
+    }
+
+    fn run_settings_action(&mut self) -> Task<Message> {
+        let actions = self.settings_actions();
+        let Some((_, message)) = actions.get(self.settings_focus).cloned() else {
+            return Task::none();
+        };
+        self.update(message)
+    }
+
+    fn settings_action_strip(&self) -> Element<'_, Message> {
+        let tokens = design::tokens();
+        let actions = self.settings_actions();
+        let focused = self.settings_focus.min(actions.len().saturating_sub(1));
+        let mut list = column![].spacing(tokens.spacing.field_y);
+        for (index, (label, message)) in actions.into_iter().enumerate() {
+            list = list.push(
+                button(text(label).size(tokens.type_scale.label))
+                    .on_press(message)
+                    .style(design::action_style(index == focused))
+                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+            );
+        }
+        list = list.push(
+            text("Arrows move, Enter runs the focused action. The fields below take typing.")
+                .size(tokens.type_scale.caption)
+                .color(tokens.palette.ink_muted),
+        );
+        column![settings_heading("Actions"), settings_panel(list.into()),]
+            .spacing(tokens.spacing.field_x)
             .into()
     }
 
