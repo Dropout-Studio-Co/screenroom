@@ -79,7 +79,9 @@ labels; active code and docs use Screenroom.
   TV (pnpm; tests in `apps/tv/test`). It does not run the Rust core; it follows
   the documented core contract. Device state lives in
   [`docs/TIZEN_DEVICE_HANDOFF.md`](docs/TIZEN_DEVICE_HANDOFF.md).
-- `docs/` — ADRs, architecture, roadmap, progress ledger, gates, licensing.
+- `docs/` — ADRs, architecture, roadmap, progress ledger, gates, licensing. The
+  macOS backlog is [`docs/MACOS_REMAINING_WORK.md`](docs/MACOS_REMAINING_WORK.md):
+  every outstanding requirement, its evidence, its blocker and what closes it.
 - `reference/` — preserved historical prototype and handoff. Read-only source of
   ideas; never the active build.
 
