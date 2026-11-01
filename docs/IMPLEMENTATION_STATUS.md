@@ -1381,3 +1381,35 @@ done.
   bundled list, no floating "verified" badge and no automatic probe. The panel
   has not been looked at in a window. Embedded BitTorrent remains the separate
   decision the PRD says it is, and is not implemented.
+
+## F18 — the mini player (2026-11-01)
+
+**Completed on macOS, verified headlessly. It is not system-wide PiP and says so.**
+
+- Genuine macOS Picture in Picture needs a native `AVPictureInPictureController`
+  over an `AVPlayerLayer`, which iced + libmpv do not have: the decoder presents
+  through libmpv's render API into our own wgpu surface. Rather than pretend,
+  the PRD's fallback is implemented — *"distinctly labeled mini-player where
+  feasible"* — and the panel states in its own text that it lives inside this
+  window and is not system-wide Picture in Picture.
+- `Message::ReduceToMini` keeps `self.player` and `self.active` untouched, so
+  the same decoder, the same `load_id`, the same audio and subtitle choices and
+  the same process are used; the screen returns to the one playback started
+  from. Nothing is re-opened, so there is no second decoder and no gap.
+- The docked panel shows a 320×180 picture through the same `VideoSurface`
+  shader as the full player (so aspect ratio is fitted identically), the title,
+  position/duration, a scrub bar, play/pause, ±10 s, *Full player* and *Close*.
+  A failure replaces the picture with the reason, and a silent decoder shows
+  *Preparing streams…* rather than a black box.
+- `Message::ExpandPlayer` and Alt+V return to the full player; Escape or
+  *Close* stops playback through the normal `stop_playback` path, which stores
+  the position and closes the tracker before dropping the frame. `open_player`,
+  `leave_player` and `back()` all clear the flag, and the panel is refused while
+  fullscreen, when nothing is playing, or from any screen but the player.
+- Ticks stay at the player's 60 Hz cadence while the mini player is live, so the
+  picture and the checkpoints keep moving while you browse.
+- **Tests added:** `step_20` — real clip, play, shrink, browse-tick until the
+  position advances, a frame still presented, expand with the same `load_id`,
+  shrink again, Escape closes, no frame left, and the stored position kept.
+- **Not proven:** the panel has not been looked at in a window; system-wide PiP
+  over other applications remains unimplemented and unclaimed.
