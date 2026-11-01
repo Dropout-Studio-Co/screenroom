@@ -3,7 +3,7 @@
 Live record of what exists, what was actually verified, and what is blocked.
 Future sessions resume from here instead of repeating completed work.
 
-Last updated: **2026-11-01**, host **macOS ARM64 (Apple silicon), Command Line
+Last updated: **2026-11-02**, host **macOS ARM64 (Apple silicon), Command Line
 Tools only, no full Xcode**.
 
 **Scope (2026-10-26, [ADR-003](ADR-003_DESKTOP_AND_TV_SCOPE.md)):** desktop/laptop
@@ -1985,3 +1985,99 @@ scanner does not retry them forever. **The owner may want to re-download those t
 **Poster extraction works on real media at real aspect ratios**: 1280×720 for a 16:9
 film, 1440×720 for the 2:1 film, 1330×720 for the 1.85:1 film, each stored and
 re-decoded by ffprobe.
+
+## The interface rebuild (2026-11-02)
+
+**Status: rebuilt, unit-tested and captured; the owner's look is PENDING.** The
+full description, the breakpoint table and the verification commands are in
+[`UI_REBUILD.md`](UI_REBUILD.md). This is the receipt.
+
+The view layer was replaced; nothing below it moved. `app.rs` still owns the
+library, scanning, the player, conversion, casting, providers, preferences and
+checkpoints, the Rust core and the TV client are untouched, and behaviour parity
+was a hard gate: no test was deleted, and the ones that asserted a changed layout
+detail were rewritten and recorded.
+
+| Area | What exists now |
+| --- | --- |
+| Shell | a 76 px bar (`shell.rs`, `BAR_HEIGHT`) over a 40 px gutter, stacked over the artwork on Home and Detail and a solid band elsewhere; wordmark `SCREENROOM`, shortened to `SR` below the Standard breakpoint; three destinations with compact labels below it; Refresh, search and the profile avatar; status and error copy as one line at the foot |
+| Home | a full-bleed hero (the first Continue Watching title, else the first suggestion) over rails — Continue watching, Recently added, Films, Series — with an empty-library invitation instead of an empty grid |
+| Library | title and count, search and sort, filter chips (All, Films, Series, Unwatched, Available offline, Watchlist, Favourites, genre when it exists) and an honest source line; a poster grid paging 24 tiles |
+| Detail | a title page: backdrop, `FILM`/`SERIES` eyebrow, title, metadata, one primary action naming what it does (`Play`, `Play S01E03`, `Resume 25 min in`), two round list toggles, synopsis, facts, season selector and episode list |
+| Player | full-bleed picture, top and bottom scrims, scrub and one control row; chrome recedes after 2.5 s without input **while playing** and never while paused (`CHROME_IDLE_AFTER`) |
+| Settings | a 200 px section list (160 px at Narrow) and a 780 px content column over nine sections, rows separated by 1 px hairlines; the Playback section keeps the *Picture* card that says what the surface carries |
+| Layout | one breakpoint table: Narrow < 900, Compact 900–1099, Standard 1100–1439, Wide 1440–1759, Ultra ≥ 1760, with 2/4/5/6/7 grid columns, 340–600 px heroes, 176–268 px rail cards and a 1760 px content cap at Ultra |
+| Navigation | one back stack of `(Screen, FocusPos)`; Escape from Detail returns to the card it was opened from; Home is `(rail, column)` with the column clamped to a shorter rail |
+
+**Measured and checked.** `apps/desktop/src/ui/` holds **54** unit tests
+(breakpoint geometry and the content cap, nav labels and the wordmark, focus
+clamping and restoration, the idle-chrome rule, control visibility by width,
+source and count lines, chip and row semantics, and the shell composing at every
+breakpoint including non-finite widths). The desktop library suite is **276**
+tests. The rebuild session recorded `cargo test --workspace`, `cargo fmt --all
+--check`, `cargo clippy --workspace --all-targets -- -D warnings` and
+`python3 scripts/no_comments.py check` clean, and four hidden-window
+`SCREENROOM_AX_CHECK` runs — Home, Library, Detail and Settings — with labels and
+focus matching the app's own snapshot.
+
+### Defects found by the rebuild, and fixed
+
+Six were found, four by review and two by looking at captured screens. Each is
+the kind that looks like something else.
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| The navigation and the search mark disappeared over a bright frame | the bar was transparent over artwork, and then its scrim fell to a fifth of full strength by the middle of the bar | a vertical scrim that holds near-full strength across the bar and releases at its lower edge |
+| Detail's primary action was an empty white pill | the round actions used `center_x(Length::Fill)`, which in iced *sets* the width, so two 44 px icon buttons stretched across the row and left the label no width | real squares for the round actions, and the primary says what it does |
+| ↓ in the Library moved sideways | focus stepped by a column count computed from a 300 px target while the grid drew its columns from `Breakpoint` | both read the same source, and a test asserts they agree across six widths |
+| Enter in Settings could fire a control that was not on the page | the keyboard walked a flat list of every action in every section while the screen draws one section | the cursor walks the drawn rows, and the accessibility tree publishes the same rows |
+| VoiceOver could open a different film than the one it announced on Home | the accessibility tree published items in a different order from the rail model that resolves them | it publishes the rails' own order, and the invitation only when it is drawn |
+| The Library source line read "scanned scanned 51 minutes ago" | the caller passed a phrase that already began with "scanned" into a line that prefixes one | the line is composed once, and the scrollbar that had become a bright 16 px stripe is a faint gutter |
+
+The hero and the cards also drew no picture until Home and Detail gained an
+artwork channel; the screens could not fetch posters by themselves, and a hero
+that falls back to a gradient looks intentional enough to hide the defect.
+
+### What this does not prove
+
+- **Nobody has said it looks right.** Captures were taken at 900, 1280, 1440 and
+  3440 during the rebuild and inspected there, but they live in `.artifacts/`
+  (Git-ignored) and are not in a checkout, so a reviewer with a clone cannot see
+  them. The owner's look is **PENDING** as P2-06 in
+  [`MACOS_REMAINING_WORK.md`](MACOS_REMAINING_WORK.md).
+- **The chrome has not been watched receding** in a visible window. The rule is
+  unit-tested; the wiring is not the same claim.
+- **There is no window-size override.** The window opens at 1280×800 and records
+  each resize; reproducing a capture at another width means resizing it while it
+  is visible, which needs the owner's `SCREENROOM_ALLOW_FOREGROUND=1`.
+- **Accessibility is still window-level.** Roles, labels, values and focus are
+  published; geometry is the window's (ADR-017).
+- **No CI run exists** — see below.
+
+## CI, release and the ship script (2026-11-02)
+
+**Status: written, parsed and exercised locally; no GitHub Actions run has
+happened.** The one-time setup — runner labels, secrets, the Tizen profile — and
+the exact status are in [`RELEASE_PIPELINE.md`](RELEASE_PIPELINE.md).
+
+The reason the runner is self-hosted is in the decision, not the tooling: every
+target here is a device on the owner's home LAN, and a cloud runner cannot reach
+the MacBook, the Windows desktop or the television.
+
+| Piece | What it does | Evidence |
+| --- | --- | --- |
+| `.github/workflows/ci.yml` | on a pull request, a push to `main`, and as a callable workflow: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `python3 scripts/no_comments.py check`, then the TV's `pnpm typecheck` and `pnpm test` | parses; every command is one this repository already runs locally |
+| `.github/workflows/release.yml` | calls CI, packages macOS with `scripts/release.sh macos`, merges the per-platform fragments into `manifest.json` (version, tag, generated-at, and per artefact platform, arch, version, filename, sha256 and size), signs it with Ed25519 when the key exists, and publishes `v<version>` | parses; the manifest merge and signing paths were exercised locally |
+| `release.yml` → `windows` job | declared, and skipped unless `vars.SCREENROOM_WINDOWS_RUNNER == 'true'` | **skipped, not greenwashed**: no Windows runner exists, so the Windows gate stays BLOCKED |
+| `scripts/ship.sh` | the owner's command without GitHub: builds and replaces the installed Mac app, and reaches the Windows host over SSH and the TV over sdb at the same time, printing one result per device; a powered-off device is reported as skipped, and only the always-on Mac can fail the run | the three lanes, the configuration file and `SCREENROOM_SHIP_STRICT` are exercised locally; the device lanes depend on the devices being up |
+
+Two claims are deliberately not made. **No job, step or expression has been
+executed by GitHub**, because the runner is not installed on this machine, so the
+workflows are unrun configuration rather than a green build. And **no Windows
+build exists** — the job is written so that enabling a runner is the only missing
+step, and the gate remains blocked until a Windows machine runs it.
+
+Nothing was added to any workflow that makes it an always-on service: no cloud
+runner, no paid certificate (the signing key is optional and the release publishes
+unsigned without it), and no automatic deployment outside the owner's own
+machines.
