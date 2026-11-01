@@ -42,7 +42,7 @@ any machine is required or requested for any of this.
 ## 2. Build and test
 
 ```powershell
-git clone https://github.com/beyourahi/screenroom; cd screenroom
+git clone https://github.com/Dropout-Studio-Co/screenroom; cd screenroom
 cargo --version                       # 1.85+
 cargo build --workspace               # expected: compiles, no MSVC header error
 cargo test --workspace                # expected: 189 passed, 0 failed

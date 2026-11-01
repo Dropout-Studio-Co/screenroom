@@ -13,7 +13,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 authors = ["Rahi Khan"]
-repository = "https://github.com/beyourahi/screenroom"
+repository = "https://github.com/Dropout-Studio-Co/screenroom"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
