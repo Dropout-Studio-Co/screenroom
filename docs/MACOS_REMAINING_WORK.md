@@ -691,6 +691,108 @@ cd crates/screenroom-player/examples/gl-path-probe && \
 
 ## 8. Continuation point
 
+**Updated 2026-11-01, end of the second session.** HEAD is `1deff6d`, the tree is
+clean, 521 tests pass (three consecutive full runs), and `cargo fmt --check`,
+`cargo clippy -D warnings`, `python3 scripts/no_comments.py check`,
+`scripts/package-macos.sh`, `scripts/verify-bundle.sh`,
+`scripts/check-quit-routing.sh` and `scripts/check-terminate-routing.sh` all pass.
+
+What a next session should pick up, in this order:
+
+1. **P1-03's display half.** The 16F surface and the passthrough exist and are
+   measured; `iced_wgpu 0.14` cannot select an extended-range swapchain. Either
+   vendor/patch iced's format choice or give the application its own
+   `CAMetalLayer` with `wantsExtendedDynamicRangeContent` and
+   `kCGColorSpaceITUR_2100_PQ`, then enable `SCREENROOM_HDR=extended` and look at a
+   film. Do not enable the switch before that exists — the desktop layer would
+   import a PQ surface through an sRGB view.
+2. **P1-05 native PiP.** ADR-016 records the constraint. The missing piece is an
+   `AVSampleBufferDisplayLayer` fed from `SurfaceFrame`s as `CVPixelBuffer`s; the
+   surfaces now exist, so this is a bounded project rather than a guess.
+3. **P1-09 accessibility.** Blocked on iced shipping `accesskit` (ADR-017). If that
+   is not acceptable, the out-of-tree `NSAccessibility` bridge is the only honest
+   route and needs an explicit owner decision.
+4. **P2-05's spirit, not its letter:** paging is measured at 10k and 50k; re-run
+   `library_bench` after any query change and keep the numbers in this document.
+5. **Owner-gated, and only the owner can close them:** P1-04 (the eight
+   observations), P1-11 (the SSD and the real 3240×2160 Main10 file), P1-12 (Wi-Fi
+   off), and the live provider calls in P1-06/P1-07.
+
+Nothing in this list is speculative, and nothing above has been relabelled to make
+the counts look better than they are.
+
+## 9. Task matrix — every row, its evidence and its remaining action
+
+One line per tracked item, so nothing can be quietly dropped. `Evidence` names the
+check that actually ran; `Action` is what is still owed and by whom.
+
+| ID | Requirement | State | Evidence | Action / blocker | Owner |
+| --- | --- | --- | --- | --- | --- |
+| F01 | Sources | COMPLETE | `step_1`, `step_12`, relink test | — | — |
+| F02 | Discovery | COMPLETE | `step_1` (1,200 files), `scanner.rs` tests (16) | — | — |
+| F03 | Structured library | COMPLETE | `described_episodes`, `library.rs` (28) | — | — |
+| F04 | Identity matching | COMPLETE (local) | parsing, NFO, manual-match tests | online ids arrive with F05 | — |
+| F05 | Online enrichment | COMPLETE core / BLOCKED live | `providers*.rs` (33), drain tests | key, TLS transport, retention decision | owner |
+| F06 | Offline artwork | COMPLETE | poster re-decode, cache test | — | — |
+
+| F08 | Profiles and progress | COMPLETE | `step_10`, `step_14`, checkpoint tests | — | — |
+| F09 | Home and Continue Watching | COMPLETE | `step_11`, `step_13` | — | — |
+| F10 | Next-episode autoplay | COMPLETE | `step_9`, gap/season tests | — | — |
+| F11 | Search, filter, sort, paging | COMPLETE | 10k paging (13.7 ms first, 78 ms grouped last) | — | — |
+| F12 | Watchlists and favourites | COMPLETE | toggle/filter tests | — | — |
+| F13 | Audio tracks and subtitles | COMPLETE | `step_5`, `step_21`, Bengali pixel test | on-screen legibility | owner |
+| F14 | Skip intro and credits | COMPLETE (manual) | marker and guard tests | — | — |
+| F15 | Subtitle search | COMPLETE core / BLOCKED live | `providers_subtitles.rs` (19) | key, TLS transport, offline-retention decision | owner |
+| F16 | Local recommendations | COMPLETE | recommendation tests | — | — |
+| F17 | Browse previews | COMPLETE | `step_17` | — | — |
+| F18 | Picture-in-Picture | PARTIAL | `step_20` | ADR-016; needs an `AVSampleBufferDisplayLayer` bridge (P1-05) | agent |
+| F19 | Casting | COMPLETE session / UNVERIFIED device | `casting`/`cast_stream`/`cast_session` (36) | a real receiver on the LAN (P1-08) | owner |
+| F20 | Backup and recovery | COMPLETE | `step_13`, recovery tests (9), every-table round-trip | — | — |
+| F21 | Settings and secrets | COMPLETE | `settings_are_operable_without_a_pointer`, action strip | — | — |
+| F22 | Failure and availability | COMPLETE | `step_12`, error-code tests | — | — |
+| F23 | Source directory | BLOCKED | `step_19` | ADR-011: no verified list or operator permission | owner |
+| F24 | Acquisition handoff | COMPLETE | `step_19` | — | — |
+| F25 | Local conversion | COMPLETE | `step_16` | — | — |
+| Q00 | Installed local app | COMPLETE | bundle walk, `verify-bundle.sh` | — | — |
+| Q00B | Design system | COMPLETE | `ds_pinned.rs` at a pinned commit, visible theme string | machine-local sync | — |
+| Q01 | Offline | COMPLETE by construction | 33 provider tests assert zero requests when unconfigured | execute with Wi-Fi off | owner |
+| Q02 | Performance | COMPLETE (SDR) | 4K 24.39 fps / 13.95 % CPU; paging; startup ~1.2 s | EDR window (P1-03) | owner decision |
+| Q03 | Fidelity | COMPLETE | `step_7`, anamorphic test | the look | owner |
+| Q04 | Portability | COMPLETE | layout, `cfg` boundaries, `cargo check` for the Windows target | real Windows build | owner |
+| Q05 | Security and privacy | COMPLETE | argument vectors, root canonicalisation, credential redaction tests, cast host allowlist | — | — |
+| Q06 | Durability | COMPLETE | migration tests (v2–v9), restore atomicity, byte-identical failure test | — | — |
+| Q07 | Accessibility | PARTIAL / BLOCKED | ADR-017 with the exact grep and lockfile evidence | upstream `accesskit`, or an authorised `NSAccessibility` project | owner decision |
+| Q08 | Honest reporting | COMPLETE | this document set | — | — |
+
+Acceptance steps 1–15 keep their status in `MACOS_ACCEPTANCE_CHECKLIST.md`; the
+mechanisms are green and seven steps still need the owner's eyes, ears and cable.
+
+---
+
+## 7. Reproducing the evidence
+
+```bash
+cargo test --workspace                                   # 358 tests
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+python3 scripts/no_comments.py check
+scripts/package-macos.sh && scripts/verify-bundle.sh
+
+cargo run --release -p screenroom-player --example frame_stall auto-copy FILE 20 150
+SCREENROOM_PLAY_CHECK=/tmp/check.csv SCREENROOM_PLAY_CHECK_MEDIA=FILE \
+SCREENROOM_PLAY_CHECK_SECONDS=10 ./target/release/screenroom-desktop
+cargo run --release -p screenroom-player --example render_bench -- 3840 2160
+cargo run --release -p screenroom-core --example library_bench
+
+cd crates/screenroom-player/examples/gl-path-probe && \
+  clang -O2 -DGL_SILENCE_DEPRECATION -o probe probe.m \
+    -I/opt/homebrew/include -L/opt/homebrew/lib -lmpv \
+    -framework OpenGL -framework IOSurface -framework CoreFoundation -framework Metal && \
+  /usr/bin/time -l ./probe ../../../../.artifacts/media/bench-4k-hevc-10bit.mp4 8
+```
+
+## 8. Continuation point
+
 If this session stops here, the next one starts at **P1-01/P1-02**: the probe
 proves the path, the numbers justify it, and the integration is a bounded change
 behind `render.rs` with the software renderer kept as the fallback. Do not change the
