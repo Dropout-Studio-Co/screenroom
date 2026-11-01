@@ -1252,3 +1252,32 @@ and completion" below.
 
 See [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) for the full definitions of
 done.
+
+## F25 — local conversion (2026-11-01)
+
+**Completed on macOS, verified headlessly.**
+
+- **Core** (`crates/screenroom-core/src/library/conversion.rs`, schema 5,
+  migrated additively from 4): three profiles — remux, audio fix and H.264 — a
+  plan that names one new output file and refuses to touch the original, a
+  folder that is refused when it is read-only (so `/Volumes/bleh` cannot be
+  written to even by accident), a forward-only job lifecycle with one active job
+  per file, and a verification rule: the copy keeps its picture, keeps its audio
+  when the source had any, reports a duration, and runs within the larger of 2 s
+  or 1 % of the original.
+- **Desktop** (`apps/desktop/src/conversion.rs` and the Detail/Settings UI): one
+  conversion at a time; `ffmpeg -progress pipe:1` drives a percentage that is
+  written to the job; `-n` and a proven-absent output name mean ffmpeg has no
+  way to overwrite anything; *Stop* kills the process, records the stop and
+  removes the partial copy; a finished run is probed before it is kept, and the
+  original's size, modification time and bytes are re-read afterwards — a change
+  there fails the job instead of calling the copy good.
+- **Tests added:** five core tests (naming, read-only refusal, lifecycle,
+  cancellation, verification) and four runner tests (arguments, per-profile
+  codecs, progress parsing, time budget), plus `step_16`, an acceptance test that
+  builds a real clip with ffmpeg, converts it through the app, asserts the copy
+  probes with picture and sound, asserts the original's size, mtime and bytes are
+  identical, and asserts a second conversion takes a new name.
+- **Not proven:** the panel has not been looked at in a running window, and no
+  conversion has run on a large 4K file, so throughput and peak disk use on the
+  owner's hardware remain unmeasured.

@@ -37,7 +37,7 @@
 | Failure/availability states (F22) | core codes | host (refuses an unreadable file and names the recovery) | client: the core's error codes are ported, and every empty screen names the situation it is actually in — no media yet, a drive not mounted, a drive that will not list, a search too narrow — each with its own remedy rather than one generic message. A drive that cannot be read says so verbatim, and nothing is deleted when it leaves |
 | Source directory (F23) | — | — | — |
 | Acquisition handoff (F24) | — | — | — |
-| Local conversion (F25) | — | — | — |
+| Local conversion (F25) | core: a `conversion_jobs` table (schema 5, migrated additively from 4), three profiles (remux / audio fix / h264), an output name that never collides with the original or an existing file, a read-only folder refused, a forward-only job lifecycle with one active job per file, and a verification rule (picture kept, audio kept when the source had it, duration within max(2 s, 1%)) | host: *Convert a copy* on Detail for remux, audio fix and h264; the folder lives in Settings and in the preferences document; progress is read from `ffmpeg -progress` and written to the job, one conversion at a time, *Stop* kills the process and removes the partial copy, `-n` plus a proven-absent name means ffmpeg cannot overwrite, the result is probed and checked, and the original's size, modification time and bytes are compared before the copy is kept. `step_16` runs a real remux on a generated clip and asserts all of that. Not yet exercised by a person watching the panel | — |
 
 A `core` cell means the rule exists and is tested in Rust: it does **not** mean a
 user interface exposes it. The `host` cells are the ones a person can actually

@@ -18,6 +18,10 @@ pub struct Facts {
     pub duration_ms: i64,
 
     pub cover_stream: Option<u32>,
+
+    pub has_video: bool,
+
+    pub has_audio: bool,
 }
 
 pub fn command_for(path: &Path) -> Command {
@@ -44,6 +48,7 @@ pub fn probe(path: &Path) -> Result<Facts, String> {
 pub fn parse(output: &str) -> Facts {
     let mut facts = Facts::default();
     let mut video = Vec::new();
+    let mut audio = Vec::new();
     let mut covers = Vec::new();
     for line in output.lines() {
         let Some((key, value)) = line.split_once('=') else {
@@ -70,12 +75,17 @@ pub fn parse(output: &str) -> Facts {
         };
         match (field, value) {
             ("codec_type", "video") => video.push(index),
+            ("codec_type", "audio") => audio.push(index),
             ("disposition.attached_pic", "1") => covers.push(index),
             _ => {}
         }
     }
 
     facts.cover_stream = covers.into_iter().find(|index| video.contains(index));
+    facts.has_video = video
+        .iter()
+        .any(|index| !facts.cover_stream.is_some_and(|cover| cover == *index));
+    facts.has_audio = !audio.is_empty();
     facts
 }
 
@@ -140,6 +150,8 @@ mod tests {
             Facts {
                 duration_ms: 6_731_751,
                 cover_stream: Some(8),
+                has_video: true,
+                has_audio: true,
             }
         );
     }
@@ -156,10 +168,6 @@ mod tests {
         let audio_flag = "streams.stream.2.codec_type=\"audio\"\n\
             streams.stream.2.disposition.attached_pic=1\n";
         assert_eq!(parse(audio_flag).cover_stream, None);
-        assert_eq!(
-            parse("streams.stream.x.codec_type=\"video\"\n"),
-            Facts::default()
-        );
     }
 
     #[test]

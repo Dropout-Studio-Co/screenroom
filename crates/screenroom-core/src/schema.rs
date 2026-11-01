@@ -1,3 +1,5 @@
+pub const CONVERSION_JOBS: &str = "CREATE TABLE IF NOT EXISTS conversion_jobs(id TEXT PRIMARY KEY,\n      file_id TEXT NOT NULL REFERENCES files(id),title TEXT NOT NULL,profile TEXT NOT NULL,\n      status TEXT NOT NULL CHECK(status IN ('queued','running','verifying','done','failed','cancelled')),\n      progress INTEGER NOT NULL DEFAULT 0 CHECK(progress BETWEEN 0 AND 100),\n      message TEXT NOT NULL DEFAULT '',source_path TEXT NOT NULL,output_path TEXT NOT NULL,\n      source_size INTEGER NOT NULL DEFAULT 0 CHECK(source_size>=0),\n      source_modified_ms INTEGER NOT NULL DEFAULT 0,output_bytes INTEGER NOT NULL DEFAULT 0,\n      created_ms INTEGER NOT NULL,updated_ms INTEGER NOT NULL)";
+
 pub const CREATE: &[&str] = &[
     "CREATE TABLE sources(id TEXT PRIMARY KEY,label TEXT NOT NULL,root_path TEXT NOT NULL DEFAULT '',
       state TEXT NOT NULL DEFAULT 'disconnected',last_scan_ms INTEGER)",
@@ -73,6 +75,8 @@ pub const CREATE: &[&str] = &[
       height INTEGER NOT NULL CHECK(height>0),sampled_at_ms INTEGER NOT NULL CHECK(sampled_at_ms>=0),
       created_ms INTEGER NOT NULL,bytes BLOB NOT NULL)",
 
+    CONVERSION_JOBS,
+
     "CREATE INDEX IF NOT EXISTS editions_work ON editions(work_id)",
     "CREATE INDEX IF NOT EXISTS files_edition ON files(edition_id)",
     "CREATE INDEX IF NOT EXISTS file_episodes_episode ON file_episodes(episode_id)",
@@ -80,6 +84,11 @@ pub const CREATE: &[&str] = &[
 ];
 
 pub const MIGRATE_2_TO_3: &[&str] = &[CREATE[CREATE.len() - 5]];
+
+pub const MIGRATE_4_TO_5: &[&str] = &[
+    CONVERSION_JOBS,
+    "CREATE INDEX IF NOT EXISTS conversion_jobs_file ON conversion_jobs(file_id,created_ms)",
+];
 
 pub const MIGRATE_3_TO_4: &[&str] = &[
     CREATE[CREATE.len() - 4],

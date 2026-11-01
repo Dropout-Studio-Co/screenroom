@@ -1,5 +1,6 @@
 pub mod app;
 pub mod artwork;
+pub mod conversion;
 pub mod design;
 pub mod picker;
 pub mod playback;

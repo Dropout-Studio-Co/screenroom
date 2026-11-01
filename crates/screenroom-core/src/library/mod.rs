@@ -1,6 +1,7 @@
 mod artwork;
 mod backup;
 mod catalog;
+mod conversion;
 mod lists;
 mod markers;
 mod media_info;
@@ -24,6 +25,9 @@ use crate::{SCHEMA_VERSION, schema};
 pub use artwork::{Artwork, ArtworkCandidate};
 pub use backup::{BackupInfo, BackupReport, RestoreReport};
 pub use catalog::Ingest;
+pub use conversion::{
+    ConversionJob, ConversionPlan, ConversionProfile, ConversionStatus, OutputFacts, verify_output,
+};
 pub use media_info::UnprobedFile;
 pub use playback::Checkpoint;
 pub use settings::Preferences;
@@ -195,12 +199,26 @@ impl Library {
                 for statement in schema::MIGRATE_3_TO_4 {
                     tx.execute(statement, [])?;
                 }
+                for statement in schema::MIGRATE_4_TO_5 {
+                    tx.execute(statement, [])?;
+                }
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
             3 => {
                 let tx = connection.transaction()?;
                 for statement in schema::MIGRATE_3_TO_4 {
+                    tx.execute(statement, [])?;
+                }
+                for statement in schema::MIGRATE_4_TO_5 {
+                    tx.execute(statement, [])?;
+                }
+                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+                tx.commit()?;
+            }
+            4 => {
+                let tx = connection.transaction()?;
+                for statement in schema::MIGRATE_4_TO_5 {
                     tx.execute(statement, [])?;
                 }
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -227,6 +245,13 @@ impl Library {
         connection.execute(
             "UPDATE jobs SET status = 'queued' WHERE status = 'running'",
             [],
+        )?;
+        connection.execute(
+            "UPDATE conversion_jobs
+             SET status = 'failed', message = 'The app closed before this finished.',
+                 updated_ms = ?1
+             WHERE status IN ('queued','running','verifying')",
+            [now_ms()],
         )?;
 
         Ok(Self {

@@ -25,6 +25,7 @@ const TABLES: &[&str] = &[
     "markers",
     "external_identities",
     "jobs",
+    "conversion_jobs",
     "settings",
 ];
 

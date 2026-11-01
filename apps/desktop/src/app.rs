@@ -12,14 +12,16 @@ use iced::widget::{
 };
 use iced::{Alignment, ContentFit, Element, Length, Subscription, Task, keyboard};
 use screenroom_core::{
-    CoreError, Library, LibraryItem, LibraryQuery, LibraryScanner, MediaKind, Preferences, Profile,
-    Recommendation, ScanToken, SegmentMarker, Sort, Source, SourceState,
+    ConversionJob, ConversionProfile, ConversionStatus, CoreError, Library, LibraryItem,
+    LibraryQuery, LibraryScanner, MediaKind, OutputFacts, Preferences, Profile, Recommendation,
+    ScanToken, SegmentMarker, Sort, Source, SourceState, verify_output,
 };
 use screenroom_player::{
     MediaTrack, NO_TRACK, Player, PlayerCapability, PlayerSnapshot, TrackKind,
 };
 
 use crate::artwork::{ArtworkEvent, Extractor};
+use crate::conversion::{ConversionEvent, ConversionOutcome, Runner};
 use crate::design::{self, Level};
 use crate::playback::PlaybackTracker;
 use crate::probe::{DurationPass, spawn_duration_pass};
@@ -101,6 +103,30 @@ pub fn default_backup_path() -> String {
         .with_file_name(format!("screenroom-backup-{stamp}.db"))
         .to_string_lossy()
         .to_string()
+}
+
+fn default_conversion_folder() -> String {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/Users"));
+    home.join("Movies")
+        .join("Screenroom Converted")
+        .to_string_lossy()
+        .to_string()
+}
+
+fn file_modified_ms(metadata: &std::fs::Metadata) -> Option<i64> {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|elapsed| elapsed.as_millis() as i64)
+}
+
+fn discard(path: &Path) {
+    if path.is_file() {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -302,6 +328,25 @@ struct UpNext {
     starts_at: std::time::Instant,
 }
 
+#[derive(Debug, Clone)]
+struct ConversionRun {
+    job_id: String,
+
+    title: String,
+
+    source_path: PathBuf,
+
+    source_size: i64,
+
+    source_modified_ms: i64,
+
+    source_duration_ms: i64,
+
+    source_has_audio: bool,
+
+    output_path: PathBuf,
+}
+
 const SCAN_REFRESH_INTERVAL_MS: i64 = 500;
 
 const UP_NEXT_DELAY: Duration = Duration::from_secs(5);
@@ -391,6 +436,12 @@ pub struct App {
     restore_path: String,
     armed_restore: Option<String>,
 
+    conversion_folder: String,
+    conversions: Vec<ConversionJob>,
+    conversion_runner: Option<Runner>,
+    conversion_run: Option<ConversionRun>,
+    conversion_progress: u8,
+
     subtitle_input: String,
     audio_input: String,
 
@@ -427,6 +478,7 @@ pub enum SettingsField {
     FolderPath,
     BackupPath,
     RestorePath,
+    ConversionFolder,
 }
 
 impl SettingsField {
@@ -438,6 +490,7 @@ impl SettingsField {
             Self::FolderPath => "settings-folder-path",
             Self::BackupPath => "settings-backup-path",
             Self::RestorePath => "settings-restore-path",
+            Self::ConversionFolder => "settings-conversion-folder",
         }
     }
 }
@@ -555,6 +608,14 @@ pub enum Message {
     RestoreNow,
 
     InspectRestore,
+
+    ChooseConversionFolder,
+
+    ConversionFolderChanged(String),
+
+    StartConversion(String, ConversionProfile),
+
+    CancelConversion,
 
     ClearStatus,
 
@@ -703,6 +764,10 @@ impl App {
         let library = Arc::new(library);
 
         let preferences = library.preferences().unwrap_or_default();
+        let conversion_folder = preferences
+            .conversion_folder
+            .clone()
+            .unwrap_or_else(default_conversion_folder);
         let profile_id = opening_profile(&library, &preferences);
         let mut app = Self {
             library,
@@ -746,6 +811,11 @@ impl App {
             backup_path: default_backup_path(),
             restore_path: String::new(),
             armed_restore: None,
+            conversion_folder,
+            conversions: Vec::new(),
+            conversion_runner: None,
+            conversion_run: None,
+            conversion_progress: 0,
             subtitle_input: String::new(),
             audio_input: String::new(),
             armed_remove: None,
@@ -801,6 +871,10 @@ impl App {
             .is_some_and(|id| !self.sources.iter().any(|source| &source.id == id))
         {
             self.relink_target = None;
+        }
+        match self.library.recent_conversions(8) {
+            Ok(jobs) => self.conversions = jobs,
+            Err(error) => self.report(&error),
         }
     }
 
@@ -1313,6 +1387,7 @@ impl App {
     fn poll(&mut self) {
         self.drain_scan();
         self.drain_durations();
+        self.drain_conversion();
 
         if self.drain_artwork() > 0 {
             self.queue_artwork(true);
@@ -1950,6 +2025,318 @@ impl App {
         }
     }
 
+    fn start_conversion(&mut self, file_id: String, profile: ConversionProfile) {
+        if self.conversion_runner.is_some() {
+            self.error =
+                Some("One conversion runs at a time. Stop the running one first.".to_string());
+            return;
+        }
+        let folder = PathBuf::from(self.conversion_folder.trim());
+        let plan = match self.library.plan_conversion(&file_id, profile, &folder) {
+            Ok(plan) => plan,
+            Err(error) => return self.report(&error),
+        };
+        let facts = crate::probe::probe(&plan.source_path).unwrap_or_default();
+        let job = match self.library.begin_conversion(&plan) {
+            Ok(job) => job,
+            Err(error) => return self.report(&error),
+        };
+        match Runner::spawn(plan.clone()) {
+            Ok(runner) => {
+                self.conversion_runner = Some(runner);
+                self.conversion_run = Some(ConversionRun {
+                    job_id: job.id,
+                    title: plan.title.clone(),
+                    source_path: plan.source_path.clone(),
+                    source_size: plan.source_size,
+                    source_modified_ms: plan.source_modified_ms,
+                    source_duration_ms: facts.duration_ms,
+                    source_has_audio: facts.has_audio,
+                    output_path: plan.output_path.clone(),
+                });
+                self.conversion_progress = 0;
+                self.error = None;
+                self.status = Some(format!(
+                    "Converting {} — the copy is written to {}.",
+                    plan.title,
+                    plan.output_path.display()
+                ));
+                self.reload_administration();
+            }
+            Err(reason) => {
+                let _ =
+                    self.library
+                        .finish_conversion(&job.id, ConversionStatus::Failed, &reason, 0);
+                self.error = Some(reason);
+                self.reload_administration();
+            }
+        }
+    }
+
+    fn drain_conversion(&mut self) {
+        let Some(runner) = &self.conversion_runner else {
+            return;
+        };
+        let events = runner.poll();
+        if events.is_empty() {
+            return;
+        }
+        let Some(run) = self.conversion_run.clone() else {
+            return;
+        };
+        let mut finished = false;
+        for event in events {
+            match event {
+                ConversionEvent::Progress(percent) => {
+                    if percent > self.conversion_progress {
+                        self.conversion_progress = percent;
+                        let _ = self.library.set_conversion_progress(&run.job_id, percent);
+                    }
+                }
+                ConversionEvent::Finished(outcome) => {
+                    finished = true;
+                    self.apply_conversion_outcome(&run, outcome);
+                }
+            }
+        }
+        if finished {
+            self.conversion_runner = None;
+            self.conversion_run = None;
+            self.conversion_progress = 0;
+            self.reload_administration();
+        }
+    }
+
+    fn apply_conversion_outcome(&mut self, run: &ConversionRun, outcome: ConversionOutcome) {
+        match outcome {
+            ConversionOutcome::Succeeded {
+                bytes,
+                duration_ms,
+                has_video,
+                has_audio,
+                seconds,
+            } => {
+                let facts = OutputFacts {
+                    duration_ms,
+                    has_video,
+                    has_audio,
+                };
+                let checked = verify_output(run.source_duration_ms, run.source_has_audio, &facts);
+                let intact = std::fs::metadata(&run.source_path).is_ok_and(|metadata| {
+                    metadata.len() as i64 == run.source_size
+                        && file_modified_ms(&metadata) == Some(run.source_modified_ms)
+                });
+                if let Err(error) = checked {
+                    discard(&run.output_path);
+                    let _ = self.library.finish_conversion(
+                        &run.job_id,
+                        ConversionStatus::Failed,
+                        &error.to_string(),
+                        bytes as i64,
+                    );
+                    self.error = Some(error.to_string());
+                    return;
+                }
+                if !intact {
+                    discard(&run.output_path);
+                    let reason = "The original file changed while it was being converted, so the \
+                                  copy no longer proves anything and was removed.";
+                    let _ = self.library.finish_conversion(
+                        &run.job_id,
+                        ConversionStatus::Failed,
+                        reason,
+                        bytes as i64,
+                    );
+                    self.error = Some(reason.to_string());
+                    return;
+                }
+                let _ = self.library.finish_conversion(
+                    &run.job_id,
+                    ConversionStatus::Done,
+                    "",
+                    bytes as i64,
+                );
+                self.error = None;
+                self.status = Some(format!(
+                    "Converted {} in {} s and checked the copy. It is at {}. The original is \
+                     unchanged; add that folder to the library to play it.",
+                    run.title,
+                    seconds,
+                    run.output_path.display()
+                ));
+            }
+            ConversionOutcome::Failed(reason) => {
+                discard(&run.output_path);
+                let _ = self.library.finish_conversion(
+                    &run.job_id,
+                    ConversionStatus::Failed,
+                    &reason,
+                    0,
+                );
+                self.error = Some(format!(
+                    "Converting {} stopped: {reason} The original is untouched.",
+                    run.title
+                ));
+            }
+            ConversionOutcome::Cancelled => {
+                discard(&run.output_path);
+                let _ = self.library.finish_conversion(
+                    &run.job_id,
+                    ConversionStatus::Cancelled,
+                    "Stopped at your request.",
+                    0,
+                );
+                self.status = Some(
+                    "Conversion stopped and the partial copy was removed. The original is \
+                     untouched."
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    fn choose_conversion_folder(&mut self) {
+        let start = Path::new(&self.conversion_folder)
+            .parent()
+            .map(Path::to_path_buf);
+        match crate::picker::choose_folder(start.as_deref()) {
+            crate::picker::Picked::Path(folder) => {
+                self.conversion_folder = folder.to_string_lossy().to_string();
+                let preferences = Preferences {
+                    conversion_folder: Some(self.conversion_folder.clone()),
+                    ..self.preferences.clone()
+                };
+                self.save_preferences(preferences);
+            }
+            crate::picker::Picked::Cancelled => {}
+            crate::picker::Picked::Unavailable(reason) => self.status = Some(reason.to_string()),
+        }
+    }
+
+    fn detail_conversion_row(&self, item: &LibraryItem) -> Element<'_, Message> {
+        let tokens = design::tokens();
+        let job = self.conversions.iter().find(|job| job.file_id == item.id);
+        let running = job.is_some_and(ConversionJob::is_active);
+        let mut buttons = row![]
+            .spacing(tokens.spacing.field_x)
+            .align_y(Alignment::Center);
+        for profile in ConversionProfile::ALL {
+            buttons = buttons.push(
+                button(
+                    text(format!("Convert · {}", profile.label())).size(tokens.type_scale.label),
+                )
+                .on_press_maybe(
+                    (item.available && !running)
+                        .then(|| Message::StartConversion(item.id.clone(), profile)),
+                )
+                .style(design::quiet_style(false))
+                .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+            );
+        }
+        if running {
+            buttons = buttons.push(
+                button(text("Stop converting").size(tokens.type_scale.label))
+                    .on_press(Message::CancelConversion)
+                    .style(design::danger_style(true))
+                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+            );
+        }
+        let mut panel = column![
+            text("Convert a copy".to_string()).size(tokens.type_scale.label),
+            buttons,
+        ]
+        .spacing(tokens.spacing.field_y);
+        if let Some(job) = job {
+            panel = panel.push(text(job.summary()).size(tokens.type_scale.caption).color(
+                if job.status == ConversionStatus::Failed {
+                    tokens.palette.destructive
+                } else {
+                    tokens.palette.ink_muted
+                },
+            ));
+            panel = panel.push(
+                text(job.output_path.clone())
+                    .size(tokens.type_scale.micro)
+                    .color(tokens.palette.ink_muted),
+            );
+        } else {
+            panel = panel.push(
+                text(format!(
+                    "Writes a new file into {}. The original is never renamed, replaced or \
+                     deleted.",
+                    self.conversion_folder
+                ))
+                .size(tokens.type_scale.caption)
+                .color(tokens.palette.ink_muted),
+            );
+        }
+        panel.into()
+    }
+
+    fn conversion_panel(&self) -> Element<'_, Message> {
+        let tokens = design::tokens();
+        let mut panel = column![
+            row![
+                button(text("Choose…").size(tokens.type_scale.label))
+                    .on_press(Message::ChooseConversionFolder)
+                    .style(design::quiet_style(false))
+                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                text_input("Folder for converted copies", &self.conversion_folder)
+                    .id(SettingsField::ConversionFolder.id())
+                    .on_input(Message::ConversionFolderChanged)
+                    .style(design::input_style())
+                    .padding(tokens.spacing.field_y)
+                    .width(Length::Fill),
+            ]
+            .spacing(tokens.spacing.field_x)
+            .align_y(Alignment::Center),
+            settings_note(
+                "A conversion writes one new file into this folder. The original is never \
+                 written to, renamed or deleted, and a read-only drive is refused.",
+            ),
+        ]
+        .spacing(tokens.spacing.field_y);
+
+        if self.conversion_runner.is_some() {
+            panel = panel.push(
+                row![
+                    text(format!("Working · {}%", self.conversion_progress))
+                        .size(tokens.type_scale.label),
+                    button(text("Stop").size(tokens.type_scale.label))
+                        .on_press(Message::CancelConversion)
+                        .style(design::danger_style(true))
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                ]
+                .spacing(tokens.spacing.field_x)
+                .align_y(Alignment::Center),
+            );
+        }
+
+        if self.conversions.is_empty() {
+            panel = panel.push(
+                text("Nothing has been converted yet. Open a film and press Convert a copy.")
+                    .size(tokens.type_scale.caption)
+                    .color(tokens.palette.ink_muted),
+            );
+        } else {
+            for job in self.conversions.iter().take(5) {
+                panel = panel.push(text(job.summary()).size(tokens.type_scale.caption).color(
+                    if job.status == ConversionStatus::Failed {
+                        tokens.palette.destructive
+                    } else {
+                        tokens.palette.ink_muted
+                    },
+                ));
+                panel = panel.push(
+                    text(job.output_path.clone())
+                        .size(tokens.type_scale.micro)
+                        .color(tokens.palette.ink_muted),
+                );
+            }
+        }
+        panel.into()
+    }
+
     fn choose_folder(&mut self) {
         let start = self
             .sources
@@ -2415,6 +2802,18 @@ impl App {
             }
             Message::InspectRestore => self.inspect_restore(),
             Message::RestoreNow => self.restore_now(),
+            Message::ChooseConversionFolder => self.choose_conversion_folder(),
+            Message::ConversionFolderChanged(value) => self.conversion_folder = value,
+            Message::StartConversion(file_id, profile) => self.start_conversion(file_id, profile),
+            Message::CancelConversion => {
+                if let Some(runner) = &self.conversion_runner {
+                    runner.cancel();
+                    self.status = Some("Stopping the conversion…".to_string());
+                }
+                if let Some(run) = &self.conversion_run {
+                    let _ = self.library.cancel_conversion(&run.job_id);
+                }
+            }
             Message::ClearStatus => {
                 self.status = None;
                 self.error = None;
@@ -3120,6 +3519,7 @@ impl App {
                 .color(tokens.palette.ink_muted),
             text(progress).size(tokens.type_scale.label),
             actions,
+            self.detail_conversion_row(item),
         ]
         .spacing(tokens.spacing.field_y)
         .width(Length::Fill);
@@ -3728,6 +4128,8 @@ impl App {
             panel(folders.into()),
             heading("Data"),
             panel(data.into()),
+            heading("Conversion"),
+            panel(self.conversion_panel()),
             heading("About this build"),
             panel(
                 column![
@@ -3829,6 +4231,13 @@ impl App {
             "Type the restore file path".to_string(),
             Message::FocusSettingsField(SettingsField::RestorePath),
         ));
+        actions.push((
+            "Type the folder for converted copies".to_string(),
+            Message::FocusSettingsField(SettingsField::ConversionFolder),
+        ));
+        if self.conversion_runner.is_some() {
+            actions.push(("Stop the conversion".to_string(), Message::CancelConversion));
+        }
         actions.push((
             "Apply the subtitle language".to_string(),
             Message::ApplySubtitleLanguage,

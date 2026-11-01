@@ -13,6 +13,7 @@ const SUBTITLE_SCALE: &str = "subtitleScalePercent";
 const SUBTITLE_POSITION: &str = "subtitlePositionPercent";
 const DEFAULT_PROFILE: &str = "defaultProfileId";
 const VOLUME_PERCENT: &str = "volumePercent";
+const CONVERSION_FOLDER: &str = "conversionFolder";
 
 const SUBTITLE_SCALE_NORMAL: u16 = 100;
 
@@ -33,6 +34,8 @@ pub struct Preferences {
     pub subtitle_position_percent: u16,
 
     pub volume_percent: u16,
+
+    pub conversion_folder: Option<String>,
 
     pub default_profile: Option<String>,
 }
@@ -57,6 +60,7 @@ impl Default for Preferences {
             subtitle_scale_percent: SUBTITLE_SCALE_NORMAL,
             subtitle_position_percent: SUBTITLE_POSITION_BOTTOM,
             volume_percent: 100,
+            conversion_folder: None,
             default_profile: None,
         }
     }
@@ -97,6 +101,7 @@ impl Library {
                 VOLUME_PERCENT => {
                     preferences.volume_percent = percent(&value, 0, 100, 100);
                 }
+                CONVERSION_FOLDER => preferences.conversion_folder = text(&value),
                 DEFAULT_PROFILE => preferences.default_profile = text(&value),
 
                 _ => {}
@@ -134,6 +139,13 @@ impl Library {
             .default_profile
             .as_deref()
             .map(|value| super::validated(value, 120).map(str::to_string))
+            .transpose()?;
+        let conversion_folder = preferences
+            .conversion_folder
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| super::validated(value, 1_000).map(str::to_string))
             .transpose()?;
 
         if let Some(profile_id) = &default_profile {
@@ -175,6 +187,7 @@ impl Library {
         write(&tx, SUBTITLE_SCALE, &scale.to_string())?;
         write(&tx, SUBTITLE_POSITION, &position.to_string())?;
         write(&tx, VOLUME_PERCENT, &volume.to_string())?;
+        write_optional(&tx, CONVERSION_FOLDER, conversion_folder.as_deref())?;
         write_optional(&tx, DEFAULT_PROFILE, default_profile.as_deref())?;
         tx.commit()?;
         Ok(())

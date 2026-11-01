@@ -1216,3 +1216,113 @@ fn settings_are_operable_without_a_pointer() {
     let _ = app.update(key("escape"));
     assert_eq!(app.screen, Screen::Home, "Escape still leaves Settings");
 }
+
+#[test]
+fn step_16_a_conversion_writes_a_checked_copy_and_leaves_the_original_alone() {
+    let media = Media::new();
+    let film = media.path("A.Film.2001.mkv");
+    if !clip(&film, 3.0) {
+        eprintln!("skipped: ffmpeg cannot build a clip on this host");
+        return;
+    }
+    let before = std::fs::metadata(&film).expect("source");
+    let before_bytes = std::fs::read(&film).expect("read source");
+
+    let mut app = fresh_app();
+    let output = tempfile::TempDir::new().expect("output folder");
+    app.conversion_folder = output.path().to_string_lossy().to_string();
+    scan_folder(&mut app, &media.root);
+    let file_id = app.browse.items.first().expect("one film").id.clone();
+
+    let labels: Vec<String> = app
+        .settings_actions()
+        .into_iter()
+        .map(|(label, _)| label)
+        .collect();
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.contains("converted copies")),
+        "the conversion folder must be reachable from the keyboard, found {labels:?}"
+    );
+
+    let _ = app.update(Message::StartConversion(
+        file_id.clone(),
+        ConversionProfile::Remux,
+    ));
+    assert!(
+        app.conversion_runner.is_some(),
+        "a remux must start, got {:?}",
+        app.error
+    );
+    assert!(
+        pump(&mut app, Duration::from_secs(120), |app| {
+            app.conversion_runner.is_none()
+        }),
+        "the conversion never finished"
+    );
+
+    let job = app
+        .library
+        .conversion_for_file(&file_id)
+        .expect("lookup")
+        .expect("the job is recorded");
+    assert_eq!(job.status, ConversionStatus::Done, "{}", job.message);
+    assert_eq!(
+        job.progress_percent, 100,
+        "a finished job reads as complete"
+    );
+
+    let copy = PathBuf::from(&job.output_path);
+    assert!(copy.is_file(), "the copy must exist on disk");
+    assert_ne!(copy, film, "the copy is a different file");
+    let facts = crate::probe::probe(&copy).expect("the copy must be readable media");
+    assert!(facts.has_video, "the copy kept its picture");
+    assert!(facts.has_audio, "the copy kept its sound");
+    assert!(facts.duration_ms > 0, "the copy reports a duration");
+
+    let after = std::fs::metadata(&film).expect("source after");
+    assert_eq!(
+        after.len(),
+        before.len(),
+        "the original's size is untouched"
+    );
+    assert_eq!(
+        after.modified().expect("mtime"),
+        before.modified().expect("mtime"),
+        "the original's modification time is untouched"
+    );
+    assert_eq!(
+        std::fs::read(&film).expect("read source again"),
+        before_bytes,
+        "the original's bytes are untouched"
+    );
+
+    let _ = app.update(Message::StartConversion(
+        file_id.clone(),
+        ConversionProfile::Remux,
+    ));
+    assert!(
+        pump(&mut app, Duration::from_secs(120), |app| {
+            app.conversion_runner.is_none()
+        }),
+        "a second conversion must not wait forever"
+    );
+    let second = app
+        .library
+        .recent_conversions(5)
+        .expect("recent")
+        .into_iter()
+        .filter(|job| job.file_id == file_id)
+        .count();
+    assert_eq!(second, 2, "each attempt is its own record");
+    let latest = app
+        .library
+        .conversion_for_file(&file_id)
+        .expect("lookup")
+        .expect("job");
+    assert_ne!(
+        latest.output_path, job.output_path,
+        "a second copy of the same film gets its own name instead of overwriting"
+    );
+}

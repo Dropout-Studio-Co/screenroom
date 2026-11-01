@@ -15,14 +15,15 @@ pub use error::{CoreError, Result};
 pub use filename::{ParsedName, parse_filename};
 pub use fingerprint::media_fingerprint;
 pub use library::{
-    Artwork, ArtworkCandidate, BackupInfo, BackupReport, Checkpoint, Ingest, Library, LibraryQuery,
-    PathSemantics, Preferences, RestoreReport, Sort, UnprobedFile,
+    Artwork, ArtworkCandidate, BackupInfo, BackupReport, Checkpoint, ConversionJob, ConversionPlan,
+    ConversionProfile, ConversionStatus, Ingest, Library, LibraryQuery, OutputFacts, PathSemantics,
+    Preferences, RestoreReport, Sort, UnprobedFile, verify_output,
 };
 pub use paths::{PathStyle, location_key};
 pub use scanner::{
     LibraryScanner, MEDIA_EXTENSIONS, ScanIssue, ScanSummary, ScanToken, ScanUpdate,
 };
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 pub const BACKUP_FORMAT_VERSION: i64 = 2;
