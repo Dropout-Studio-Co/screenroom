@@ -78,6 +78,7 @@ pub fn run() -> iced::Result {
     crate::accessibility::install();
     let window = iced::window::Settings {
         visible: !hides_its_window(),
+        size: verification_size(),
         ..Default::default()
     };
 
@@ -86,7 +87,6 @@ pub fn run() -> iced::Result {
         .theme(App::theme)
         .subscription(App::subscription)
         .window(window)
-        .window_size((1280.0, 800.0))
         .exit_on_close_request(false)
         .default_font(crate::ui::theme::regular());
 
@@ -95,6 +95,20 @@ pub fn run() -> iced::Result {
     }
 
     application.run()
+}
+
+fn verification_size() -> iced::Size {
+    let read = |name: &str, fallback: f32| {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.trim().parse::<f32>().ok())
+            .filter(|value| value.is_finite() && *value >= 320.0)
+            .unwrap_or(fallback)
+    };
+    iced::Size::new(
+        read("SCREENROOM_WINDOW_WIDTH", INITIAL_WINDOW_WIDTH),
+        read("SCREENROOM_WINDOW_HEIGHT", 800.0),
+    )
 }
 
 fn library_path() -> Option<PathBuf> {
@@ -1065,7 +1079,7 @@ impl App {
             mark_pending: None,
             up_next: None,
             auto_skipped: None,
-            window_width: INITIAL_WINDOW_WIDTH,
+            window_width: verification_size().width,
             last_input: std::time::Instant::now(),
             player_chrome: true,
             preferences,
@@ -1142,6 +1156,12 @@ impl App {
             "detail" => {
                 if let Some(file_id) = self.browse.items.first().map(|item| item.id.clone()) {
                     self.open_detail(&file_id);
+                }
+            }
+            "player" => {
+                if let Some(file_id) = self.browse.items.first().map(|item| item.id.clone()) {
+                    self.open_detail(&file_id);
+                    self.open_player(&file_id, true);
                 }
             }
             _ => {}
