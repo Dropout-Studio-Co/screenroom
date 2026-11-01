@@ -7,6 +7,7 @@ use super::Library;
 
 const AUTOPLAY_NEXT: &str = "autoplayNext";
 const AUTO_SKIP_INTRO: &str = "autoSkipIntro";
+const REDUCED_MOTION: &str = "reducedMotion";
 const SUBTITLE_LANGUAGE: &str = "subtitleLanguage";
 const AUDIO_LANGUAGE: &str = "audioLanguage";
 const SUBTITLE_SCALE: &str = "subtitleScalePercent";
@@ -24,6 +25,8 @@ pub struct Preferences {
     pub autoplay_next: bool,
 
     pub auto_skip_intro: bool,
+
+    pub reduced_motion: bool,
 
     pub subtitle_language: Option<String>,
 
@@ -55,6 +58,7 @@ impl Default for Preferences {
         Self {
             autoplay_next: true,
             auto_skip_intro: false,
+            reduced_motion: false,
             subtitle_language: None,
             audio_language: None,
             subtitle_scale_percent: SUBTITLE_SCALE_NORMAL,
@@ -80,6 +84,7 @@ impl Library {
             match key.as_str() {
                 AUTOPLAY_NEXT => preferences.autoplay_next = value == "true",
                 AUTO_SKIP_INTRO => preferences.auto_skip_intro = value == "true",
+                REDUCED_MOTION => preferences.reduced_motion = value == "true",
                 SUBTITLE_LANGUAGE => preferences.subtitle_language = text(&value),
                 AUDIO_LANGUAGE => preferences.audio_language = text(&value),
                 SUBTITLE_SCALE => {
@@ -177,6 +182,15 @@ impl Library {
             &tx,
             AUTO_SKIP_INTRO,
             if preferences.auto_skip_intro {
+                "true"
+            } else {
+                "false"
+            },
+        )?;
+        write(
+            &tx,
+            REDUCED_MOTION,
+            if preferences.reduced_motion {
                 "true"
             } else {
                 "false"

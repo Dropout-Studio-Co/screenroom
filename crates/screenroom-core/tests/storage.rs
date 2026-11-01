@@ -158,6 +158,7 @@ fn preferences_survive_a_reopen() {
         subtitle_position_percent: 92,
 
         volume_percent: 35,
+        reduced_motion: true,
         conversion_folder: Some("/Volumes/Media/Converted".to_string()),
         default_profile: Some(profile.id.clone()),
     };

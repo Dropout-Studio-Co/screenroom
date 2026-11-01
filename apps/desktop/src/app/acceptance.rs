@@ -1190,7 +1190,11 @@ fn settings_are_operable_without_a_pointer() {
     );
 
     let scale_before = app.preferences.subtitle_scale_percent;
-    app.settings_focus = autoplay + 2;
+    app.settings_focus = app
+        .settings_actions()
+        .iter()
+        .position(|(label, _)| label.starts_with("Larger subtitles"))
+        .expect("the subtitle action must exist");
     let _ = app.update(key("enter"));
     assert!(
         app.preferences.subtitle_scale_percent > scale_before,
@@ -1325,4 +1329,66 @@ fn step_16_a_conversion_writes_a_checked_copy_and_leaves_the_original_alone() {
         latest.output_path, job.output_path,
         "a second copy of the same film gets its own name instead of overwriting"
     );
+}
+
+#[test]
+fn step_17_a_preview_is_one_delayed_decoder_and_reduced_motion_stops_it() {
+    let media = Media::new();
+    let film = media.path("A.Film.2001.mkv");
+    if !clip(&film, 4.0) {
+        eprintln!("skipped: ffmpeg cannot build a clip on this host");
+        return;
+    }
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let _ = app.update(Message::GoBrowse);
+    let _ = app.update(Message::Tick);
+    assert!(
+        !app.browse.items.is_empty(),
+        "the fixture must be browsable"
+    );
+
+    app.preferences.reduced_motion = true;
+    let _ = app.update(Message::Tick);
+    assert!(app.preview.is_none(), "Reduce motion must refuse a preview");
+    assert!(app.preview_frame.is_none(), "and leave the poster alone");
+
+    app.preferences.reduced_motion = false;
+    let _ = app.update(Message::Tick);
+    assert!(app.preview.is_none(), "a preview waits for the dwell");
+    assert!(
+        app.preview_dwell.is_some(),
+        "the dwell starts on the focused card"
+    );
+
+    if !player_ready() {
+        return;
+    }
+    assert!(
+        pump(&mut app, Duration::from_secs(20), |app| app
+            .preview
+            .is_some()),
+        "the focused card must preview after the delay"
+    );
+    assert!(app.preview_shown.is_some(), "the card draws the preview");
+    assert!(
+        pump(&mut app, Duration::from_secs(15), |app| app
+            .preview_frame
+            .is_some()),
+        "the preview must present a frame"
+    );
+
+    let _ = app.update(Message::GoHome);
+    let _ = app.update(Message::Tick);
+    assert!(app.preview.is_none(), "leaving Browse stops the decoder");
+    assert!(
+        app.preview_frame.is_none(),
+        "and the card gets its poster back"
+    );
+
+    let _ = app.update(Message::GoBrowse);
+    let _ = app.update(Message::Tick);
+    let _ = app.update(Message::ToggleReducedMotion(true));
+    let _ = app.update(Message::Tick);
+    assert!(app.preview.is_none(), "turning Reduce motion on stops it");
 }

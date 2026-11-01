@@ -1281,3 +1281,31 @@ done.
 - **Not proven:** the panel has not been looked at in a running window, and no
   conversion has run on a large 4K file, so throughput and peak disk use on the
   owner's hardware remain unmeasured.
+
+## F17 — browse previews (2026-11-01)
+
+**Completed on macOS, verified headlessly.**
+
+- `apps/desktop/src/preview.rs` owns the rules: a 600 ms dwell, a start
+  position inside the file (one fifth, bounded to 1–300 s and never past half
+  the runtime), a 20 s cap, and one refusal function that answers *Reduce
+  motion*, *something is playing*, *that file is unreadable* and *no player on
+  this machine* with a reason rather than a silent no.
+- The application holds at most **one** preview decoder: `App::preview` is a
+  single `Option<Preview>`; a new card replaces it, leaving Browse, starting
+  playback or starting a conversion drops it, and a preview is never opened
+  while `player` or `active` exists. Ticks run at the player's 60 Hz cadence
+  while a preview is live and at the status cadence otherwise.
+- Still fallback is the default state, not an error state: the stored poster is
+  what a card draws until a preview actually presents a frame, after the 20 s
+  cap, after the clip ends, and for any file in the refused set. Nothing is
+  drawn from a URL and nothing leaves the machine.
+- *Reduce motion* is a stored preference (Settings checkbox plus a keyboard
+  action), and turning it on stops a running preview immediately.
+- **Tests added:** three rule tests (refusals, start position, delay bounds),
+  `step_17` (a real clip, dwell → decoder → presented frame → leaving Browse
+  cleans up → Reduce motion refuses), and the Settings keyboard test now finds
+  its targets by label instead of by index.
+- **Not proven:** the preview has not been watched in a window, so the feel of
+  the dwell and the look of a video inside a card are unverified, and nothing
+  measures the second decoder's memory or GPU cost on the owner's machine.

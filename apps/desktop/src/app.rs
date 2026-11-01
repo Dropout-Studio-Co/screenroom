@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use iced::widget::shader;
 use iced::widget::{
-    Id, Space, button, checkbox, column, container, image, operation, pick_list, row, scrollable,
-    slider, stack, text, text_input,
+    Id, Space, button, checkbox, column, container, image, mouse_area, operation, pick_list, row,
+    scrollable, slider, stack, text, text_input,
 };
 use iced::{Alignment, ContentFit, Element, Length, Subscription, Task, keyboard};
 use screenroom_core::{
@@ -24,6 +24,7 @@ use crate::artwork::{ArtworkEvent, Extractor};
 use crate::conversion::{ConversionEvent, ConversionOutcome, Runner};
 use crate::design::{self, Level};
 use crate::playback::PlaybackTracker;
+use crate::preview::{PREVIEW_DELAY, Preview, may_preview};
 use crate::probe::{DurationPass, spawn_duration_pass};
 use crate::video_surface::{Frame, VideoSurface};
 
@@ -412,6 +413,12 @@ pub struct App {
 
     markers: Vec<SegmentMarker>,
 
+    preview: Option<Preview>,
+    preview_frame: Option<Frame>,
+    preview_shown: Option<String>,
+    preview_dwell: Option<(String, std::time::Instant)>,
+    preview_blocked: HashSet<String>,
+
     mark_pending: Option<(String, i64)>,
 
     auto_skipped: Option<String>,
@@ -582,6 +589,10 @@ pub enum Message {
     ToggleAutoplay(bool),
 
     ToggleAutoSkip(bool),
+
+    ToggleReducedMotion(bool),
+
+    HoverCard(String),
 
     SkipSegment,
 
@@ -797,6 +808,11 @@ impl App {
             volume_drag: None,
             fullscreen: false,
             markers: Vec::new(),
+            preview: None,
+            preview_frame: None,
+            preview_shown: None,
+            preview_dwell: None,
+            preview_blocked: HashSet::new(),
             mark_pending: None,
             up_next: None,
             auto_skipped: None,
@@ -1388,6 +1404,7 @@ impl App {
         self.drain_scan();
         self.drain_durations();
         self.drain_conversion();
+        self.drain_preview();
 
         if self.drain_artwork() > 0 {
             self.queue_artwork(true);
@@ -2022,6 +2039,102 @@ impl App {
                 self.status = Some(format!("Restored {} entries.{safety}", report.info.works));
             }
             Err(error) => self.report(&error),
+        }
+    }
+
+    fn stop_preview(&mut self) {
+        self.preview = None;
+        self.preview_frame = None;
+        self.preview_shown = None;
+        self.preview_dwell = None;
+    }
+
+    fn release_preview(&mut self) {
+        if let Some(preview) = &self.preview
+            && self.preview_blocked.len() < 4_096
+        {
+            self.preview_blocked.insert(preview.file_id().to_string());
+        }
+        self.preview = None;
+        self.preview_dwell = None;
+    }
+
+    fn drain_preview(&mut self) {
+        let playing = self.player.is_some() || self.active.is_some();
+        if self.screen != Screen::Browse {
+            if self.preview.is_some() || self.preview_frame.is_some() {
+                self.stop_preview();
+            }
+            return;
+        }
+        let mut ended = false;
+        if let Some(preview) = &self.preview {
+            let snapshot = preview.snapshot();
+            if snapshot.frame.is_some() {
+                self.preview_frame = snapshot.frame.clone();
+            }
+            ended = snapshot.ended;
+        }
+        let focused = self
+            .browse
+            .items
+            .get(self.focus)
+            .map(|item| (item.id.clone(), item.duration_ms, item.available));
+        let mismatch = match (&self.preview, &focused) {
+            (Some(preview), Some((id, ..))) => preview.file_id() != id.as_str(),
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
+        let expired = self.preview.as_ref().is_some_and(Preview::expired);
+        if playing || mismatch || self.conversion_runner.is_some() {
+            self.stop_preview();
+        } else if expired || ended {
+            self.release_preview();
+        }
+        if self.preview.is_some() {
+            return;
+        }
+        let Some((id, duration_ms, available)) = focused else {
+            return;
+        };
+        if may_preview(
+            self.preferences.reduced_motion,
+            playing,
+            available,
+            self.capability.available,
+        )
+        .is_err()
+            || self.preview_blocked.contains(&id)
+        {
+            return;
+        }
+        match &self.preview_dwell {
+            Some((dwell_id, since)) if *dwell_id == id => {
+                if since.elapsed() < PREVIEW_DELAY {
+                    return;
+                }
+            }
+            _ => {
+                self.preview_dwell = Some((id, std::time::Instant::now()));
+                return;
+            }
+        }
+        let Some(item) = self.browse.items.get(self.focus).cloned() else {
+            return;
+        };
+        let Some(path) = self.media_path(&item) else {
+            self.preview_blocked.insert(id);
+            return;
+        };
+        match Preview::start(&id, &path, duration_ms) {
+            Ok(preview) => {
+                self.preview = Some(preview);
+                self.preview_shown = Some(id);
+                self.preview_frame = None;
+            }
+            Err(_) => {
+                self.preview_blocked.insert(id);
+            }
         }
     }
 
@@ -2758,6 +2871,24 @@ impl App {
                 };
                 self.save_preferences(preferences);
             }
+            Message::ToggleReducedMotion(enabled) => {
+                let preferences = Preferences {
+                    reduced_motion: enabled,
+                    ..self.preferences.clone()
+                };
+                self.save_preferences(preferences);
+                if enabled {
+                    self.stop_preview();
+                }
+            }
+            Message::HoverCard(file_id) => {
+                if self.screen == Screen::Browse
+                    && let Some(index) =
+                        self.browse.items.iter().position(|item| item.id == file_id)
+                {
+                    self.focus = index;
+                }
+            }
             Message::SkipSegment => self.skip_segment(),
             Message::MarkSegment(kind) => self.toggle_segment_mark(&kind),
             Message::FinishSegment => self.finish_segment_mark(),
@@ -3088,7 +3219,7 @@ impl App {
             iced::window::close_requests().map(|_| Message::Close),
             iced::window::resize_events().map(|(_id, size)| Message::Resized(size.width)),
         ];
-        let interval = if self.screen == Screen::Player {
+        let interval = if self.screen == Screen::Player || self.preview.is_some() {
             PLAYER_TICK
         } else {
             STATUS_TICK
@@ -3706,7 +3837,14 @@ impl App {
         };
 
         let mut content = column![].spacing(2.0);
-        if let Some(handle) = handle {
+        if self.preview_shown.as_deref() == Some(item.id.as_str()) {
+            content = content.push(
+                shader::Shader::new(VideoSurface::new(self.preview_frame.clone()))
+                    .width(Length::Fill)
+                    .height(Length::Fixed(CARD_POSTER_HEIGHT)),
+            );
+            content = content.push(Space::new().height(Length::Fixed(4.0)));
+        } else if let Some(handle) = handle {
             content = content.push(
                 image(handle.clone())
                     .width(Length::Fill)
@@ -3742,12 +3880,16 @@ impl App {
             );
         }
 
-        button(content)
-            .on_press(Message::OpenDetail(item.id.clone()))
-            .style(design::tile_style(focused))
-            .width(Length::FillPortion(1))
-            .padding(tokens.spacing.field_y)
-            .into()
+        mouse_area(
+            button(content)
+                .on_press(Message::OpenDetail(item.id.clone()))
+                .style(design::tile_style(focused))
+                .width(Length::FillPortion(1))
+                .padding(tokens.spacing.field_y),
+        )
+        .on_enter(Message::HoverCard(item.id.clone()))
+        .interaction(iced::mouse::Interaction::Pointer)
+        .into()
     }
 
     fn suggestion_grid(&self, base: usize) -> Element<'_, Message> {
@@ -3877,6 +4019,13 @@ impl App {
                 .on_toggle(Message::ToggleAutoSkip)
                 .size(18.0),
             note("Only a segment you marked is skipped; an intro is never guessed."),
+            checkbox(self.preferences.reduced_motion)
+                .label("Reduce motion: no browse previews")
+                .on_toggle(Message::ToggleReducedMotion)
+                .size(18.0),
+            note(
+                "With this on, a card keeps its poster and no preview decoder is ever opened.",
+            ),
             row![
                 text("Subtitle language".to_string()).size(tokens.type_scale.label),
                 text_input("e.g. en", &self.subtitle_input).id(SettingsField::SubtitleLanguage.id())
@@ -4190,6 +4339,14 @@ impl App {
                 "Skip marked intros automatically".to_string()
             },
             Message::ToggleAutoSkip(!self.preferences.auto_skip_intro),
+        ));
+        actions.push((
+            if self.preferences.reduced_motion {
+                "Allow browse previews again".to_string()
+            } else {
+                "Turn previews off (Reduce motion)".to_string()
+            },
+            Message::ToggleReducedMotion(!self.preferences.reduced_motion),
         ));
         actions.push((
             format!("Larger subtitles ({larger}%)"),
