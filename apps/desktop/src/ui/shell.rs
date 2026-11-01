@@ -1,7 +1,7 @@
 use crate::app::{Message, Screen};
 use crate::design;
 use crate::ui::icons::{self, Icon};
-use crate::ui::theme::{self, Gap};
+use crate::ui::theme::{self, Breakpoint, Gap};
 use iced::widget::canvas::{self, Canvas, Program};
 use iced::widget::{Space, button, column, container, row, stack, text};
 use iced::{
@@ -11,43 +11,114 @@ use iced::{
 
 pub const BAR_HEIGHT: f32 = 76.0;
 
-pub fn nav_bar<'a>(active: Option<Screen>) -> Element<'a, Message> {
+pub const WORDMARK: &str = "SCREENROOM";
+
+pub const WORDMARK_MARK: &str = "SR";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavLabels {
+    Full,
+
+    Compact,
+}
+
+pub struct Destination {
+    pub screen: Screen,
+
+    pub label: &'static str,
+
+    pub compact: &'static str,
+
+    pub message: Message,
+}
+
+pub const DESTINATIONS: [Destination; 3] = [
+    Destination {
+        screen: Screen::Home,
+        label: "Home",
+        compact: "Home",
+        message: Message::GoHome,
+    },
+    Destination {
+        screen: Screen::Browse,
+        label: "Library",
+        compact: "Lib",
+        message: Message::GoBrowse,
+    },
+    Destination {
+        screen: Screen::Settings,
+        label: "Settings",
+        compact: "Prefs",
+        message: Message::GoSettings,
+    },
+];
+
+pub fn nav_labels(breakpoint: Breakpoint) -> NavLabels {
+    match breakpoint {
+        Breakpoint::Narrow | Breakpoint::Compact => NavLabels::Compact,
+        Breakpoint::Standard | Breakpoint::Wide | Breakpoint::Ultra => NavLabels::Full,
+    }
+}
+
+pub fn wordmark(breakpoint: Breakpoint) -> &'static str {
+    match breakpoint {
+        Breakpoint::Narrow | Breakpoint::Compact => WORDMARK_MARK,
+        Breakpoint::Standard | Breakpoint::Wide | Breakpoint::Ultra => WORDMARK,
+    }
+}
+
+pub fn destination_label(destination: &Destination, labels: NavLabels) -> &'static str {
+    match labels {
+        NavLabels::Full => destination.label,
+        NavLabels::Compact => destination.compact,
+    }
+}
+
+fn nav_item<'a>(
+    destination: &Destination,
+    active: Option<Screen>,
+    labels: NavLabels,
+) -> Element<'a, Message> {
     let tokens = design::tokens();
+    let current = active == Some(destination.screen);
 
-    let item = |label: &'static str, screen: Screen, message: Message| -> Element<'a, Message> {
-        let current = active == Some(screen);
-        button(
-            text(label)
-                .size(tokens.type_scale.label)
-                .font(if current {
-                    theme::medium()
-                } else {
-                    theme::regular()
-                })
-                .color(if current {
-                    theme::ink()
-                } else {
-                    theme::muted()
-                }),
-        )
-        .on_press(message)
-        .padding(Padding {
-            top: 6.0,
-            bottom: 6.0,
-            left: 0.0,
-            right: 0.0,
-        })
-        .style(quiet_button)
-        .into()
-    };
+    button(
+        text(destination_label(destination, labels))
+            .size(tokens.type_scale.label)
+            .font(if current {
+                theme::medium()
+            } else {
+                theme::regular()
+            })
+            .color(if current {
+                theme::ink()
+            } else {
+                theme::muted()
+            }),
+    )
+    .on_press(destination.message.clone())
+    .padding(Padding {
+        top: 6.0,
+        bottom: 6.0,
+        left: 0.0,
+        right: 0.0,
+    })
+    .style(quiet_button)
+    .into()
+}
 
-    let links = row![
-        item("Home", Screen::Home, Message::GoHome),
-        item("Library", Screen::Browse, Message::GoBrowse),
-        item("Settings", Screen::Settings, Message::GoSettings),
-    ]
-    .spacing(theme::gap(Gap::Section))
-    .align_y(Alignment::Center);
+pub fn nav_bar<'a>(active: Option<Screen>, width: f32) -> Element<'a, Message> {
+    let tokens = design::tokens();
+    let breakpoint = Breakpoint::at(width);
+    let labels = nav_labels(breakpoint);
+
+    let mut links = row![]
+        .spacing(theme::gap(Gap::Section))
+        .align_y(Alignment::Center);
+
+    for destination in &DESTINATIONS {
+        links = links.push(nav_item(destination, active, labels));
+    }
 
     let search = button(icons::icon(Icon::Search, 16.0, theme::muted()))
         .on_press(Message::GoBrowse)
@@ -65,7 +136,7 @@ pub fn nav_bar<'a>(active: Option<Screen>) -> Element<'a, Message> {
     .style(quiet_button);
 
     row![
-        text("SCREENROOM")
+        text(wordmark(breakpoint))
             .size(tokens.type_scale.caption)
             .font(theme::semibold())
             .color(theme::ink()),
@@ -123,6 +194,7 @@ pub fn frame<'a>(
     active: Option<Screen>,
     status: Option<&'a str>,
     error: Option<&'a str>,
+    width: f32,
 ) -> Element<'a, Message> {
     if active == Some(Screen::Player) {
         return body;
@@ -141,7 +213,7 @@ pub fn frame<'a>(
         })
     };
 
-    let bar = container(nav_bar(active))
+    let bar = container(nav_bar(active, width))
         .width(Length::Fill)
         .height(Length::Fixed(BAR_HEIGHT))
         .padding(Padding {
@@ -183,9 +255,10 @@ fn bar_style(hero: bool) -> container::Style {
     let background = if hero {
         Some(Background::Gradient(iced::Gradient::Linear(
             iced::gradient::Linear::new(iced::Radians(std::f32::consts::FRAC_PI_2))
-                .add_stop(0.0, Color::from_rgba(0.039, 0.039, 0.039, 0.94))
-                .add_stop(0.5, Color::from_rgba(0.039, 0.039, 0.039, 0.66))
-                .add_stop(1.0, Color::from_rgba(0.039, 0.039, 0.039, 0.0)),
+                .add_stop(0.0, Color::from_rgba(0.039, 0.039, 0.039, 0.97))
+                .add_stop(0.45, Color::from_rgba(0.039, 0.039, 0.039, 0.9))
+                .add_stop(0.78, Color::from_rgba(0.039, 0.039, 0.039, 0.62))
+                .add_stop(1.0, Color::from_rgba(0.039, 0.039, 0.039, 0.28)),
         )))
     } else {
         Some(Background::Color(theme::ground()))
@@ -268,7 +341,10 @@ impl Program<Message> for Avatar {
 
 #[cfg(test)]
 mod tests {
+    use crate::app::Screen;
     use crate::ui::shell;
+    use crate::ui::shell::NavLabels;
+    use crate::ui::theme::Breakpoint;
 
     #[test]
     #[allow(clippy::useless_conversion)]
@@ -277,5 +353,95 @@ mod tests {
         assert!(shell::status_bar(Some("Backed up 1.5 MB").into(), None).is_some());
         assert!(shell::status_bar(None, Some("backup_failed: disk full").into()).is_some());
     }
-}
 
+    #[test]
+    fn the_navigation_drops_its_labels_only_once_the_window_is_narrower_than_standard() {
+        for breakpoint in [Breakpoint::Standard, Breakpoint::Wide, Breakpoint::Ultra] {
+            assert_eq!(
+                shell::nav_labels(breakpoint),
+                NavLabels::Full,
+                "{breakpoint:?} has room for words"
+            );
+        }
+
+        for breakpoint in [Breakpoint::Compact, Breakpoint::Narrow] {
+            assert_eq!(
+                shell::nav_labels(breakpoint),
+                NavLabels::Compact,
+                "{breakpoint:?} must not keep full labels"
+            );
+        }
+
+        assert_eq!(shell::nav_labels(Breakpoint::at(1100.0)), NavLabels::Full);
+        assert_eq!(
+            shell::nav_labels(Breakpoint::at(1099.0)),
+            NavLabels::Compact
+        );
+        assert_eq!(shell::nav_labels(Breakpoint::at(3440.0)), NavLabels::Full);
+        assert_eq!(shell::nav_labels(Breakpoint::at(600.0)), NavLabels::Compact);
+    }
+
+    #[test]
+    fn the_wordmark_shortens_below_the_standard_breakpoint_and_stays_legible() {
+        for breakpoint in [Breakpoint::Standard, Breakpoint::Wide, Breakpoint::Ultra] {
+            assert_eq!(shell::wordmark(breakpoint), shell::WORDMARK);
+        }
+
+        for breakpoint in [Breakpoint::Compact, Breakpoint::Narrow] {
+            let mark = shell::wordmark(breakpoint);
+            assert_eq!(mark, shell::WORDMARK_MARK);
+            assert!(!mark.is_empty(), "{breakpoint:?} must still name the app");
+            assert!(
+                mark.chars().count() < shell::WORDMARK.chars().count(),
+                "{breakpoint:?} must be a shorter form"
+            );
+        }
+
+        assert_eq!(
+            shell::wordmark(Breakpoint::at(1099.0)),
+            shell::WORDMARK_MARK
+        );
+        assert_eq!(shell::wordmark(Breakpoint::at(1100.0)), shell::WORDMARK);
+    }
+
+    #[test]
+    fn every_destination_survives_the_collapse_as_a_distinct_short_word() {
+        assert_eq!(
+            shell::DESTINATIONS.map(|destination| destination.screen),
+            [Screen::Home, Screen::Browse, Screen::Settings]
+        );
+
+        for (index, destination) in shell::DESTINATIONS.iter().enumerate() {
+            let full = shell::destination_label(destination, NavLabels::Full);
+            let compact = shell::destination_label(destination, NavLabels::Compact);
+
+            assert_eq!(full, destination.label);
+            assert!(!compact.is_empty(), "{full} lost its label when collapsed");
+            assert!(
+                compact.chars().count() <= full.chars().count(),
+                "{full} grew when collapsed"
+            );
+            assert!(
+                !shell::DESTINATIONS[..index]
+                    .iter()
+                    .any(
+                        |earlier| shell::destination_label(earlier, NavLabels::Compact) == compact
+                    ),
+                "{compact} does not identify one destination"
+            );
+        }
+
+        assert_eq!(
+            shell::DESTINATIONS.map(|destination| destination.label),
+            ["Home", "Library", "Settings"]
+        );
+    }
+
+    #[test]
+    fn the_bar_composes_at_every_breakpoint_including_unknown_widths() {
+        for width in [0.0, 600.0, 900.0, 1099.0, 1440.0, 3440.0, f32::NAN] {
+            let _ = shell::nav_bar(Some(Screen::Home), width);
+            let _ = shell::nav_bar(None, width);
+        }
+    }
+}

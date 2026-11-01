@@ -188,7 +188,7 @@ impl<'a> Settings<'a> {
         scrollable(items)
             .height(Length::Fill)
             .width(Length::Fixed(rail_width))
-            .style(hidden_scrollbar)
+            .style(theme::scrollbar)
             .into()
     }
 
@@ -216,7 +216,7 @@ impl<'a> Settings<'a> {
         )
         .height(Length::Fill)
         .width(Length::Fill)
-        .style(hidden_scrollbar)
+        .style(theme::scrollbar)
         .into()
     }
 
@@ -570,35 +570,6 @@ fn slider_style(_theme: &Theme, _status: slider::Status) -> slider::Style {
             background: Background::Color(theme::signal()),
             border_width: 0.0,
             border_color: theme::hair(),
-        },
-    }
-}
-
-fn hidden_scrollbar(_theme: &Theme, _status: scrollable::Status) -> scrollable::Style {
-    scrollable::Style {
-        container: container::Style::default(),
-        vertical_rail: scrollable::Rail {
-            background: None,
-            border: Border::default(),
-            scroller: scrollable::Scroller {
-                background: Background::Color(theme::hair()),
-                border: Border::default(),
-            },
-        },
-        horizontal_rail: scrollable::Rail {
-            background: None,
-            border: Border::default(),
-            scroller: scrollable::Scroller {
-                background: Background::Color(theme::hair()),
-                border: Border::default(),
-            },
-        },
-        gap: None,
-        auto_scroll: scrollable::AutoScroll {
-            background: Background::Color(theme::surface(2)),
-            border: Border::default(),
-            shadow: Shadow::default(),
-            icon: theme::ink(),
         },
     }
 }

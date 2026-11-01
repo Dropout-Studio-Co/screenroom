@@ -111,6 +111,10 @@ pub struct Library<'a> {
 
     pub filter: Filter,
 
+    pub watchlist_only: bool,
+
+    pub favorites_only: bool,
+
     pub sort: Sort,
 
     pub source_line: String,
@@ -146,7 +150,8 @@ impl<'a> Library<'a> {
             scrollable(page)
                 .id(grid_id())
                 .width(Length::Fill)
-                .height(Length::Fill),
+                .height(Length::Fill)
+                .style(theme::scrollbar),
         )
         .width(Length::Fill)
         .height(Length::Fill)
@@ -253,6 +258,39 @@ impl<'a> Library<'a> {
                         }),
                 )
                 .on_press(filter.message(active))
+                .padding([theme::gap(Gap::Card), theme::gap(Gap::Group)])
+                .style(chip_style(active)),
+            );
+        }
+
+        for (label, active, message) in [
+            (
+                "Watchlist",
+                self.watchlist_only,
+                Message::ToggleWatchlistOnly(!self.watchlist_only),
+            ),
+            (
+                "Favourites",
+                self.favorites_only,
+                Message::ToggleFavoritesOnly(!self.favorites_only),
+            ),
+        ] {
+            strip = strip.push(
+                button(
+                    text(label)
+                        .size(tokens.type_scale.label)
+                        .font(if active {
+                            theme::medium()
+                        } else {
+                            theme::regular()
+                        })
+                        .color(if active {
+                            theme::ground()
+                        } else {
+                            theme::ink()
+                        }),
+                )
+                .on_press(message)
                 .padding([theme::gap(Gap::Card), theme::gap(Gap::Group)])
                 .style(chip_style(active)),
             );
@@ -884,6 +922,8 @@ mod tests {
             pages: 1,
             query: "",
             filter: Filter::All,
+            watchlist_only: false,
+            favorites_only: false,
             sort: SortChoice::Title,
             source_line: source_line(0, 0, None),
             nav: &nav,
@@ -940,6 +980,8 @@ mod tests {
             pages: 417,
             query: "the",
             filter: Filter::Films,
+            watchlist_only: true,
+            favorites_only: false,
             sort: SortChoice::Added,
             source_line: source_line(2, 10_000, Some("2 hours ago")),
             nav: &nav,

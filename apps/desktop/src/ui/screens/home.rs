@@ -132,6 +132,7 @@ impl<'a> Home<'a> {
                 .spacing(0.0),
         )
         .height(Length::Fill)
+        .style(theme::scrollbar)
         .into();
         page
     }

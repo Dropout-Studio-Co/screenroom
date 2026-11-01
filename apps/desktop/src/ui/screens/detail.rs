@@ -222,8 +222,8 @@ impl<'a> Detail<'a> {
             container(icons::icon(icon, 16.0, colour))
                 .width(Length::Fixed(ROUND_ACTION))
                 .height(Length::Fixed(ROUND_ACTION))
-                .center_x(Length::Fill)
-                .center_y(Length::Fill),
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center),
         )
         .on_press(message)
         .padding(0)
@@ -473,8 +473,8 @@ impl<'a> Detail<'a> {
         let chip = container(icons::icon(Icon::Play, 14.0, chip_colour))
             .width(Length::Fixed(PLAY_CHIP))
             .height(Length::Fixed(PLAY_CHIP))
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
             .style(move |_theme| play_chip(current));
 
         let content = row![number, still, lines, chip]

@@ -1,8 +1,35 @@
 use crate::design;
-use iced::Color;
-use iced::Font;
 use iced::font::{Family, Weight};
+use iced::widget::{container, scrollable};
+use iced::{Background, Border, Color, Font, Shadow, Theme};
 use std::borrow::Cow;
+
+pub fn scrollbar(_theme: &Theme, _status: scrollable::Status) -> scrollable::Style {
+    let scroller = scrollable::Scroller {
+        background: Background::Color(Color::from_rgba(1.0, 1.0, 1.0, 0.07)),
+        border: Border::default(),
+    };
+    scrollable::Style {
+        container: container::Style::default(),
+        vertical_rail: scrollable::Rail {
+            background: None,
+            border: Border::default(),
+            scroller,
+        },
+        horizontal_rail: scrollable::Rail {
+            background: None,
+            border: Border::default(),
+            scroller,
+        },
+        gap: None,
+        auto_scroll: scrollable::AutoScroll {
+            background: Background::Color(Color::from_rgba(0.08, 0.08, 0.09, 0.96)),
+            border: Border::default(),
+            shadow: Shadow::default(),
+            icon: Color::from_rgba(0.96, 0.96, 0.97, 1.0),
+        },
+    }
+}
 
 pub const PAD: f32 = 40.0;
 

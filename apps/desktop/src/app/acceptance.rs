@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::*;
+use crate::ui::screens::settings::Section;
 
 const TICK: Duration = Duration::from_millis(10);
 
@@ -1238,55 +1239,83 @@ fn settings_are_operable_without_a_pointer() {
     let _ = app.update(command_key("3"));
     assert_eq!(app.screen, Screen::Settings, "⌘3 reaches Settings");
 
-    let actions = app.settings_actions();
+    let labels = app.settings_labels();
     assert!(
-        actions.len() >= 4,
-        "Settings must offer actions, found {}",
-        actions.len()
+        labels.len() >= 4,
+        "Settings must offer rows, found {}",
+        labels.len()
     );
 
-    let autoplay = actions
+    let autoplay = labels
         .iter()
-        .position(|(label, _)| label.to_lowercase().contains("next episode"))
-        .expect("the autoplay action must exist");
+        .position(|label| label.to_lowercase().contains("next episode"))
+        .expect("the autoplay row must exist");
     let before = app.preferences.autoplay_next;
     app.settings_focus = autoplay;
     let _ = app.update(key("enter"));
     assert_ne!(
         app.preferences.autoplay_next, before,
-        "Enter must run the focused Settings action instead of doing nothing"
+        "Enter must run the focused Settings row instead of doing nothing"
     );
 
-    let scale_before = app.preferences.subtitle_scale_percent;
-    app.settings_focus = app
-        .settings_actions()
+    let slider = labels
         .iter()
-        .position(|(label, _)| label.starts_with("Larger subtitles"))
-        .expect("the subtitle action must exist");
+        .position(|label| label.starts_with("Subtitle size"))
+        .expect("the subtitle size slider must be drawn");
+    let scale_before = app.preferences.subtitle_scale_percent;
+    app.settings_focus = slider;
     let _ = app.update(key("enter"));
-    assert!(
-        app.preferences.subtitle_scale_percent > scale_before,
-        "a keyboard action must raise the subtitle size without a pointer"
+    assert_eq!(
+        app.preferences.subtitle_scale_percent, scale_before,
+        "a slider row carries no press action, so Enter must change nothing"
     );
 
     app.settings_focus = 0;
     let _ = app.update(key("down"));
-    assert_eq!(app.settings_focus, 1, "Down moves to the next action");
+    assert_eq!(app.settings_focus, 1, "Down moves to the next row");
     let _ = app.update(key("up"));
-    assert_eq!(app.settings_focus, 0, "Up returns to the first action");
+    assert_eq!(app.settings_focus, 0, "Up returns to the first row");
     let _ = app.update(key("up"));
     assert_eq!(app.settings_focus, 0, "the cursor never leaves the list");
 
     for _ in 0..24 {
         let _ = app.update(key("down"));
     }
-    assert!(
-        app.settings_focus + 1 == app.settings_actions().len(),
-        "repeated Down stops on the last action rather than running past it"
+    assert_eq!(
+        app.settings_focus,
+        app.settings_labels().len() - 1,
+        "repeated Down stops on the last drawn row rather than running past it"
     );
 
     let _ = app.update(key("escape"));
     assert_eq!(app.screen, Screen::Home, "Escape still leaves Settings");
+}
+
+#[test]
+fn the_settings_cursor_walks_only_the_section_on_screen() {
+    let mut app = fresh_app();
+    let _ = app.update(command_key("3"));
+    app.settings_section = Section::Playback;
+
+    let playback_rows = app.settings_labels().len();
+    for _ in 0..24 {
+        let _ = app.update(key("down"));
+    }
+    assert_eq!(
+        app.settings_focus,
+        playback_rows - 1,
+        "the cursor must stop at the last row of the section on screen"
+    );
+
+    let _ = app.update(Message::SettingsSection(Section::Data));
+    for _ in 0..24 {
+        let _ = app.update(key("down"));
+    }
+    assert_eq!(
+        app.settings_focus,
+        app.settings_labels().len() - 1,
+        "another section has its own rows and its own end"
+    );
 }
 
 #[test]
@@ -1306,15 +1335,12 @@ fn step_16_a_conversion_writes_a_checked_copy_and_leaves_the_original_alone() {
     scan_folder(&mut app, &media.root);
     let file_id = app.browse.items.first().expect("one film").id.clone();
 
-    let labels: Vec<String> = app
-        .settings_actions()
-        .into_iter()
-        .map(|(label, _)| label)
-        .collect();
+    app.settings_section = Section::Data;
+    let labels: Vec<String> = app.settings_labels();
     assert!(
         labels
             .iter()
-            .any(|label| label.contains("converted copies")),
+            .any(|label| label.contains("Converted copies folder")),
         "the conversion folder must be reachable from the keyboard, found {labels:?}"
     );
 
@@ -1809,20 +1835,17 @@ fn the_online_panels_explain_themselves_and_never_start_a_call_they_cannot_make(
         );
     }
 
-    let actions: Vec<String> = app
-        .settings_actions()
-        .into_iter()
-        .map(|(label, _)| label)
-        .collect();
+    app.settings_section = Section::Online;
+    let actions: Vec<String> = app.settings_labels();
     assert!(
         actions.iter().any(|label| label.contains("Enrich")),
-        "enrichment must be reachable from the keyboard action strip: {actions:?}"
+        "enrichment must be reachable from the keyboard: {actions:?}"
     );
     assert!(
         actions
             .iter()
-            .any(|label| label.contains("subtitle provider")),
-        "subtitle search must be reachable from the keyboard action strip: {actions:?}"
+            .any(|label| label.contains("Metadata provider")),
+        "the metadata provider must be reachable from the keyboard: {actions:?}"
     );
     assert!(
         actions

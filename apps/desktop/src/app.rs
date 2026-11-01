@@ -518,6 +518,10 @@ pub struct App {
 
     window_width: f32,
 
+    last_input: std::time::Instant,
+
+    player_chrome: bool,
+
     preferences: Preferences,
 
     profiles: Vec<Profile>,
@@ -960,6 +964,7 @@ impl App {
             .map(|_| std::time::Instant::now() + TERMINATE_CHECK_DELAY);
         app.background_work = true;
 
+        app.open_requested_screen();
         app.ensure_artwork();
         app.start_durations();
         (app, task)
@@ -1061,6 +1066,8 @@ impl App {
             up_next: None,
             auto_skipped: None,
             window_width: INITIAL_WINDOW_WIDTH,
+            last_input: std::time::Instant::now(),
+            player_chrome: true,
             preferences,
             profiles: Vec::new(),
             settings_focus: 0,
@@ -1123,6 +1130,22 @@ impl App {
         app.reload();
         app.open_checked_screen();
         app
+    }
+
+    fn open_requested_screen(&mut self) {
+        let Some(requested) = std::env::var_os("SCREENROOM_OPEN_SCREEN") else {
+            return;
+        };
+        match requested.to_string_lossy().as_ref() {
+            "library" => self.navigate(Screen::Browse),
+            "settings" => self.navigate(Screen::Settings),
+            "detail" => {
+                if let Some(file_id) = self.browse.items.first().map(|item| item.id.clone()) {
+                    self.open_detail(&file_id);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn open_checked_screen(&mut self) {
@@ -1542,17 +1565,32 @@ impl App {
             .copied()
     }
 
-    fn home_focus_index(&self) -> Option<usize> {
-        let selected = self.home_selected_item()?;
-        self.home
-            .iter()
-            .position(|item| item.id == selected.id)
-            .or_else(|| {
-                self.suggestions
-                    .iter()
-                    .position(|suggestion| suggestion.item.id == selected.id)
-                    .map(|index| index + self.home.len())
-            })
+    fn home_flat_index(&self) -> Option<usize> {
+        let sections = self.home_sections();
+        let focus = self.nav.focus();
+        let mut offset = 0;
+        for (rail, (_, items)) in sections.iter().enumerate() {
+            if rail == focus.rail {
+                return (focus.column < items.len()).then_some(offset + focus.column);
+            }
+            offset += items.len();
+        }
+        None
+    }
+
+    fn home_focus_position(&self, index: usize) -> Option<ui::route::FocusPos> {
+        let sections = self.home_sections();
+        let mut remaining = index;
+        for (rail, (_, items)) in sections.iter().enumerate() {
+            if remaining < items.len() {
+                return Some(ui::route::FocusPos {
+                    rail,
+                    column: remaining,
+                });
+            }
+            remaining -= items.len();
+        }
+        None
     }
 
     #[cfg(test)]
@@ -3837,6 +3875,9 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        if !matches!(message, Message::Tick) {
+            self.last_input = std::time::Instant::now();
+        }
         if self.route_quit() {
             return iced::exit();
         }
@@ -4149,6 +4190,11 @@ impl App {
                     tasks = Task::batch([tasks, self.apply_accessibility(action)]);
                 }
                 self.poll();
+                let playing =
+                    matches!(self.snapshot.state, screenroom_player::PlayerState::Playing)
+                        && self.up_next.is_none();
+                self.player_chrome =
+                    ui::screens::player::chrome_visible(playing, self.last_input.elapsed());
                 if self.drive_play_check() {
                     return iced::exit();
                 }
@@ -4214,7 +4260,7 @@ impl App {
 
         let step = match self.screen {
             Screen::Detail => 1,
-            _ => grid_columns(self.window_width),
+            _ => ui::theme::Breakpoint::at(self.window_width).columns(),
         };
         let next = match direction {
             Focus::Left => current.checked_sub(1),
@@ -4312,8 +4358,15 @@ impl App {
                 self.update(Message::ToggleAvailableOnly(wanted))
             }
             Action::Open(index) => {
-                self.focus_card(index);
-                self.clamp_focus();
+                if let Some(position) = self.home_focus_position(index) {
+                    self.nav.set_focus(position);
+                    self.sync_navigation();
+                } else if self.screen == Screen::Home {
+                    return Task::none();
+                } else {
+                    self.focus_card(index);
+                    self.clamp_focus();
+                }
                 self.update(Message::Activate)
             }
             Action::PlayDetail | Action::RestartDetail => {
@@ -4635,12 +4688,12 @@ impl App {
         facts.error = self.error.clone();
         match self.screen {
             Screen::Home => {
-                facts.items = self
-                    .home
+                let sections = self.home_sections();
+                facts.items = sections
                     .iter()
-                    .chain(self.suggestions.iter().map(|suggestion| &suggestion.item))
+                    .flat_map(|(_, items)| items.iter().copied())
                     .collect();
-                facts.focus = self.home_focus_index();
+                facts.focus = self.home_flat_index();
             }
             Screen::Browse => {
                 facts.items = self.browse.items.iter().collect();
@@ -4671,11 +4724,7 @@ impl App {
                 facts.focus = Some(self.focus);
             }
             Screen::Settings => {
-                facts.settings = self
-                    .settings_actions()
-                    .into_iter()
-                    .map(|(label, _message)| label)
-                    .collect();
+                facts.settings = self.settings_labels();
                 facts.settings_focus = self.settings_focus;
             }
             Screen::Player => {
@@ -4767,6 +4816,7 @@ impl App {
             Some(self.screen),
             self.status.as_deref(),
             self.error.as_deref(),
+            self.window_width,
         )
     }
 
@@ -4813,6 +4863,8 @@ impl App {
             pages: self.browse.page_count() as u32,
             query: &self.browse.text,
             filter: self.browse_filter(),
+            watchlist_only: self.browse.watchlist_only,
+            favorites_only: self.browse.favorites_only,
             sort: self.browse.sort,
             source_line: ui::screens::library::source_line(
                 self.sources.len(),
@@ -4851,12 +4903,10 @@ impl App {
             .max()?;
         let elapsed = (epoch_ms() - newest).max(0) / 1_000;
         Some(match elapsed {
-            0..=90 => "scanned just now".to_string(),
-            seconds if seconds < 3_600 => {
-                format!("scanned {} minutes ago", (seconds / 60).max(1))
-            }
-            seconds if seconds < 86_400 => format!("scanned {} hours ago", seconds / 3_600),
-            seconds => format!("scanned {} days ago", seconds / 86_400),
+            0..=90 => "just now".to_string(),
+            seconds if seconds < 3_600 => format!("{} minutes ago", (seconds / 60).max(1)),
+            seconds if seconds < 86_400 => format!("{} hours ago", seconds / 3_600),
+            seconds => format!("{} days ago", seconds / 86_400),
         })
     }
 
@@ -4977,8 +5027,8 @@ impl App {
             width: self.window_width,
             position: self.scrub.unwrap_or(self.snapshot.position),
             volume: self.volume_percent(),
-            chrome: true,
-            overlay: Some(self.player_overlay()),
+            chrome: self.player_chrome,
+            overlay: self.player_chrome.then(|| self.player_overlay()),
         }
         .view()
     }
@@ -5422,6 +5472,14 @@ impl App {
                         on_press: Some(Message::CancelBackup),
                     });
                 }
+                rows.push(Row::Action {
+                    label: "Converted copies folder",
+                    hint: Some(
+                        "A conversion writes a new file here and leaves the original alone.",
+                    ),
+                    action: "Choose…",
+                    on_press: Some(Message::ChooseConversionFolder),
+                });
                 rows.push(Row::Value {
                     label: "Restore file",
                     value: self.restore_path.clone(),
@@ -5809,175 +5867,8 @@ impl App {
         rows.into()
     }
 
-    fn settings_actions(&self) -> Vec<(String, Message)> {
-        let mut actions: Vec<(String, Message)> = Vec::new();
-        let scale_step = 10;
-        let larger = (self.preferences.subtitle_scale_percent + scale_step)
-            .min(Preferences::SUBTITLE_SCALE_MAX_PERCENT);
-        let smaller = self
-            .preferences
-            .subtitle_scale_percent
-            .saturating_sub(scale_step)
-            .max(Preferences::SUBTITLE_SCALE_MIN_PERCENT);
-        let higher = (self.preferences.subtitle_position_percent + 5)
-            .min(Preferences::SUBTITLE_POSITION_MAX_PERCENT);
-        let lower = self.preferences.subtitle_position_percent.saturating_sub(5);
-        if self.backup_job.is_some() {
-            actions.push((
-                "Cancel the backup that is running".to_string(),
-                Message::CancelBackup,
-            ));
-        }
-        actions.push((
-            "Enrich the library online now".to_string(),
-            Message::EnrichmentNow,
-        ));
-        actions.push((
-            if self.artwork_retention == ArtworkRetention::KeepLocally {
-                "Stop keeping provider artwork".to_string()
-            } else {
-                "Keep provider artwork on this machine".to_string()
-            },
-            Message::ToggleArtworkRetention,
-        ));
-        actions.push((
-            "Search the subtitle provider".to_string(),
-            Message::SubtitleSearchNow,
-        ));
-        if self.cast_session.is_some() {
-            actions.push(("Pause the cast".to_string(), Message::CastPause));
-            actions.push(("Stop the cast".to_string(), Message::CastStop));
-            actions.push(("Disconnect the cast".to_string(), Message::CastDisconnect));
-        }
-        for profile in &self.profiles {
-            if profile.id != self.profile_id {
-                actions.push((
-                    format!("Switch to {}", profile.name),
-                    Message::ProfileChosen(profile.id.clone()),
-                ));
-            }
-        }
-        actions.push((
-            if self.preferences.autoplay_next {
-                "Stop playing the next episode automatically".to_string()
-            } else {
-                "Play the next episode automatically".to_string()
-            },
-            Message::ToggleAutoplay(!self.preferences.autoplay_next),
-        ));
-        actions.push((
-            if self.preferences.auto_skip_intro {
-                "Stop skipping marked intros".to_string()
-            } else {
-                "Skip marked intros automatically".to_string()
-            },
-            Message::ToggleAutoSkip(!self.preferences.auto_skip_intro),
-        ));
-        actions.push((
-            if self.preferences.reduced_motion {
-                "Allow browse previews again".to_string()
-            } else {
-                "Turn previews off (Reduce motion)".to_string()
-            },
-            Message::ToggleReducedMotion(!self.preferences.reduced_motion),
-        ));
-        actions.push((
-            format!("Larger subtitles ({larger}%)"),
-            Message::SubtitleScale(f64::from(larger)),
-        ));
-        actions.push((
-            format!("Smaller subtitles ({smaller}%)"),
-            Message::SubtitleScale(f64::from(smaller)),
-        ));
-        actions.push((
-            format!("Subtitles higher ({higher}%)"),
-            Message::SubtitlePosition(f64::from(higher)),
-        ));
-        actions.push((
-            format!("Subtitles lower ({lower}%)"),
-            Message::SubtitlePosition(f64::from(lower)),
-        ));
-        actions.push((
-            "Type the profile name".to_string(),
-            Message::FocusSettingsField(SettingsField::ProfileName),
-        ));
-        actions.push((
-            "Type the subtitle language".to_string(),
-            Message::FocusSettingsField(SettingsField::SubtitleLanguage),
-        ));
-        actions.push((
-            "Type the audio language".to_string(),
-            Message::FocusSettingsField(SettingsField::AudioLanguage),
-        ));
-        actions.push((
-            "Type the folder path".to_string(),
-            Message::FocusSettingsField(SettingsField::FolderPath),
-        ));
-        actions.push((
-            "Type the backup file path".to_string(),
-            Message::FocusSettingsField(SettingsField::BackupPath),
-        ));
-        actions.push((
-            "Type the restore file path".to_string(),
-            Message::FocusSettingsField(SettingsField::RestorePath),
-        ));
-        actions.push((
-            "Type the folder for converted copies".to_string(),
-            Message::FocusSettingsField(SettingsField::ConversionFolder),
-        ));
-        if self.conversion_runner.is_some() {
-            actions.push(("Stop the conversion".to_string(), Message::CancelConversion));
-        }
-        actions.push((
-            "Apply the subtitle language".to_string(),
-            Message::ApplySubtitleLanguage,
-        ));
-        actions.push((
-            "Apply the audio language".to_string(),
-            Message::ApplyAudioLanguage,
-        ));
-        actions.push(("Grant a folder".to_string(), Message::AddFolder));
-        for source in &self.sources {
-            actions.push((
-                format!("Rescan {}", source.label),
-                Message::RescanSource(source.id.clone()),
-            ));
-        }
-        actions.push((
-            "Type the saved source's name".to_string(),
-            Message::FocusSettingsField(SettingsField::BookmarkLabel),
-        ));
-        actions.push((
-            "Type the saved source's address".to_string(),
-            Message::FocusSettingsField(SettingsField::BookmarkAddress),
-        ));
-        actions.push((
-            "Type the saved source's access note".to_string(),
-            Message::FocusSettingsField(SettingsField::BookmarkAccess),
-        ));
-        actions.push(("Save that source".to_string(), Message::AddBookmark));
-        for bookmark in &self.bookmarks {
-            actions.push((
-                format!("Open {}", bookmark.label),
-                Message::OpenBookmark(bookmark.id.clone()),
-            ));
-            actions.push((
-                format!("Remove {}", bookmark.label),
-                Message::RemoveBookmark(bookmark.id.clone()),
-            ));
-        }
-        actions.push(("Back up now".to_string(), Message::BackupNow));
-        if !self.restore_path.trim().is_empty() {
-            actions.push((
-                "Restore from that file".to_string(),
-                Message::InspectRestore,
-            ));
-        }
-        actions
-    }
-
     fn move_settings_focus(&mut self, down: bool) {
-        let len = self.settings_actions().len();
+        let len = self.settings_activations().len();
         if len == 0 {
             self.settings_focus = 0;
             return;
@@ -5991,11 +5882,36 @@ impl App {
     }
 
     fn run_settings_action(&mut self) -> Task<Message> {
-        let actions = self.settings_actions();
-        let Some((_, message)) = actions.get(self.settings_focus).cloned() else {
+        let actions = self.settings_activations();
+        let Some(Some(message)) = actions.get(self.settings_focus).cloned() else {
             return Task::none();
         };
         self.update(message)
+    }
+
+    fn settings_labels(&self) -> Vec<String> {
+        use ui::screens::settings::Row;
+        self.settings_rows()
+            .into_iter()
+            .map(|row| match row {
+                Row::Toggle { label, .. }
+                | Row::Value { label, .. }
+                | Row::Slider { label, .. }
+                | Row::Action { label, .. } => label.to_string(),
+            })
+            .collect()
+    }
+
+    fn settings_activations(&self) -> Vec<Option<Message>> {
+        use ui::screens::settings::Row;
+        self.settings_rows()
+            .into_iter()
+            .map(|row| match row {
+                Row::Toggle { message, .. } => Some(message),
+                Row::Action { on_press, .. } => on_press,
+                Row::Value { .. } | Row::Slider { .. } => None,
+            })
+            .collect()
     }
 
     fn mini_view(&self) -> Element<'_, Message> {
@@ -6225,26 +6141,7 @@ impl App {
 }
 
 pub fn grid_columns(window_width: f32) -> usize {
-    const TARGET_CARD_PX: f32 = 300.0;
-
-    const MIN_COLUMNS: usize = 2;
-
-    const MAX_COLUMNS: usize = 8;
-
-    if !window_width.is_finite() {
-        return DEFAULT_COLUMNS;
-    }
-
-    let usable = window_width - 2.0 * design::tokens().spacing.shell_pad;
-    if usable <= 0.0 {
-        return MIN_COLUMNS;
-    }
-    let columns = (usable / TARGET_CARD_PX).floor();
-
-    if !columns.is_finite() || columns < 1.0 {
-        return MIN_COLUMNS;
-    }
-    (columns as usize).clamp(MIN_COLUMNS, MAX_COLUMNS)
+    ui::theme::Breakpoint::at(window_width).columns()
 }
 
 pub fn round_percent(value: f64, min: u16, max: u16) -> u16 {
@@ -6306,9 +6203,9 @@ mod tests {
     fn the_grid_shows_more_cards_as_the_window_widens() {
         let laptop = grid_columns(1280.0);
         let ultrawide = grid_columns(3440.0);
-        assert_eq!(
-            laptop, DEFAULT_COLUMNS,
-            "a 1280-wide window keeps its old look"
+        assert!(
+            laptop >= DEFAULT_COLUMNS,
+            "a 1280-wide window must not lose columns"
         );
         assert!(
             ultrawide > laptop,
@@ -6350,18 +6247,27 @@ mod tests {
     #[test]
     fn keyboard_rows_move_by_the_columns_the_grid_was_drawn_with() {
         let (mut app, _directory) = app_with(24);
-        app.window_width = 3440.0;
-        let columns = app.columns();
-        assert!(columns > DEFAULT_COLUMNS, "this test needs a wider grid");
 
-        app.focus_card(0);
-        let _ = app.move_focus(Focus::Down);
-        assert_eq!(app.focus, columns, "Down must move exactly one row");
-        let _ = app.move_focus(Focus::Up);
-        assert_eq!(app.focus, 0, "Up must return to the same column");
+        for width in [900.0_f32, 1100.0, 1280.0, 1440.0, 1920.0, 3440.0] {
+            app.window_width = width;
+            let drawn =
+                ui::theme::Breakpoint::at(ui::screens::library::capped_window(width)).columns();
 
-        let _ = app.move_focus(Focus::Right);
-        assert_eq!(app.focus, 1);
+            app.focus_card(0);
+            let _ = app.move_focus(Focus::Down);
+            assert_eq!(
+                app.focus, drawn,
+                "at {width}px the library draws {drawn} columns, so Down must move {drawn}"
+            );
+            let _ = app.move_focus(Focus::Up);
+            assert_eq!(
+                app.focus, 0,
+                "Up must return to the same column at {width}px"
+            );
+
+            let _ = app.move_focus(Focus::Right);
+            assert_eq!(app.focus, 1);
+        }
     }
 
     #[test]
@@ -6944,8 +6850,9 @@ mod tests {
     #[test]
     fn focus_walks_the_grid_and_stops_at_the_edges() {
         let (mut app, _directory) = app_with(10);
+        let columns = app.columns();
 
-        assert_eq!(app.columns(), DEFAULT_COLUMNS);
+        assert!(columns >= 2, "the default window shows a grid");
         assert_eq!(app.focus, 0);
         let _ = app.move_focus(Focus::Left);
         assert_eq!(app.focus, 0, "focus must not leave the first card");
@@ -6954,7 +6861,7 @@ mod tests {
         let _ = app.move_focus(Focus::Up);
         assert_eq!(app.focus, 1, "there is no row above the first");
         let _ = app.move_focus(Focus::Down);
-        assert_eq!(app.focus, 1 + DEFAULT_COLUMNS, "down moves a whole row");
+        assert_eq!(app.focus, 1 + columns, "down moves a whole row");
 
         for _ in 0..20 {
             let _ = app.move_focus(Focus::Right);

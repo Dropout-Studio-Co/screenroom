@@ -556,12 +556,13 @@ fn build(facts: &ScreenFacts<'_>) -> Snapshot {
     match facts.surface {
         Surface::Home => {
             item_controls(facts, &mut controls);
-            controls.push(button(
-                "home:choose-folder",
-                "Choose a folder…",
-                Action::ChooseFolder,
-            ));
-            controls.push(button("home:add-folder", "Add and scan", Action::AddFolder));
+            if facts.items.is_empty() {
+                controls.push(button(
+                    "home:choose-folder",
+                    "Choose a folder…",
+                    Action::ChooseFolder,
+                ));
+            }
         }
         Surface::Browse => {
             browse_controls(facts, &mut controls);

@@ -12,6 +12,7 @@ use iced::{
     gradient,
 };
 use screenroom_player::{MediaTrack, NO_TRACK, PlayerSnapshot, TrackKind};
+use std::time::Duration;
 
 const TOP_SCRIM_HEIGHT: f32 = 200.0;
 
@@ -61,6 +62,8 @@ const STANDARD: f32 = 1000.0;
 
 const COMPACT: f32 = 900.0;
 
+pub const CHROME_IDLE_AFTER: Duration = Duration::from_millis(2_500);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Control {
     Scrub,
@@ -85,6 +88,14 @@ pub fn control_visible(width: f32, control: Control) -> bool {
         Control::Audio => width >= STANDARD,
         Control::Volume => width >= COMPACT,
     }
+}
+
+pub fn chrome_visible(playing: bool, since_last_input: Duration) -> bool {
+    if !playing {
+        return true;
+    }
+
+    since_last_input < CHROME_IDLE_AFTER
 }
 
 pub fn scrub_fraction(position: f64, duration: f64) -> f32 {
@@ -680,6 +691,51 @@ mod tests {
         assert!(!control_visible(1000.0, Control::Subtitles));
 
         assert!(control_visible(1200.0, Control::Subtitles));
+    }
+
+    #[test]
+    fn a_paused_film_keeps_its_controls_no_matter_how_long_nothing_happens() {
+        for idle in [
+            Duration::ZERO,
+            Duration::from_millis(400),
+            CHROME_IDLE_AFTER,
+            Duration::from_secs(90),
+        ] {
+            assert!(
+                chrome_visible(false, idle),
+                "a paused film must not become a dead end after {idle:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn input_within_the_idle_window_keeps_the_chrome_up_during_playback() {
+        for idle in [
+            Duration::ZERO,
+            Duration::from_millis(1),
+            Duration::from_millis(1_200),
+            CHROME_IDLE_AFTER - Duration::from_millis(1),
+        ] {
+            assert!(
+                chrome_visible(true, idle),
+                "the chrome must answer input that is only {idle:?} old"
+            );
+        }
+    }
+
+    #[test]
+    fn a_playing_film_recedes_once_the_idle_window_has_passed() {
+        assert!(!chrome_visible(true, CHROME_IDLE_AFTER));
+        assert!(!chrome_visible(
+            true,
+            CHROME_IDLE_AFTER + Duration::from_millis(1)
+        ));
+        assert!(!chrome_visible(true, Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn the_idle_window_is_the_two_and_a_half_seconds_the_spec_asks_for() {
+        assert_eq!(CHROME_IDLE_AFTER, Duration::from_millis(2_500));
     }
 
     #[test]
