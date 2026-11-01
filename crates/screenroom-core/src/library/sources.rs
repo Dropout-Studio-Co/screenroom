@@ -5,6 +5,7 @@ use rusqlite::{Row, params};
 use super::{Library, validated};
 use crate::domain::{Source, SourceState};
 use crate::error::{CoreError, Result};
+use crate::volume::VolumeIdentity;
 
 impl Library {
     pub fn sources(&self) -> Result<Vec<Source>> {
@@ -44,6 +45,7 @@ impl Library {
                 .unwrap_or_else(|| root.to_string_lossy().to_string()),
         };
         let root_path = root.to_string_lossy().to_string();
+        let volume_identity = volume_identity_storage(&root);
         let connection = self.connection();
 
         let mut statement =
@@ -58,8 +60,9 @@ impl Library {
         drop(statement);
         if let Some((id, _)) = removed {
             connection.execute(
-                "UPDATE sources SET label = ?1, state = 'available' WHERE id = ?2",
-                params![label, id],
+                "UPDATE sources SET label = ?1, state = 'available', volume_identity = ?2
+                 WHERE id = ?3",
+                params![label, volume_identity, id],
             )?;
             drop(connection);
             return self.source(&id);
@@ -72,12 +75,14 @@ impl Library {
             last_scan_ms: None,
         };
         connection.execute(
-            "INSERT INTO sources(id, label, root_path, state) VALUES(?1, ?2, ?3, ?4)",
+            "INSERT INTO sources(id, label, root_path, state, volume_identity)
+             VALUES(?1, ?2, ?3, ?4, ?5)",
             params![
                 source.id,
                 source.label,
                 source.root_path,
-                source.state.as_str()
+                source.state.as_str(),
+                volume_identity
             ],
         )?;
         Ok(source)
@@ -89,8 +94,13 @@ impl Library {
         let mut connection = self.connection();
         let tx = connection.transaction()?;
         let changed = tx.execute(
-            "UPDATE sources SET root_path = ?1, state = 'available' WHERE id = ?2",
-            params![root.to_string_lossy().to_string(), id],
+            "UPDATE sources SET root_path = ?1, state = 'available', volume_identity = ?2
+             WHERE id = ?3",
+            params![
+                root.to_string_lossy().to_string(),
+                volume_identity_storage(&root),
+                id
+            ],
         )?;
         if changed == 0 {
             return Err(CoreError::library(
@@ -100,6 +110,46 @@ impl Library {
         }
         tx.execute("UPDATE files SET available = 0 WHERE source_id = ?1", [id])?;
         tx.commit()?;
+        Ok(())
+    }
+
+    pub fn source_volume_identity(&self, id: &str) -> Result<Option<VolumeIdentity>> {
+        let connection = self.connection();
+        let stored: Option<Option<String>> = connection
+            .query_row(
+                "SELECT volume_identity FROM sources WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .map(Some)
+            .or_else(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })?;
+        Ok(stored
+            .flatten()
+            .and_then(|raw| VolumeIdentity::decode(&raw)))
+    }
+
+    pub(crate) fn record_volume_identity(&self, id: &str, identity: &VolumeIdentity) -> Result<()> {
+        let changed = self.connection().execute(
+            "UPDATE sources SET volume_identity = ?1 WHERE id = ?2",
+            params![identity.encode(), id],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::library(
+                "source_missing",
+                "The source is no longer in the library.",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn mark_source_unreachable(&self, id: &str, state: SourceState) -> Result<()> {
+        self.connection().execute(
+            "UPDATE sources SET state = ?1 WHERE id = ?2 AND state != 'removed'",
+            params![state.as_str(), id],
+        )?;
         Ok(())
     }
 
@@ -162,6 +212,10 @@ impl Library {
         let right: PathBuf = self.path_key(right).into();
         left == right || left.starts_with(&right) || right.starts_with(&left)
     }
+}
+
+fn volume_identity_storage(root: &Path) -> Option<String> {
+    VolumeIdentity::probe(root).map(|identity| identity.encode())
 }
 
 fn source_from_row(row: &Row<'_>) -> rusqlite::Result<Source> {

@@ -1,14 +1,16 @@
+use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use crate::domain::SourceState;
 use crate::error::{CoreError, Result};
-use crate::filename::parse_filename;
+use crate::filename::{ParsedName, parse_filename};
 use crate::fingerprint::media_fingerprint;
-use crate::library::{Ingest, Library};
+use crate::library::{Ingest, Library, StoredLocator};
+use crate::volume::VolumeIdentity;
 
 pub const MEDIA_EXTENSIONS: &[&str] = &[
     "mkv", "mp4", "m4v", "avi", "mov", "webm", "mpeg", "mpg", "ts", "m2ts", "wmv", "flv", "ogv",
@@ -70,9 +72,52 @@ pub struct ScanSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PartialScan {
     pub(crate) root_trusted: bool,
-    pub(crate) root_listed: bool,
+    pub(crate) root_reachable: bool,
+    pub(crate) withdrawal_allowed: bool,
     pub(crate) missing: Vec<String>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VolumeCheck {
+    Matched,
+
+    Unknown,
+
+    Mismatch,
+
+    Unreadable,
+}
+
+impl VolumeCheck {
+    fn classify(stored: Option<VolumeIdentity>, current: Option<VolumeIdentity>) -> Self {
+        match (stored, current) {
+            (Some(stored), Some(current)) => {
+                if stored.matches(&current) {
+                    Self::Matched
+                } else {
+                    Self::Mismatch
+                }
+            }
+            (Some(_), None) => Self::Unreadable,
+            (None, _) => Self::Unknown,
+        }
+    }
+
+    fn usable(self) -> bool {
+        !matches!(self, Self::Mismatch | Self::Unreadable)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PreparedFile {
+    relative_path: String,
+    fingerprint: String,
+    size: i64,
+    modified_ms: i64,
+    parsed: ParsedName,
+}
+
+type LocatorFacts = HashMap<String, StoredLocator>;
 
 #[derive(Debug)]
 pub struct LibraryScanner<'a> {
@@ -81,6 +126,7 @@ pub struct LibraryScanner<'a> {
     max_depth: usize,
     stable_age: Duration,
     max_issues: usize,
+    full_fingerprint: bool,
 }
 
 impl<'a> LibraryScanner<'a> {
@@ -91,6 +137,7 @@ impl<'a> LibraryScanner<'a> {
             max_depth: 64,
             stable_age: Duration::from_secs(15),
             max_issues: 1_000,
+            full_fingerprint: false,
         }
     }
 
@@ -98,6 +145,11 @@ impl<'a> LibraryScanner<'a> {
         self.max_entries = max_entries;
         self.max_depth = max_depth;
         self.stable_age = stable_age;
+        self
+    }
+
+    pub fn with_full_fingerprint(mut self, enabled: bool) -> Self {
+        self.full_fingerprint = enabled;
         self
     }
 
@@ -160,10 +212,18 @@ impl<'a> LibraryScanner<'a> {
             ));
         }
 
+        let current_volume = VolumeIdentity::probe(&root);
+        let volume = VolumeCheck::classify(
+            self.library.source_volume_identity(source_id)?,
+            current_volume.clone(),
+        );
+        let facts = self.library.locator_facts(source_id)?;
+
         let scan_id = crate::library::new_id();
         let mut visited = 0_u64;
         let mut imported = 0_u64;
         let mut bounded = false;
+        let mut prepared: Vec<PreparedFile> = Vec::new();
         let mut queue = VecDeque::from([(root.clone(), 0_usize)]);
 
         while let Some((directory, depth)) = queue.pop_front() {
@@ -241,15 +301,9 @@ impl<'a> LibraryScanner<'a> {
                 if !file_type.is_file() || is_hidden_name(&entry.file_name()) || !is_media(&path) {
                     continue;
                 }
-                match self.import(
-                    source_id,
-                    &root,
-                    &source.root_path,
-                    &relative,
-                    &scan_id,
-                    token,
-                ) {
-                    Ok(()) => {
+                match self.prepare(&root, &relative, &facts, token) {
+                    Ok(file) => {
+                        prepared.push(file);
                         imported += 1;
                         on_update(&ScanUpdate {
                             visited,
@@ -280,14 +334,28 @@ impl<'a> LibraryScanner<'a> {
             }
         }
 
+        if !prepared.is_empty() {
+            self.apply(source_id, &source.root_path, &scan_id, &prepared)?;
+        }
+
         let cancelled = token.is_cancelled();
+        let volume = self.settle_volume(source_id, volume, &current_volume, imported)?;
+        if volume == VolumeCheck::Mismatch {
+            issues.push("", "volume_mismatch");
+        } else if volume == VolumeCheck::Unreadable {
+            issues.push("", "volume_unreadable");
+        }
         let complete = !bounded && issues.is_empty();
+        let known = facts.len() as u64;
+        let withdrawal = withdrawal_allowed(volume, imported, known);
         if !cancelled {
             let partial = self.probe_partial_scan(
                 source_id,
                 &scan_id,
-                Path::new(&source.root_path),
-                complete,
+                &root,
+                complete && withdrawal,
+                withdrawal,
+                volume.usable(),
             )?;
             self.library.finish_scan(
                 source_id,
@@ -296,6 +364,10 @@ impl<'a> LibraryScanner<'a> {
                 Some(&source.root_path),
                 &partial,
             )?;
+            if !volume.usable() {
+                self.library
+                    .mark_source_unreachable(source_id, SourceState::Disconnected)?;
+            }
         }
         let update = ScanUpdate {
             visited,
@@ -314,56 +386,199 @@ impl<'a> LibraryScanner<'a> {
         })
     }
 
-    fn probe_partial_scan(
-        &self,
-        source_id: &str,
-        scan_id: &str,
+    pub fn scan_paths(
+        &mut self,
         root: &Path,
-        complete: bool,
-    ) -> Result<PartialScan> {
-        let resolved = std::fs::canonicalize(root).ok();
-        let root_trusted = resolved
-            .as_ref()
-            .is_some_and(|resolved| self.library.path_key(resolved) == self.library.path_key(root));
-        if complete {
-            return Ok(PartialScan {
-                root_trusted,
-                root_listed: false,
-                missing: Vec::new(),
-            });
+        paths: &[PathBuf],
+        token: &ScanToken,
+        mut on_update: impl FnMut(&ScanUpdate),
+    ) -> Result<ScanSummary> {
+        let resolved = self.source_for_root(root)?;
+        self.library.claim_scan(&resolved.id)?;
+        let _guard = ScanGuard {
+            library: self.library,
+            source_id: resolved.id.clone(),
+        };
+
+        let source = self.library.source(&resolved.id)?;
+        if source.state == SourceState::Removed {
+            return Err(CoreError::library(
+                "source_removed",
+                "This source was removed.",
+            ));
+        }
+        if source.root_path.is_empty() {
+            return Err(CoreError::library(
+                "source_disconnected",
+                "Relink the source before scanning.",
+            ));
+        }
+        let root = std::fs::canonicalize(&source.root_path)?;
+        if self.library.path_key(&root) != self.library.path_key(Path::new(&source.root_path)) {
+            return Err(CoreError::library(
+                "unsafe_path",
+                "The source was replaced by a symbolic link. Relink it explicitly.",
+            ));
         }
 
-        let root_listed = root_trusted && std::fs::read_dir(root).is_ok();
-        let mut missing = Vec::new();
-        if root_trusted {
-            let limit = self.max_entries.max(1);
-            for (id, relative) in self.library.pending_locators(source_id, scan_id, limit)? {
-                if !is_plain_relative(&relative) {
+        let mut issues = Issues::new(self.max_issues);
+        let current_volume = VolumeIdentity::probe(&root);
+        let volume = VolumeCheck::classify(
+            self.library.source_volume_identity(&source.id)?,
+            current_volume.clone(),
+        );
+        let facts = self.library.locator_facts(&source.id)?;
+        let scan_id = crate::library::new_id();
+        let mut prepared: Vec<PreparedFile> = Vec::new();
+        let mut visited = 0_u64;
+        let mut imported = 0_u64;
+
+        for path in paths {
+            if token.is_cancelled() {
+                break;
+            }
+            visited += 1;
+            let Some(relative) = relative_to(&root, path) else {
+                issues.push_at(path, &root, "outside_root");
+                continue;
+            };
+            if !crate::watch::accept(Path::new(&relative)) {
+                continue;
+            }
+            match std::fs::symlink_metadata(root.join(&relative)) {
+                Ok(metadata) if metadata.file_type().is_symlink() => continue,
+                Ok(metadata) if metadata.is_dir() => continue,
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    issues.push(&relative, "permission_lost");
                     continue;
                 }
-                #[cfg(test)]
-                probe_observer::notify();
-                if confirmed_missing(&root.join(&relative)) {
-                    missing.push(id);
+                Err(_) => {
+                    issues.push(&relative, "read_failed");
+                    continue;
                 }
             }
+            match self.prepare(&root, &relative, &facts, token) {
+                Ok(file) => {
+                    prepared.push(file);
+                    imported += 1;
+                    on_update(&ScanUpdate {
+                        visited,
+                        imported,
+                        errors: issues.snapshot(),
+                        done: false,
+                        cancelled: false,
+                    });
+                }
+                Err(error) if error.code() == "still_downloading" => {
+                    issues.push(&relative, "still_downloading");
+                }
+                Err(error) if error.code() == "unsafe_path" => {
+                    issues.push(&relative, "unsafe_path");
+                }
+                Err(error) if error.code() == "cancelled" => break,
+                Err(CoreError::Io(error))
+                    if error.kind() == std::io::ErrorKind::PermissionDenied =>
+                {
+                    issues.push(&relative, "permission_lost");
+                }
+                Err(CoreError::Io(_)) => issues.push(&relative, "read_failed"),
+                Err(error) => return Err(error),
+            }
         }
-        Ok(PartialScan {
-            root_trusted,
-            root_listed,
-            missing,
+
+        if !prepared.is_empty() {
+            self.apply(&source.id, &source.root_path, &scan_id, &prepared)?;
+        }
+
+        let cancelled = token.is_cancelled();
+        let volume = self.settle_volume(&source.id, volume, &current_volume, imported)?;
+        if volume == VolumeCheck::Mismatch {
+            issues.push("", "volume_mismatch");
+        } else if volume == VolumeCheck::Unreadable {
+            issues.push("", "volume_unreadable");
+        }
+        if !cancelled {
+            let root_listed = std::fs::read_dir(&root).is_ok();
+            let partial = PartialScan {
+                root_trusted: true,
+                root_reachable: root_listed && volume.usable(),
+                withdrawal_allowed: false,
+                missing: Vec::new(),
+            };
+            self.library.finish_scan(
+                &source.id,
+                &scan_id,
+                false,
+                Some(&source.root_path),
+                &partial,
+            )?;
+            if !volume.usable() {
+                self.library
+                    .mark_source_unreachable(&source.id, SourceState::Disconnected)?;
+            }
+        }
+        let update = ScanUpdate {
+            visited,
+            imported,
+            errors: issues.snapshot(),
+            done: true,
+            cancelled,
+        };
+        on_update(&update);
+        Ok(ScanSummary {
+            visited,
+            imported,
+            issues: issues.into_vec(),
+            cancelled,
+            complete: false,
         })
     }
 
-    fn import(
+    fn source_for_root(&self, root: &Path) -> Result<crate::domain::Source> {
+        let key = self.library.path_key(root);
+        self.library
+            .sources()?
+            .into_iter()
+            .find(|source| self.library.path_key(Path::new(&source.root_path)) == key)
+            .ok_or_else(|| {
+                CoreError::library("source_missing", "That folder is not a library source.")
+            })
+    }
+
+    fn settle_volume(
         &self,
         source_id: &str,
+        volume: VolumeCheck,
+        current: &Option<VolumeIdentity>,
+        imported: u64,
+    ) -> Result<VolumeCheck> {
+        if imported == 0 || volume == VolumeCheck::Matched {
+            return Ok(volume);
+        }
+        let Some(identity) = current else {
+            return Ok(volume);
+        };
+        let adopt = match volume {
+            VolumeCheck::Unknown => true,
+            VolumeCheck::Mismatch | VolumeCheck::Unreadable => self.full_fingerprint,
+            VolumeCheck::Matched => false,
+        };
+        if adopt {
+            self.library.record_volume_identity(source_id, identity)?;
+            return Ok(VolumeCheck::Matched);
+        }
+        Ok(volume)
+    }
+
+    fn prepare(
+        &self,
         root: &Path,
-        expected_root: &str,
         relative: &str,
-        scan_id: &str,
+        facts: &LocatorFacts,
         token: &ScanToken,
-    ) -> Result<()> {
+    ) -> Result<PreparedFile> {
         let path = root.join(relative);
         let metadata = std::fs::metadata(&path)?;
         if metadata.len() == 0 || self.is_settling(metadata.modified().ok()) {
@@ -383,21 +598,34 @@ impl<'a> LibraryScanner<'a> {
         }
 
         let size = metadata.len();
-        let fingerprint = media_fingerprint(&path, size)?;
-
-        let after = std::fs::metadata(&path)?;
-        if after.len() != size || after.modified().ok() != metadata.modified().ok() {
-            return Err(CoreError::library(
-                "still_downloading",
-                "The file changed while it was being read.",
-            ));
-        }
-        let modified_ms = after
-            .modified()
-            .ok()
-            .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
-            .map(|elapsed| elapsed.as_millis() as i64)
-            .unwrap_or_default();
+        let modified_ms = millis(metadata.modified().ok());
+        let stored = facts.get(relative);
+        let reusable = !self.full_fingerprint
+            && stored.is_some_and(|stored| {
+                stored.size == size as i64
+                    && stored.modified_ms == modified_ms
+                    && !stored.fingerprint.is_empty()
+            });
+        let (fingerprint, modified_ms) = if reusable {
+            (
+                stored
+                    .map(|stored| stored.fingerprint.clone())
+                    .unwrap_or_default(),
+                modified_ms,
+            )
+        } else {
+            #[cfg(test)]
+            read_observer::notify();
+            let fingerprint = media_fingerprint(&path, size)?;
+            let after = std::fs::metadata(&path)?;
+            if after.len() != size || after.modified().ok() != metadata.modified().ok() {
+                return Err(CoreError::library(
+                    "still_downloading",
+                    "The file changed while it was being read.",
+                ));
+            }
+            (fingerprint, millis(after.modified().ok()))
+        };
 
         let mut folder = Path::new(relative)
             .parent()
@@ -412,17 +640,82 @@ impl<'a> LibraryScanner<'a> {
                 .unwrap_or_default();
         }
         let parsed = parse_filename(relative, Some(&folder));
-        self.library.ingest_file(Ingest {
-            source_id,
-            relative_path: relative,
-            fingerprint: &fingerprint,
+        Ok(PreparedFile {
+            relative_path: relative.to_string(),
+            fingerprint,
             size: size as i64,
             modified_ms,
-            scan_id,
-            parsed: Some(&parsed),
-            expected_root: Some(expected_root),
-        })?;
+            parsed,
+        })
+    }
+
+    fn apply(
+        &self,
+        source_id: &str,
+        expected_root: &str,
+        scan_id: &str,
+        prepared: &[PreparedFile],
+    ) -> Result<()> {
+        let ingests: Vec<Ingest<'_>> = prepared
+            .iter()
+            .map(|file| Ingest {
+                source_id,
+                relative_path: &file.relative_path,
+                fingerprint: &file.fingerprint,
+                size: file.size,
+                modified_ms: file.modified_ms,
+                scan_id,
+                parsed: Some(&file.parsed),
+                expected_root: Some(expected_root),
+            })
+            .collect();
+        self.library.ingest_files(&ingests)?;
         Ok(())
+    }
+
+    fn probe_partial_scan(
+        &self,
+        source_id: &str,
+        scan_id: &str,
+        root: &Path,
+        complete_withdrawal: bool,
+        withdrawal_allowed: bool,
+        volume_usable: bool,
+    ) -> Result<PartialScan> {
+        let resolved = std::fs::canonicalize(root).ok();
+        let root_trusted = resolved
+            .as_ref()
+            .is_some_and(|resolved| self.library.path_key(resolved) == self.library.path_key(root));
+        let root_listed = root_trusted && volume_usable && std::fs::read_dir(root).is_ok();
+        if complete_withdrawal {
+            return Ok(PartialScan {
+                root_trusted,
+                root_reachable: root_listed,
+                withdrawal_allowed,
+                missing: Vec::new(),
+            });
+        }
+
+        let mut missing = Vec::new();
+        if root_trusted && withdrawal_allowed {
+            let limit = self.max_entries.max(1);
+            for (id, relative) in self.library.pending_locators(source_id, scan_id, limit)? {
+                if !is_plain_relative(&relative) {
+                    continue;
+                }
+                #[cfg(test)]
+                probe_observer::notify();
+                if confirmed_missing(&root.join(&relative)) {
+                    missing.push(id);
+                }
+            }
+        }
+        Ok(PartialScan {
+            root_trusted,
+            root_reachable: root_listed,
+            withdrawal_allowed,
+            missing,
+        })
     }
 
     fn is_settling(&self, modified: Option<SystemTime>) -> bool {
@@ -434,6 +727,35 @@ impl<'a> LibraryScanner<'a> {
             Err(_) => false,
         }
     }
+}
+
+fn withdrawal_allowed(volume: VolumeCheck, imported: u64, known: u64) -> bool {
+    match volume {
+        VolumeCheck::Matched => true,
+        VolumeCheck::Unknown => imported > 0 || known == 0,
+        VolumeCheck::Mismatch | VolumeCheck::Unreadable => false,
+    }
+}
+
+fn relative_to(root: &Path, path: &Path) -> Option<String> {
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    let normalized = crate::watch::normalize(&candidate)?;
+    let root = crate::watch::normalize(root)?;
+    let relative = normalized.strip_prefix(&root).ok()?;
+    if relative.as_os_str().is_empty() {
+        return None;
+    }
+    relative.to_str().map(str::to_string)
+}
+
+fn millis(time: Option<SystemTime>) -> i64 {
+    time.and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or_default()
 }
 
 struct ScanGuard<'a> {
@@ -556,6 +878,37 @@ impl Issues {
 }
 
 #[cfg(test)]
+pub(crate) mod read_observer {
+    use std::sync::{Arc, Mutex};
+
+    type Observer = Arc<dyn Fn() + Send + Sync>;
+
+    static OBSERVER: Mutex<Option<Observer>> = Mutex::new(None);
+
+    pub(crate) fn install(observer: Observer) {
+        *OBSERVER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(observer);
+    }
+
+    pub(crate) fn clear() {
+        *OBSERVER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+
+    pub(crate) fn notify() {
+        let observer = OBSERVER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if let Some(observer) = observer {
+            observer();
+        }
+    }
+}
+
+#[cfg(test)]
 pub(crate) mod probe_observer {
     use std::sync::{Arc, Mutex};
 
@@ -608,6 +961,17 @@ mod tests {
             .unwrap()
             .set_modified(SystemTime::now() - Duration::from_secs(3600))
             .unwrap();
+    }
+
+    fn counter_on_this_thread() -> (Arc<AtomicUsize>, impl Fn() + Send + Sync) {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&counter);
+        let thread = std::thread::current().id();
+        (counter, move || {
+            if std::thread::current().id() == thread {
+                observed.fetch_add(1, Ordering::SeqCst);
+            }
+        })
     }
 
     #[test]
@@ -680,5 +1044,213 @@ mod tests {
             .find(|item| item.filename == "Keep.2020.mkv")
             .unwrap();
         assert!(keep.available);
+    }
+
+    #[test]
+    fn unchanged_files_are_not_read_again() {
+        let directory = TempDir::new().unwrap();
+        let root = directory.path();
+        write_settled(&root.join("One.2020.mkv"), b"one");
+        write_settled(&root.join("Two.2020.mkv"), b"two");
+        write_settled(&root.join("Three.2020.mkv"), b"three");
+
+        let library = Library::open_in_memory().unwrap();
+        let source = library.add_source(root, None).unwrap();
+        let scanner =
+            LibraryScanner::new(&library).with_limits(10_000, 32, Duration::from_secs(15));
+
+        let (reads, observe) = counter_on_this_thread();
+        read_observer::clear();
+        read_observer::install(Arc::new(observe));
+        let first = scanner.scan(&source.id, &ScanToken::new(), |_| {}).unwrap();
+        assert_eq!(first.imported, 3);
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            3,
+            "the first scan must fingerprint every file"
+        );
+        assert!(first.complete, "issues: {:?}", first.issues);
+
+        reads.store(0, Ordering::SeqCst);
+        let second = scanner.scan(&source.id, &ScanToken::new(), |_| {}).unwrap();
+        assert_eq!(second.imported, 3);
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            0,
+            "an unchanged rescan re-read three files"
+        );
+
+        reads.store(0, Ordering::SeqCst);
+        write_settled(&root.join("Two.2020.mkv"), b"two, revised and longer");
+        let third = scanner.scan(&source.id, &ScanToken::new(), |_| {}).unwrap();
+        assert_eq!(third.imported, 3);
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            1,
+            "only the changed file may be read again"
+        );
+        read_observer::clear();
+    }
+
+    #[test]
+    fn a_scan_commits_once_for_a_batch_of_files_however_many_arrive() {
+        let directory = TempDir::new().unwrap();
+        let root = directory.path();
+        for index in 0..8 {
+            write_settled(&root.join(format!("First.{index:02}.2020.mkv")), b"data");
+        }
+
+        let library = Library::open_in_memory().unwrap();
+        let source = library.add_source(root, None).unwrap();
+        let scanner =
+            LibraryScanner::new(&library).with_limits(10_000, 32, Duration::from_secs(15));
+
+        let commits = Arc::new(AtomicUsize::new(0));
+        let thread = std::thread::current().id();
+        let counted = Arc::clone(&commits);
+        crate::library::commit_observer::install(Arc::new(move || {
+            if std::thread::current().id() == thread {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+
+        let first = scanner.scan(&source.id, &ScanToken::new(), |_| {}).unwrap();
+        assert_eq!(first.imported, 8);
+        let eight = commits.swap(0, Ordering::SeqCst);
+
+        for index in 0..32 {
+            write_settled(&root.join(format!("Second.{index:02}.2020.mkv")), b"data");
+        }
+        let second = scanner.scan(&source.id, &ScanToken::new(), |_| {}).unwrap();
+        assert_eq!(second.imported, 40);
+        let forty = commits.swap(0, Ordering::SeqCst);
+        crate::library::commit_observer::clear();
+
+        assert_eq!(
+            eight, forty,
+            "the transaction count grew with the file count: {eight} for 8 files, {forty} for 40"
+        );
+        assert_eq!(eight, 1, "8 files were ingested in {eight} transactions");
+        assert_eq!(forty, 1, "40 files were ingested in {forty} transactions");
+    }
+
+    #[test]
+    fn a_stale_empty_mount_point_withdraws_nothing() {
+        let directory = TempDir::new().unwrap();
+        let root = directory.path().join("drive");
+        fs::create_dir_all(&root).unwrap();
+        write_settled(&root.join("Film.2020.mkv"), b"film");
+        write_settled(&root.join("Show.S01E01.mkv"), b"episode");
+
+        let library = Library::open_in_memory().unwrap();
+        let source = library.add_source(&root, None).unwrap();
+        let scanner =
+            LibraryScanner::new(&library).with_limits(10_000, 32, Duration::from_secs(15));
+        scanner.scan(&source.id, &ScanToken::new(), |_| {}).unwrap();
+        assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 2);
+
+        library
+            .record_volume_identity(
+                &source.id,
+                &VolumeIdentity::new(9_999, Some("the-drive-that-left".into())),
+            )
+            .unwrap();
+
+        fs::remove_file(root.join("Film.2020.mkv")).unwrap();
+        fs::remove_file(root.join("Show.S01E01.mkv")).unwrap();
+
+        let summary = scanner.scan(&source.id, &ScanToken::new(), |_| {}).unwrap();
+
+        assert!(
+            summary
+                .issues
+                .iter()
+                .any(|issue| issue.code == "volume_mismatch"),
+            "the walk did not report the replaced volume: {:?}",
+            summary.issues
+        );
+        assert!(!summary.complete);
+        assert_eq!(
+            library
+                .items(&LibraryQuery::page(10))
+                .unwrap()
+                .iter()
+                .filter(|item| item.available)
+                .count(),
+            2,
+            "an empty walk of a different volume withdrew the library"
+        );
+        assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 2);
+        assert_eq!(
+            library.source(&source.id).unwrap().state,
+            SourceState::Disconnected
+        );
+    }
+
+    #[test]
+    fn a_volume_that_cannot_be_identified_never_withdraws() {
+        assert!(withdrawal_allowed(VolumeCheck::Matched, 0, 10));
+        assert!(!withdrawal_allowed(VolumeCheck::Unreadable, 10, 10));
+        assert!(!withdrawal_allowed(VolumeCheck::Mismatch, 10, 10));
+        assert!(withdrawal_allowed(VolumeCheck::Unknown, 1, 10));
+        assert!(!withdrawal_allowed(VolumeCheck::Unknown, 0, 10));
+        assert!(withdrawal_allowed(VolumeCheck::Unknown, 0, 0));
+    }
+
+    #[test]
+    fn a_volume_check_names_the_two_ways_identity_can_fail() {
+        let stored = VolumeIdentity::new(1, Some("abc".into()));
+        assert_eq!(
+            VolumeCheck::classify(Some(stored.clone()), Some(stored.clone())),
+            VolumeCheck::Matched
+        );
+        assert_eq!(
+            VolumeCheck::classify(
+                Some(stored.clone()),
+                Some(VolumeIdentity::new(2, Some("d".into())))
+            ),
+            VolumeCheck::Mismatch
+        );
+        assert_eq!(
+            VolumeCheck::classify(Some(stored), None),
+            VolumeCheck::Unreadable
+        );
+        assert_eq!(VolumeCheck::classify(None, None), VolumeCheck::Unknown);
+    }
+
+    #[test]
+    fn the_first_scan_of_a_source_without_a_volume_identity_adopts_one() {
+        let directory = TempDir::new().unwrap();
+        let root = directory.path().join("media");
+        fs::create_dir_all(&root).unwrap();
+        write_settled(&root.join("Film.2020.mkv"), b"film");
+        let database = directory.path().join("library.db");
+
+        let source_id = {
+            let library = Library::open(&database).unwrap();
+            let source = library.add_source(&root, None).unwrap();
+            source.id
+        };
+        {
+            let connection = rusqlite::Connection::open(&database).unwrap();
+            connection
+                .execute("UPDATE sources SET volume_identity = NULL", [])
+                .unwrap();
+        }
+
+        let library = Library::open(&database).unwrap();
+        assert_eq!(library.source_volume_identity(&source_id).unwrap(), None);
+        LibraryScanner::new(&library)
+            .with_limits(10_000, 32, Duration::from_secs(15))
+            .scan(&source_id, &ScanToken::new(), |_| {})
+            .unwrap();
+
+        assert!(
+            library
+                .source_volume_identity(&source_id)
+                .unwrap()
+                .is_some(),
+            "a verified walk left the source without a volume identity"
+        );
     }
 }

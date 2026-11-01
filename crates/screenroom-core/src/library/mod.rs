@@ -37,6 +37,9 @@ pub use backup::{
 };
 pub use bookmarks::{Bookmark, BookmarkDraft, protocol_of};
 pub use catalog::Ingest;
+pub(crate) use catalog::StoredLocator;
+#[cfg(test)]
+pub(crate) use catalog::commit_observer;
 pub use conversion::{
     ConversionJob, ConversionPlan, ConversionProfile, ConversionStatus, OutputFacts, verify_output,
 };
@@ -216,6 +219,20 @@ fn add_metadata_origin(tx: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn add_volume_identity(tx: &Connection) -> Result<()> {
+    let mut statement = tx.prepare("PRAGMA table_info(sources)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if columns.iter().any(|name| name == "volume_identity") {
+        return Ok(());
+    }
+    for statement in schema::MIGRATE_9_TO_10 {
+        tx.execute(statement, [])?;
+    }
+    Ok(())
+}
+
 impl Library {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -292,6 +309,7 @@ impl Library {
                 add_bookmarks_table(&tx)?;
                 add_subtitles_table(&tx)?;
                 add_enrichment_queue(&tx)?;
+                add_volume_identity(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -307,6 +325,7 @@ impl Library {
                 add_bookmarks_table(&tx)?;
                 add_subtitles_table(&tx)?;
                 add_enrichment_queue(&tx)?;
+                add_volume_identity(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -319,6 +338,7 @@ impl Library {
                 add_bookmarks_table(&tx)?;
                 add_subtitles_table(&tx)?;
                 add_enrichment_queue(&tx)?;
+                add_volume_identity(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -328,6 +348,7 @@ impl Library {
                 add_bookmarks_table(&tx)?;
                 add_subtitles_table(&tx)?;
                 add_enrichment_queue(&tx)?;
+                add_volume_identity(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -336,6 +357,7 @@ impl Library {
                 add_bookmarks_table(&tx)?;
                 add_subtitles_table(&tx)?;
                 add_enrichment_queue(&tx)?;
+                add_volume_identity(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -343,12 +365,20 @@ impl Library {
                 let tx = connection.transaction()?;
                 add_subtitles_table(&tx)?;
                 add_enrichment_queue(&tx)?;
+                add_volume_identity(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
             8 => {
                 let tx = connection.transaction()?;
                 add_enrichment_queue(&tx)?;
+                add_volume_identity(&tx)?;
+                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+                tx.commit()?;
+            }
+            9 => {
+                let tx = connection.transaction()?;
+                add_volume_identity(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -609,6 +639,57 @@ mod tests {
         let due = library.due_enrichment_tasks(i64::MAX, 10).unwrap();
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].attempts, 2);
+    }
+
+    #[test]
+    fn a_schema_nine_library_gains_the_volume_column_and_keeps_its_sources() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("library.db");
+        {
+            let connection = rusqlite::Connection::open(&path).expect("open");
+            for statement in schema::CREATE {
+                connection.execute(statement, []).expect("schema");
+            }
+            connection
+                .execute("INSERT INTO profiles(id, name) VALUES('p', 'Me')", [])
+                .expect("profile");
+            connection
+                .execute(
+                    "INSERT INTO sources(id, label, root_path, state)
+                     VALUES('s', 'Drive', '/Volumes/Drive', 'available')",
+                    [],
+                )
+                .expect("source");
+            connection
+                .execute("ALTER TABLE sources DROP COLUMN volume_identity", [])
+                .expect("drop column");
+            connection
+                .pragma_update(None, "user_version", 9)
+                .expect("version");
+        }
+
+        let library = Library::open(&path).expect("migrated");
+        let version: i64 = library
+            .connection()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("version");
+        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(library.source("s").expect("source").label, "Drive");
+        assert_eq!(library.source_volume_identity("s").expect("identity"), None);
+
+        let connection = library.connection();
+        let mut statement = connection
+            .prepare("PRAGMA table_info(sources)")
+            .expect("columns");
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("columns")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("columns");
+        assert!(
+            columns.iter().any(|name| name == "volume_identity"),
+            "the volume column is missing after the migration: {columns:?}"
+        );
     }
 
     #[test]

@@ -869,7 +869,6 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("version");
         assert_eq!(version, SCHEMA_VERSION);
-        assert_eq!(version, 9);
         assert!(queue_is_present(&library));
         assert!(index_is_present(&library, "enrichment_queue_active"));
         assert!(index_is_present(&library, "enrichment_queue_due"));

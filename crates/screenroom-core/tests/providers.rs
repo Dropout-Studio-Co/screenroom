@@ -1161,7 +1161,6 @@ fn a_schema_eight_library_gains_the_queue_and_keeps_its_rows() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("version");
     assert_eq!(version, screenroom_core::SCHEMA_VERSION);
-    assert_eq!(version, 9);
     for name in [
         "enrichment_queue",
         "enrichment_queue_active",

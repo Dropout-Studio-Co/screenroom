@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
 use rusqlite::types::Value;
@@ -244,288 +245,40 @@ impl Library {
     }
 
     pub fn ingest_file(&self, ingest: Ingest<'_>) -> Result<String> {
-        safe_relative(ingest.relative_path)?;
-        let filename = Path::new(ingest.relative_path)
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .ok_or_else(|| CoreError::library("invalid_input", "Enter a valid value."))?;
-        let folder = Path::new(ingest.relative_path)
-            .parent()
-            .map(|parent| parent.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let parsed_storage;
-        let parsed = match ingest.parsed {
-            Some(parsed) => parsed,
-            None => {
-                parsed_storage = parse_filename(&filename, Some(&folder));
-                &parsed_storage
-            }
-        };
-
         let mut connection = self.connection();
         let tx = connection.transaction()?;
-        let (root_path, state): (String, String) = tx
-            .query_row(
-                "SELECT root_path, state FROM sources WHERE id = ?1",
-                [ingest.source_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .map_err(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => CoreError::library(
-                    "source_changed",
-                    "The source changed while scanning. Restart the scan.",
-                ),
-                other => CoreError::Sqlite(other),
-            })?;
-        if state == "removed"
-            || ingest
-                .expected_root
-                .is_some_and(|expected| expected != root_path.as_str())
-        {
-            return Err(CoreError::library(
-                "source_changed",
-                "The source changed while scanning. Restart the scan.",
-            ));
-        }
+        let id = ingest_in(&tx, &ingest)?;
+        commit(tx)?;
+        Ok(id)
+    }
 
-        if let Some((id, size, fingerprint, modified_ms, edition_id)) = tx
-            .query_row(
-                "SELECT id, size, fingerprint, modified_ms, edition_id FROM files
-                 WHERE source_id = ?1 AND relative_path = ?2",
-                params![ingest.source_id, ingest.relative_path],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, i64>(3)?,
-                        row.get::<_, String>(4)?,
-                    ))
+    pub fn ingest_files(&self, ingests: &[Ingest<'_>]) -> Result<Vec<String>> {
+        let mut connection = self.connection();
+        let tx = connection.transaction()?;
+        let mut ids = Vec::with_capacity(ingests.len());
+        for ingest in ingests {
+            ids.push(ingest_in(&tx, ingest)?);
+        }
+        commit(tx)?;
+        Ok(ids)
+    }
+
+    pub(crate) fn locator_facts(&self, source_id: &str) -> Result<HashMap<String, StoredLocator>> {
+        let connection = self.connection();
+        let mut statement = connection.prepare(
+            "SELECT relative_path, size, modified_ms, fingerprint FROM files WHERE source_id = ?1",
+        )?;
+        let rows = statement.query_map([source_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                StoredLocator {
+                    size: row.get(1)?,
+                    modified_ms: row.get(2)?,
+                    fingerprint: row.get(3)?,
                 },
-            )
-            .map(Some)
-            .or_else(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                other => Err(other),
-            })?
-        {
-            let small_file = size <= 131_072;
-            if size == ingest.size
-                && fingerprint == ingest.fingerprint
-                && (!small_file || modified_ms == ingest.modified_ms)
-            {
-                tx.execute(
-                    "UPDATE files SET available = 1, last_scan_id = ?1, modified_ms = ?2
-                     WHERE id = ?3",
-                    params![ingest.scan_id, ingest.modified_ms, id],
-                )?;
-                tx.commit()?;
-                return Ok(id);
-            }
-
-            let work_id: String = tx.query_row(
-                "SELECT work_id FROM editions WHERE id = ?1",
-                [&edition_id],
-                |row| row.get(0),
-            )?;
-            let new_edition = new_id();
-            tx.execute(
-                "INSERT INTO editions(id, work_id, label, duration_ms)
-                 VALUES(?1, ?2, 'Changed file', 0)",
-                params![new_edition, work_id],
-            )?;
-            tx.execute(
-                "UPDATE files SET edition_id = ?1, fingerprint = ?2, size = ?3,
-                 modified_ms = ?4, available = 1, last_scan_id = ?5 WHERE id = ?6",
-                params![
-                    new_edition,
-                    ingest.fingerprint,
-                    ingest.size,
-                    ingest.modified_ms,
-                    ingest.scan_id,
-                    id
-                ],
-            )?;
-            tx.commit()?;
-            return Ok(id);
-        }
-
-        let mut candidates = tx.prepare(
-            "SELECT id, modified_ms, relative_path FROM files
-             WHERE source_id = ?1 AND fingerprint = ?2 AND size = ?3 LIMIT 2",
-        )?;
-        let candidate = candidates
-            .query_map(
-                params![ingest.source_id, ingest.fingerprint, ingest.size],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                },
-            )?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        drop(candidates);
-        if let [(candidate_id, candidate_modified, candidate_path)] = candidate.as_slice()
-            && ingest.size <= 131_072
-            && *candidate_modified == ingest.modified_ms
-        {
-            let previous_locator = PathBuf::from(&root_path).join(candidate_path);
-            if !previous_locator.exists() {
-                tx.execute(
-                    "UPDATE files SET relative_path = ?1, filename = ?2, available = 1,
-                     modified_ms = ?3, last_scan_id = ?4 WHERE id = ?5",
-                    params![
-                        ingest.relative_path,
-                        filename,
-                        ingest.modified_ms,
-                        ingest.scan_id,
-                        candidate_id
-                    ],
-                )?;
-                tx.commit()?;
-                return Ok(candidate_id.clone());
-            }
-        }
-
-        let confident_series = parsed.kind == MediaKind::Series
-            && parsed.confidence >= 0.8
-            && parsed.season.is_some()
-            && parsed.episode.is_some();
-        let confident_movie =
-            parsed.kind == MediaKind::Movie && parsed.year.is_some() && parsed.confidence >= 0.75;
-        let identity_key = if confident_series {
-            format!(
-                "series:{}:{}:{}",
-                ingest.source_id,
-                parsed.title.to_lowercase(),
-                parsed.year.map(|year| year.to_string()).unwrap_or_default()
-            )
-        } else if confident_movie {
-            format!(
-                "movie:{}:{}",
-                parsed.title.to_lowercase(),
-                parsed.year.unwrap_or_default()
-            )
-        } else {
-            format!("unmatched:{}", new_id())
-        };
-
-        let existing_work: Option<(String, i64)> = tx
-            .query_row(
-                "SELECT id, manual_match FROM works WHERE identity_key = ?1 AND kind = ?2 LIMIT 1",
-                params![identity_key, parsed.kind.as_str()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        let (work_id, work_is_new) = match &existing_work {
-            Some((work_id, _)) => (work_id.clone(), false),
-            None => {
-                let work_id = new_id();
-                tx.execute(
-                    "INSERT INTO works(id, identity_key, title, kind, year, confidence,
-                     overview, genres, manual_match)
-                     VALUES(?1, ?2, ?3, ?4, ?5, ?6, '', '[]', 0)",
-                    params![
-                        work_id,
-                        identity_key,
-                        parsed.title,
-                        parsed.kind.as_str(),
-                        parsed.year,
-                        parsed.confidence
-                    ],
-                )?;
-                (work_id, true)
-            }
-        };
-
-        let edition_id = new_id();
-        tx.execute(
-            "INSERT INTO editions(id, work_id, label, duration_ms) VALUES(?1, ?2, ?3, 0)",
-            params![edition_id, work_id, filename],
-        )?;
-        let file_id = new_id();
-        tx.execute(
-            "INSERT INTO files(id, source_id, edition_id, relative_path, filename, size,
-             modified_ms, fingerprint, available, added_ms, last_scan_id, season_number,
-             episode_number, episode_end)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?10, ?11, ?12, ?13)",
-            params![
-                file_id,
-                ingest.source_id,
-                edition_id,
-                ingest.relative_path,
-                filename,
-                ingest.size,
-                ingest.modified_ms,
-                ingest.fingerprint,
-                now_ms(),
-                ingest.scan_id,
-                parsed.season,
-                parsed.episode,
-                parsed.episode_end
-            ],
-        )?;
-
-        if let (Some(season), Some(episode)) = (parsed.season, parsed.episode) {
-            let season_id: String = match tx
-                .query_row(
-                    "SELECT id FROM seasons WHERE work_id = ?1 AND number = ?2",
-                    params![work_id, season],
-                    |row| row.get(0),
-                )
-                .optional()?
-            {
-                Some(id) => id,
-                None => {
-                    let id = new_id();
-                    tx.execute(
-                        "INSERT INTO seasons(id, work_id, number, verified_order)
-                         VALUES(?1, ?2, ?3, 0)",
-                        params![id, work_id, season],
-                    )?;
-                    id
-                }
-            };
-            for number in episode..=parsed.episode_end.unwrap_or(episode) {
-                let episode_id: String = match tx
-                    .query_row(
-                        "SELECT id FROM episodes WHERE season_id = ?1 AND number = ?2",
-                        params![season_id, number],
-                        |row| row.get(0),
-                    )
-                    .optional()?
-                {
-                    Some(id) => id,
-                    None => {
-                        let id = new_id();
-                        tx.execute(
-                            "INSERT INTO episodes(id, season_id, number, title, verified_order)
-                             VALUES(?1, ?2, ?3, ?4, 0)",
-                            params![id, season_id, number, format!("Episode {number}")],
-                        )?;
-                        id
-                    }
-                };
-                tx.execute(
-                    "INSERT OR IGNORE INTO file_episodes(file_id, episode_id, sequence, in_ms, out_ms)
-                     VALUES(?1, ?2, ?3, NULL, NULL)",
-                    params![file_id, episode_id, number - episode],
-                )?;
-            }
-        }
-
-        if metadata_enabled(&tx)? && (work_is_new || !work_is_protected(&tx, &work_id)?) {
-            tx.execute(
-                "INSERT OR IGNORE INTO jobs(id, kind, target, status, priority, attempts, next_retry_ms)
-                 VALUES(?1, 'metadata', ?2, 'queued', 0, 0, 0)",
-                params![new_id(), work_id],
-            )?;
-        }
-
-        tx.commit()?;
-        Ok(file_id)
+            ))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<HashMap<_, _>>>()?)
     }
 
     pub(crate) fn pending_locators(
@@ -581,21 +334,26 @@ impl Library {
             tx.commit()?;
             return Ok(());
         }
-        if complete {
-            tx.execute(
-                "UPDATE files SET available = 0
-                 WHERE source_id = ?1 AND (last_scan_id IS NULL OR last_scan_id != ?2)",
-                params![source_id, scan_id],
-            )?;
-            tx.execute(
-                "UPDATE sources SET state = 'available', last_scan_ms = ?1 WHERE id = ?2",
-                params![now_ms(), source_id],
-            )?;
-        } else {
-            for id in &partial.missing {
-                tx.execute("UPDATE files SET available = 0 WHERE id = ?1", [id])?;
+        if partial.withdrawal_allowed {
+            if complete {
+                tx.execute(
+                    "UPDATE files SET available = 0
+                     WHERE source_id = ?1 AND (last_scan_id IS NULL OR last_scan_id != ?2)",
+                    params![source_id, scan_id],
+                )?;
+            } else {
+                for id in &partial.missing {
+                    tx.execute("UPDATE files SET available = 0 WHERE id = ?1", [id])?;
+                }
             }
-            if partial.root_listed {
+        }
+        if partial.root_reachable {
+            if complete {
+                tx.execute(
+                    "UPDATE sources SET state = 'available', last_scan_ms = ?1 WHERE id = ?2",
+                    params![now_ms(), source_id],
+                )?;
+            } else {
                 tx.execute(
                     "UPDATE sources SET state = 'available' WHERE id = ?1 AND state != 'removed'",
                     [source_id],
@@ -703,6 +461,298 @@ fn query_offset(query: &LibraryQuery) -> Result<i64> {
     Ok(query.offset)
 }
 
+fn ingest_in(tx: &rusqlite::Transaction<'_>, ingest: &Ingest<'_>) -> Result<String> {
+    safe_relative(ingest.relative_path)?;
+    let filename = Path::new(ingest.relative_path)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .ok_or_else(|| CoreError::library("invalid_input", "Enter a valid value."))?;
+    let folder = Path::new(ingest.relative_path)
+        .parent()
+        .map(|parent| parent.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let parsed_storage;
+    let parsed = match ingest.parsed {
+        Some(parsed) => parsed,
+        None => {
+            parsed_storage = parse_filename(&filename, Some(&folder));
+            &parsed_storage
+        }
+    };
+
+    let (root_path, state): (String, String) = tx
+        .query_row(
+            "SELECT root_path, state FROM sources WHERE id = ?1",
+            [ingest.source_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => CoreError::library(
+                "source_changed",
+                "The source changed while scanning. Restart the scan.",
+            ),
+            other => CoreError::Sqlite(other),
+        })?;
+    if state == "removed"
+        || ingest
+            .expected_root
+            .is_some_and(|expected| expected != root_path.as_str())
+    {
+        return Err(CoreError::library(
+            "source_changed",
+            "The source changed while scanning. Restart the scan.",
+        ));
+    }
+
+    if let Some((id, size, fingerprint, modified_ms, edition_id)) = tx
+        .query_row(
+            "SELECT id, size, fingerprint, modified_ms, edition_id FROM files
+                 WHERE source_id = ?1 AND relative_path = ?2",
+            params![ingest.source_id, ingest.relative_path],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .map(Some)
+        .or_else(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other),
+        })?
+    {
+        let small_file = size <= 131_072;
+        if size == ingest.size
+            && fingerprint == ingest.fingerprint
+            && (!small_file || modified_ms == ingest.modified_ms)
+        {
+            tx.execute(
+                "UPDATE files SET available = 1, last_scan_id = ?1, modified_ms = ?2
+                     WHERE id = ?3",
+                params![ingest.scan_id, ingest.modified_ms, id],
+            )?;
+            return Ok(id);
+        }
+
+        let work_id: String = tx.query_row(
+            "SELECT work_id FROM editions WHERE id = ?1",
+            [&edition_id],
+            |row| row.get(0),
+        )?;
+        let new_edition = new_id();
+        tx.execute(
+            "INSERT INTO editions(id, work_id, label, duration_ms)
+                 VALUES(?1, ?2, 'Changed file', 0)",
+            params![new_edition, work_id],
+        )?;
+        tx.execute(
+            "UPDATE files SET edition_id = ?1, fingerprint = ?2, size = ?3,
+                 modified_ms = ?4, available = 1, last_scan_id = ?5 WHERE id = ?6",
+            params![
+                new_edition,
+                ingest.fingerprint,
+                ingest.size,
+                ingest.modified_ms,
+                ingest.scan_id,
+                id
+            ],
+        )?;
+        return Ok(id);
+    }
+
+    let mut candidates = tx.prepare(
+        "SELECT id, modified_ms, relative_path FROM files
+             WHERE source_id = ?1 AND fingerprint = ?2 AND size = ?3 LIMIT 2",
+    )?;
+    let candidate = candidates
+        .query_map(
+            params![ingest.source_id, ingest.fingerprint, ingest.size],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(candidates);
+    if let [(candidate_id, candidate_modified, candidate_path)] = candidate.as_slice()
+        && ingest.size <= 131_072
+        && *candidate_modified == ingest.modified_ms
+    {
+        let previous_locator = PathBuf::from(&root_path).join(candidate_path);
+        if !previous_locator.exists() {
+            tx.execute(
+                "UPDATE files SET relative_path = ?1, filename = ?2, available = 1,
+                     modified_ms = ?3, last_scan_id = ?4 WHERE id = ?5",
+                params![
+                    ingest.relative_path,
+                    filename,
+                    ingest.modified_ms,
+                    ingest.scan_id,
+                    candidate_id
+                ],
+            )?;
+            return Ok(candidate_id.clone());
+        }
+    }
+
+    let confident_series = parsed.kind == MediaKind::Series
+        && parsed.confidence >= 0.8
+        && parsed.season.is_some()
+        && parsed.episode.is_some();
+    let confident_movie =
+        parsed.kind == MediaKind::Movie && parsed.year.is_some() && parsed.confidence >= 0.75;
+    let identity_key = if confident_series {
+        format!(
+            "series:{}:{}:{}",
+            ingest.source_id,
+            parsed.title.to_lowercase(),
+            parsed.year.map(|year| year.to_string()).unwrap_or_default()
+        )
+    } else if confident_movie {
+        format!(
+            "movie:{}:{}",
+            parsed.title.to_lowercase(),
+            parsed.year.unwrap_or_default()
+        )
+    } else {
+        format!("unmatched:{}", new_id())
+    };
+
+    let existing_work: Option<(String, i64)> = tx
+        .query_row(
+            "SELECT id, manual_match FROM works WHERE identity_key = ?1 AND kind = ?2 LIMIT 1",
+            params![identity_key, parsed.kind.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let (work_id, work_is_new) = match &existing_work {
+        Some((work_id, _)) => (work_id.clone(), false),
+        None => {
+            let work_id = new_id();
+            tx.execute(
+                "INSERT INTO works(id, identity_key, title, kind, year, confidence,
+                     overview, genres, manual_match)
+                     VALUES(?1, ?2, ?3, ?4, ?5, ?6, '', '[]', 0)",
+                params![
+                    work_id,
+                    identity_key,
+                    parsed.title,
+                    parsed.kind.as_str(),
+                    parsed.year,
+                    parsed.confidence
+                ],
+            )?;
+            (work_id, true)
+        }
+    };
+
+    let edition_id = new_id();
+    tx.execute(
+        "INSERT INTO editions(id, work_id, label, duration_ms) VALUES(?1, ?2, ?3, 0)",
+        params![edition_id, work_id, filename],
+    )?;
+    let file_id = new_id();
+    tx.execute(
+        "INSERT INTO files(id, source_id, edition_id, relative_path, filename, size,
+             modified_ms, fingerprint, available, added_ms, last_scan_id, season_number,
+             episode_number, episode_end)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?10, ?11, ?12, ?13)",
+        params![
+            file_id,
+            ingest.source_id,
+            edition_id,
+            ingest.relative_path,
+            filename,
+            ingest.size,
+            ingest.modified_ms,
+            ingest.fingerprint,
+            now_ms(),
+            ingest.scan_id,
+            parsed.season,
+            parsed.episode,
+            parsed.episode_end
+        ],
+    )?;
+
+    if let (Some(season), Some(episode)) = (parsed.season, parsed.episode) {
+        let season_id: String = match tx
+            .query_row(
+                "SELECT id FROM seasons WHERE work_id = ?1 AND number = ?2",
+                params![work_id, season],
+                |row| row.get(0),
+            )
+            .optional()?
+        {
+            Some(id) => id,
+            None => {
+                let id = new_id();
+                tx.execute(
+                    "INSERT INTO seasons(id, work_id, number, verified_order)
+                         VALUES(?1, ?2, ?3, 0)",
+                    params![id, work_id, season],
+                )?;
+                id
+            }
+        };
+        for number in episode..=parsed.episode_end.unwrap_or(episode) {
+            let episode_id: String = match tx
+                .query_row(
+                    "SELECT id FROM episodes WHERE season_id = ?1 AND number = ?2",
+                    params![season_id, number],
+                    |row| row.get(0),
+                )
+                .optional()?
+            {
+                Some(id) => id,
+                None => {
+                    let id = new_id();
+                    tx.execute(
+                        "INSERT INTO episodes(id, season_id, number, title, verified_order)
+                             VALUES(?1, ?2, ?3, ?4, 0)",
+                        params![id, season_id, number, format!("Episode {number}")],
+                    )?;
+                    id
+                }
+            };
+            tx.execute(
+                "INSERT OR IGNORE INTO file_episodes(file_id, episode_id, sequence, in_ms, out_ms)
+                     VALUES(?1, ?2, ?3, NULL, NULL)",
+                params![file_id, episode_id, number - episode],
+            )?;
+        }
+    }
+
+    if metadata_enabled(tx)? && (work_is_new || !work_is_protected(tx, &work_id)?) {
+        tx.execute(
+                "INSERT OR IGNORE INTO jobs(id, kind, target, status, priority, attempts, next_retry_ms)
+                 VALUES(?1, 'metadata', ?2, 'queued', 0, 0, 0)",
+                params![new_id(), work_id],
+            )?;
+    }
+
+    Ok(file_id)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredLocator {
+    pub(crate) size: i64,
+    pub(crate) modified_ms: i64,
+    pub(crate) fingerprint: String,
+}
+
+fn commit(tx: rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    #[cfg(test)]
+    commit_observer::notify();
+    tx.commit()
+}
+
 fn metadata_enabled(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<bool> {
     let value: Option<String> = tx
         .query_row(
@@ -780,9 +830,122 @@ fn item_from_row(row: &Row<'_>) -> rusqlite::Result<LibraryItem> {
 }
 
 #[cfg(test)]
+pub(crate) mod commit_observer {
+    use std::sync::{Arc, Mutex};
+
+    type Observer = Arc<dyn Fn() + Send + Sync>;
+
+    static OBSERVER: Mutex<Option<Observer>> = Mutex::new(None);
+
+    pub(crate) fn install(observer: Observer) {
+        *OBSERVER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(observer);
+    }
+
+    pub(crate) fn clear() {
+        *OBSERVER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+
+    pub(crate) fn notify() {
+        let observer = OBSERVER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if let Some(observer) = observer {
+            observer();
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
     use crate::Ingest;
+
+    fn counter_on_this_thread(counted: Arc<AtomicUsize>) -> impl Fn() + Send + Sync {
+        let thread = std::thread::current().id();
+        move || {
+            if std::thread::current().id() == thread {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    }
+
+    #[test]
+    fn a_batched_ingest_commits_once_for_many_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let library = Library::open_in_memory().unwrap();
+        let source = library.add_source(directory.path(), None).unwrap();
+        let names: Vec<String> = (0..64)
+            .map(|index| format!("Batch.{index:03}.2020.mkv"))
+            .collect();
+        let parsed: Vec<ParsedName> = names
+            .iter()
+            .map(|name| parse_filename(name, None))
+            .collect();
+        let ingests: Vec<Ingest<'_>> = names
+            .iter()
+            .zip(&parsed)
+            .map(|(name, parsed)| Ingest {
+                source_id: &source.id,
+                relative_path: name,
+                fingerprint: name,
+                size: 1,
+                modified_ms: 1,
+                scan_id: "batch",
+                parsed: Some(parsed),
+                expected_root: Some(&source.root_path),
+            })
+            .collect();
+
+        let commits = Arc::new(AtomicUsize::new(0));
+        commit_observer::install(Arc::new(counter_on_this_thread(Arc::clone(&commits))));
+        library.ingest_files(&ingests).unwrap();
+
+        assert_eq!(
+            commits.load(Ordering::SeqCst),
+            1,
+            "64 files with the batched path produced {} commits",
+            commits.load(Ordering::SeqCst)
+        );
+        assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 64);
+
+        let singles: Vec<String> = (0..8)
+            .map(|index| format!("Single.{index:03}.2020.mkv"))
+            .collect();
+        let single_parsed: Vec<ParsedName> = singles
+            .iter()
+            .map(|name| parse_filename(name, None))
+            .collect();
+        commits.store(0, Ordering::SeqCst);
+        for (name, parsed) in singles.iter().zip(&single_parsed) {
+            library
+                .ingest_file(Ingest {
+                    source_id: &source.id,
+                    relative_path: name,
+                    fingerprint: name,
+                    size: 1,
+                    modified_ms: 1,
+                    scan_id: "single",
+                    parsed: Some(parsed),
+                    expected_root: Some(&source.root_path),
+                })
+                .unwrap();
+        }
+        assert_eq!(
+            commits.load(Ordering::SeqCst),
+            8,
+            "the per-file path is the cost the batched path removes"
+        );
+        commit_observer::clear();
+        assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 72);
+    }
 
     #[test]
     fn malformed_genres_do_not_hide_other_known_genres() {

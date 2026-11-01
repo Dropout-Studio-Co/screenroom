@@ -600,3 +600,217 @@ fn progress_streams_while_scanning() {
     assert_eq!(summary.imported, 3);
     assert_eq!(updates, 3);
 }
+
+#[test]
+fn a_stale_empty_mount_point_does_not_empty_the_library() {
+    let dir = TempDir::new().unwrap();
+    let base = fs::canonicalize(dir.path()).unwrap();
+    let root = base.join("drive");
+    fs::create_dir_all(&root).unwrap();
+    write_settled(&root.join("Film.2020.mkv"), b"film");
+    write_settled(&root.join("Show.S01E01.mkv"), b"episode");
+    let database = base.join("library.db");
+
+    let source_id = {
+        let library = Library::open(&database).unwrap();
+        let source = library.add_source(&root, None).unwrap();
+        scanner(&library)
+            .scan(&source.id, &ScanToken::new(), |_| {})
+            .unwrap();
+        assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 2);
+        source.id
+    };
+
+    fs::remove_file(root.join("Show.S01E01.mkv")).unwrap();
+    let present = Library::open(&database).unwrap();
+    let withdrawal = scanner(&present)
+        .scan(&source_id, &ScanToken::new(), |_| {})
+        .unwrap();
+    assert!(withdrawal.complete, "issues: {:?}", withdrawal.issues);
+    let gone = present
+        .items(&LibraryQuery::page(10))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.filename == "Show.S01E01.mkv")
+        .unwrap();
+    assert!(
+        !gone.available,
+        "a confirmed deletion on the registered volume was not withdrawn"
+    );
+    drop(present);
+
+    {
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        connection
+            .execute(
+                "UPDATE sources SET volume_identity = ?1 WHERE id = ?2",
+                rusqlite::params![
+                    r#"{"device_id":18446744073709551614,"volume_id":"the-drive-that-left"}"#,
+                    source_id
+                ],
+            )
+            .unwrap();
+    }
+    fs::remove_file(root.join("Film.2020.mkv")).unwrap();
+
+    let library = Library::open(&database).unwrap();
+    let stored = library
+        .source_volume_identity(&source_id)
+        .unwrap()
+        .expect("the test writes a decodable identity");
+    assert_eq!(stored.device_id, u64::MAX - 1);
+    assert_eq!(stored.volume_id.as_deref(), Some("the-drive-that-left"));
+
+    let stale = scanner(&library)
+        .scan(&source_id, &ScanToken::new(), |_| {})
+        .unwrap();
+
+    assert!(
+        stale
+            .issues
+            .iter()
+            .any(|issue| issue.code == "volume_mismatch"),
+        "a walk of a different volume claimed to be the source: {:?}",
+        stale.issues
+    );
+    assert!(!stale.complete);
+    let items = library.items(&LibraryQuery::page(10)).unwrap();
+    assert_eq!(items.len(), 2, "rows were removed");
+    let film = items
+        .iter()
+        .find(|item| item.filename == "Film.2020.mkv")
+        .unwrap();
+    assert!(
+        film.available,
+        "an empty walk of a stale mount point withdrew the library"
+    );
+    assert_eq!(
+        items.iter().filter(|item| item.available).count(),
+        1,
+        "the withdrawal applied to the stale mount point instead of the deletion"
+    );
+    assert_eq!(
+        library.source(&source_id).unwrap().state,
+        SourceState::Disconnected
+    );
+}
+
+#[test]
+fn scan_paths_imports_only_the_named_files() {
+    let dir = TempDir::new().unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    write_settled(&root.join("Known.2020.mkv"), b"known");
+    let library = Library::open_in_memory().unwrap();
+    let source = library.add_source(&root, None).unwrap();
+    let mut scanner = scanner(&library);
+    scanner.scan(&source.id, &ScanToken::new(), |_| {}).unwrap();
+    assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 1);
+
+    write_settled(&root.join("Show/Season 1/Show.S01E01.mkv"), b"episode");
+    let arriving = root.join("Show/Season 1/Show.S01E01.mkv");
+    let last_full_scan = library.source(&source.id).unwrap().last_scan_ms;
+    let summary = scanner
+        .scan_paths(
+            &root,
+            std::slice::from_ref(&arriving),
+            &ScanToken::new(),
+            |_| {},
+        )
+        .unwrap();
+
+    assert_eq!(summary.visited, 1);
+    assert_eq!(summary.imported, 1);
+    assert!(
+        !summary.complete,
+        "a targeted pass never claims completeness"
+    );
+    assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 2);
+    assert_eq!(
+        library.source(&source.id).unwrap().last_scan_ms,
+        last_full_scan,
+        "a targeted pass is not a full scan"
+    );
+}
+
+#[test]
+fn scan_paths_skips_a_file_still_being_written() {
+    let dir = TempDir::new().unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let library = Library::open_in_memory().unwrap();
+    let source = library.add_source(&root, None).unwrap();
+    fs::write(root.join("Fresh.2020.mkv"), b"growing").unwrap();
+
+    let summary = scanner(&library)
+        .scan_paths(
+            &root,
+            &[root.join("Fresh.2020.mkv")],
+            &ScanToken::new(),
+            |_| {},
+        )
+        .unwrap();
+
+    assert_eq!(summary.imported, 0);
+    assert!(
+        summary
+            .issues
+            .iter()
+            .any(|issue| issue.code == "still_downloading")
+    );
+    assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 0);
+    let _ = source;
+}
+
+#[test]
+fn scan_paths_refuses_a_path_outside_the_root() {
+    let dir = TempDir::new().unwrap();
+    let base = fs::canonicalize(dir.path()).unwrap();
+    let root = base.join("media");
+    fs::create_dir_all(&root).unwrap();
+    let elsewhere = base.join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    write_settled(&elsewhere.join("Outside.2020.mkv"), b"outside");
+    let library = Library::open_in_memory().unwrap();
+    let source = library.add_source(&root, None).unwrap();
+
+    let summary = scanner(&library)
+        .scan_paths(
+            &root,
+            &[
+                elsewhere.join("Outside.2020.mkv"),
+                std::path::PathBuf::from("../escape.mkv"),
+            ],
+            &ScanToken::new(),
+            |_| {},
+        )
+        .unwrap();
+
+    assert_eq!(summary.imported, 0);
+    let codes: Vec<_> = summary.issues.iter().map(|issue| issue.code).collect();
+    assert_eq!(
+        codes.iter().filter(|code| **code == "outside_root").count(),
+        2,
+        "codes: {codes:?}"
+    );
+    assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 0);
+    let _ = source;
+}
+
+#[test]
+fn scan_paths_honours_cancellation() {
+    let dir = TempDir::new().unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    write_settled(&root.join("Film.2020.mkv"), b"film");
+    let library = Library::open_in_memory().unwrap();
+    let source = library.add_source(&root, None).unwrap();
+    let token = ScanToken::new();
+    token.cancel();
+
+    let summary = scanner(&library)
+        .scan_paths(&root, &[root.join("Film.2020.mkv")], &token, |_| {})
+        .unwrap();
+
+    assert!(summary.cancelled);
+    assert_eq!(summary.imported, 0);
+    assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 0);
+    let _ = source;
+}

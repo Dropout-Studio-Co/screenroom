@@ -2,7 +2,7 @@ pub const CONVERSION_JOBS: &str = "CREATE TABLE IF NOT EXISTS conversion_jobs(id
 
 pub const CREATE: &[&str] = &[
     "CREATE TABLE sources(id TEXT PRIMARY KEY,label TEXT NOT NULL,root_path TEXT NOT NULL DEFAULT '',
-      state TEXT NOT NULL DEFAULT 'disconnected',last_scan_ms INTEGER)",
+      state TEXT NOT NULL DEFAULT 'disconnected',last_scan_ms INTEGER,volume_identity TEXT)",
     "CREATE TABLE works(id TEXT PRIMARY KEY,identity_key TEXT NOT NULL,title TEXT NOT NULL,
       kind TEXT NOT NULL CHECK(kind IN ('movie','series','unknown')),year INTEGER,
       overview TEXT NOT NULL DEFAULT '',genres TEXT NOT NULL DEFAULT '[]',poster_path TEXT,
@@ -135,6 +135,8 @@ pub const MIGRATE_8_TO_9: &[&str] = &[
     ENRICHMENT_QUEUE_ACTIVE,
     ENRICHMENT_QUEUE_DUE,
 ];
+
+pub const MIGRATE_9_TO_10: &[&str] = &["ALTER TABLE sources ADD COLUMN volume_identity TEXT"];
 
 pub const MIGRATE_3_TO_4: &[&str] = &[
     EDITIONS_WORK,

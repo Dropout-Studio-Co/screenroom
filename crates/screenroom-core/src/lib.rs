@@ -7,6 +7,8 @@ pub mod nfo;
 pub mod paths;
 pub mod scanner;
 mod schema;
+pub mod volume;
+pub mod watch;
 
 pub use domain::{
     BackgroundJob, LibraryItem, MediaKind, PlaybackSession, Profile, Recommendation, SegmentMarker,
@@ -36,7 +38,9 @@ pub use paths::{PathStyle, location_key};
 pub use scanner::{
     LibraryScanner, MEDIA_EXTENSIONS, ScanIssue, ScanSummary, ScanToken, ScanUpdate,
 };
+pub use volume::VolumeIdentity;
+pub use watch::{MAX_PLAN_ENTRIES, MediaChange, Plan};
 
-pub const SCHEMA_VERSION: i64 = 9;
+pub const SCHEMA_VERSION: i64 = 10;
 
 pub const BACKUP_FORMAT_VERSION: i64 = 2;
