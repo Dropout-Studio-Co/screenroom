@@ -1557,3 +1557,26 @@ Gate G2's on-screen half is still open. The app can hide its window
 presented frame rate, so on-screen 4K remains unmeasured. Next action: add that
 check mode, then run it with `SCREENROOM_ALLOW_FOREGROUND=0` and record the
 presented rate, CPU and RSS.
+
+### The post-load hold is fixed (2026-11-01)
+
+The blocking reads named above are gone. `dwidth`/`dheight` are observed and
+`update_target` uses the cached pair; `FILE_LOADED` marks metadata dirty instead of
+reading duration, `hwdec-current`, the track list and dimensions; `PLAYBACK_RESTART`
+takes the playhead from the last observed `time-pos`; a `track-list` change defers
+the refresh to an iteration where no frame is pending. `position_ready` still only
+becomes true once a real `time-pos` value has arrived, so a fresh load cannot
+publish 0 over a resume point.
+
+| Fixture, 8–20 s sampled | Before | After |
+| --- | ---: | ---: |
+| 4K H.264, mono AAC | 23.25–23.40 fps, 277–302 ms hold | 24.00–24.12 fps, no gap ≥ 150 ms |
+| 4K H.264, stereo AAC | 23.40 fps with a 290 ms hold | 24.00 fps, no hold |
+| 4K H.264, no audio | 23.98 fps | 24.12 fps |
+| 4K HEVC Main10 HDR10 | 23.948 fps, worst gap 162 ms | 23.999 fps, worst gap 53 ms |
+| 1080p H.264 | 24.0 fps | 24.0 fps |
+
+The slowest remaining event is the deferred refresh at 12–28 ms, under one frame.
+All 335 workspace tests pass, including the desktop acceptance suite; clippy and
+rustfmt are clean. The owner's-media re-run stays **BLOCKED**: `/Volumes` holds only
+`mothership` and `Recovery`, so no 3240×2160 Main10 sample was reachable.

@@ -33,6 +33,15 @@ const ID_VOLUME: u64 = 9;
 const ID_MUTE: u64 = 10;
 const ID_TRACK_LIST: u64 = 11;
 const ID_HWDEC_CURRENT: u64 = 12;
+const ID_DWIDTH: u64 = 13;
+const ID_DHEIGHT: u64 = 14;
+
+fn is_load_time_property(id: u64) -> bool {
+    matches!(
+        id,
+        ID_TIME_POS | ID_DURATION | ID_DWIDTH | ID_DHEIGHT | ID_HWDEC_CURRENT | ID_TRACK_LIST
+    )
+}
 
 const FORMAT_FLAG: i32 = 3;
 const FORMAT_INT64: i32 = 4;
@@ -524,6 +533,11 @@ struct Runner {
     pending_seek_serial: Option<u64>,
     queued_seek: Option<(f64, u64)>,
     seek_started: bool,
+    video_width: u32,
+    video_height: u32,
+    last_time_pos: Option<f64>,
+    awaiting_position: bool,
+    metadata_dirty: bool,
 }
 
 impl Runner {
@@ -570,6 +584,8 @@ impl Runner {
         core.observe("mute", FORMAT_FLAG, ID_MUTE)?;
         core.observe("track-list", FORMAT_NODE, ID_TRACK_LIST)?;
         core.observe("hwdec-current", FORMAT_STRING, ID_HWDEC_CURRENT)?;
+        core.observe("dwidth", FORMAT_INT64, ID_DWIDTH)?;
+        core.observe("dheight", FORMAT_INT64, ID_DHEIGHT)?;
 
         Ok(Self {
             renderer,
@@ -599,6 +615,11 @@ impl Runner {
             pending_seek_serial: None,
             queued_seek: None,
             seek_started: false,
+            video_width: 0,
+            video_height: 0,
+            last_time_pos: None,
+            awaiting_position: false,
+            metadata_dirty: false,
         })
     }
 
@@ -652,8 +673,12 @@ impl Runner {
                 self.seek(seconds, serial, shared);
             }
 
-            if self.renderer.take_dirty() {
+            let had_frame = self.renderer.take_dirty();
+            if had_frame {
                 self.present(shared);
+            }
+            if !had_frame && self.metadata_dirty {
+                self.refresh_metadata(shared);
             }
             let render_time = phase.elapsed();
             let phase = std::time::Instant::now();
@@ -714,6 +739,11 @@ impl Runner {
         self.loaded = false;
         self.hardware_decoder = None;
         self.tracks.clear();
+        self.video_width = 0;
+        self.video_height = 0;
+        self.last_time_pos = None;
+        self.awaiting_position = false;
+        self.metadata_dirty = false;
         self.audio_pts = None;
         self.avsync = None;
         self.total_avsync_change = None;
@@ -898,6 +928,11 @@ impl Runner {
         self.total_avsync_change = None;
         self.mistimed_frames = None;
         self.hardware_decoder = None;
+        self.video_width = 0;
+        self.video_height = 0;
+        self.last_time_pos = None;
+        self.awaiting_position = false;
+        self.metadata_dirty = false;
         publish(shared, |snapshot| {
             snapshot.load_id = self.load_id;
             snapshot.position_ready = false;
@@ -932,6 +967,7 @@ impl Runner {
                     self.expected_entry_id = None;
                     self.current_entry_id = Some(entry_id);
                     self.position_ready = false;
+                    self.last_time_pos = None;
                     self.set_state(PlayerState::Resolving, shared);
                 }
             }
@@ -943,13 +979,14 @@ impl Runner {
                 }
             }
             event::PLAYBACK_RESTART if self.loaded => {
-                self.position_ready = true;
-                self.position = self
-                    .core
-                    .get_f64("time-pos")
-                    .ok()
-                    .filter(|position| position.is_finite() && *position >= 0.0)
-                    .unwrap_or(self.position);
+                match self.last_time_pos {
+                    Some(position) => {
+                        self.position = position;
+                        self.position_ready = true;
+                        self.awaiting_position = false;
+                    }
+                    None => self.awaiting_position = true,
+                }
                 if self.seek_started {
                     if let Some(serial) = self.pending_seek_serial.take() {
                         self.seek_serial = serial;
@@ -968,7 +1005,10 @@ impl Runner {
         if self.current_entry_id.is_none() && !matches!(raw.reply_userdata, ID_VOLUME | ID_MUTE) {
             return;
         }
-        if !self.loaded && !matches!(raw.reply_userdata, ID_PAUSE | ID_VOLUME | ID_MUTE) {
+        if !self.loaded
+            && !matches!(raw.reply_userdata, ID_PAUSE | ID_VOLUME | ID_MUTE)
+            && !is_load_time_property(raw.reply_userdata)
+        {
             return;
         }
         if raw.data.is_null() {
@@ -991,9 +1031,26 @@ impl Runner {
         match raw.reply_userdata {
             ID_TIME_POS => {
                 let value = unsafe { *(property.data as *const f64) };
-                if self.position_ready && value.is_finite() && value >= 0.0 {
-                    self.position = value;
+                if value.is_finite() && value >= 0.0 {
+                    self.last_time_pos = Some(value);
+                    if self.awaiting_position {
+                        self.position = value;
+                        self.position_ready = true;
+                        self.awaiting_position = false;
+                    }
+                    if self.position_ready {
+                        self.position = value;
+                    }
                 }
+            }
+            ID_DWIDTH | ID_DHEIGHT => {
+                let value = unsafe { *(property.data as *const i64) }.max(0) as u32;
+                if raw.reply_userdata == ID_DWIDTH {
+                    self.video_width = value;
+                } else {
+                    self.video_height = value;
+                }
+                self.update_target();
             }
             ID_DURATION => {
                 let value = unsafe { *(property.data as *const f64) };
@@ -1046,7 +1103,7 @@ impl Runner {
             ID_MUTE => {
                 self.muted = Some(unsafe { *(property.data as *const i32) } != 0);
             }
-            ID_TRACK_LIST => self.tracks = read_tracks(&self.core),
+            ID_TRACK_LIST => self.metadata_dirty = true,
             ID_HWDEC_CURRENT => {
                 let value = unsafe { *(property.data.cast::<*const std::ffi::c_char>()) };
                 self.hardware_decoder = (!value.is_null()).then(|| {
@@ -1083,9 +1140,7 @@ impl Runner {
     fn on_loaded(&mut self, shared: &Arc<Mutex<PlayerSnapshot>>) {
         trace!("event: file loaded");
         self.loaded = true;
-        self.duration = self.core.get_f64("duration").unwrap_or(0.0).max(0.0);
-        self.hardware_decoder = self.core.get_string("hwdec-current").ok().flatten();
-        self.tracks = read_tracks(&self.core);
+        self.metadata_dirty = true;
         self.update_target();
 
         self.set_state(
@@ -1096,23 +1151,30 @@ impl Runner {
             },
             shared,
         );
-        publish(shared, |snapshot| snapshot.duration = self.duration);
+        self.publish_snapshot(shared);
+    }
+
+    fn refresh_metadata(&mut self, shared: &Arc<Mutex<PlayerSnapshot>>) {
+        self.metadata_dirty = false;
+        self.tracks = read_tracks(&self.core);
+        if self.duration <= 0.0
+            && let Ok(duration) = self.core.get_f64("duration")
+            && duration.is_finite()
+            && duration > 0.0
+        {
+            self.duration = duration;
+        }
+        if self.hardware_decoder.is_none() {
+            self.hardware_decoder = self.core.get_string("hwdec-current").ok().flatten();
+        }
         self.publish_snapshot(shared);
     }
 
     fn update_target(&mut self) {
-        let display_width = self.core.get_i64("dwidth").unwrap_or(0).max(0) as u32;
-        let display_height = self.core.get_i64("dheight").unwrap_or(0).max(0) as u32;
-        let width = if display_width == 0 {
-            self.core.get_i64("width").unwrap_or(0).max(0) as u32
-        } else {
-            display_width
-        };
-        let height = if display_height == 0 {
-            self.core.get_i64("height").unwrap_or(0).max(0) as u32
-        } else {
-            display_height
-        };
+        if self.video_width == 0 || self.video_height == 0 {
+            return;
+        }
+        let (width, height) = (self.video_width, self.video_height);
         let limit = std::env::var("SCREENROOM_RENDER_MAX")
             .ok()
             .and_then(|value| value.parse().ok())

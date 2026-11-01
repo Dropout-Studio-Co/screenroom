@@ -257,3 +257,32 @@ What remains a limitation, stated plainly:
 Not proven: a real HDR10 film, an HDR-capable display, and how this looks to a
 person. One frame of one generated fixture is the whole sample, and the owner's
 media was not mounted.
+
+## The post-load hold is fixed (2026-11-01)
+
+The blocking reads named above are gone from the render loop:
+
+- `dwidth` and `dheight` are observed (user data 13 and 14) and `update_target`
+  renders from the cached pair instead of reading them.
+- `FILE_LOADED` marks metadata dirty instead of reading `duration`,
+  `hwdec-current`, the track list and the dimensions.
+- `PLAYBACK_RESTART` takes the playhead from the last observed `time-pos`.
+  `position_ready` becomes true only once a real value has arrived (via
+  `awaiting_position`), so a fresh load still cannot publish 0 over a resume point.
+- A `track-list` change marks metadata dirty; the refresh (tracks, duration, and
+  `hwdec-current` as a fallback) runs in an iteration where no frame is pending.
+- The gates in `apply_property` now let the load-time properties through before
+  `FILE_LOADED`, so their event values are already cached when the file is loaded.
+
+| Fixture, 8–20 s sampled | Before | After |
+|---|---:|---:|
+| 4K H.264, mono AAC | 23.25–23.40 fps, 277–302 ms hold | **24.00–24.12 fps, no gap ≥ 150 ms** |
+| 4K H.264, stereo AAC | 23.40 fps with a 290 ms hold | **24.00 fps, no hold** |
+| 4K H.264, no audio track | 23.98 fps | 24.12 fps |
+| 4K HEVC Main10 HDR10 | 23.948 fps, worst gap 162 ms | **23.999 fps, worst gap 53 ms** |
+| 1080p H.264 (`render_bench`) | 24.0 fps | 24.0 fps |
+
+The worst `handle_event` left is the deferred refresh at 12–28 ms, under one frame
+at 24 fps. Whole-workspace tests pass, clippy and rustfmt clean. Re-run with
+`frame_stall <mode> <file> <seconds> 150` to confirm the absence of the hold, and
+`SCREENROOM_PLAYER_TRACE=1` to see any slow iteration broken down by phase.
