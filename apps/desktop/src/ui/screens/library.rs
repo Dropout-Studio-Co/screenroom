@@ -314,18 +314,27 @@ impl<'a> Library<'a> {
             );
         }
 
-        row![
-            strip,
-            Space::new().width(Length::Fill),
-            text(self.source_line.clone())
-                .size(tokens.type_scale.caption)
-                .font(theme::regular())
-                .color(theme::muted()),
-        ]
-        .spacing(theme::gap(Gap::Group))
-        .align_y(Alignment::Center)
-        .width(Length::Fill)
-        .into()
+        let line = text(self.source_line.clone())
+            .size(tokens.type_scale.caption)
+            .font(theme::regular())
+            .color(theme::muted());
+
+        match source_placement(self.width) {
+            SourcePlacement::BesideChips => row![strip, Space::new().width(Length::Fill), line,]
+                .spacing(theme::gap(Gap::Group))
+                .align_y(Alignment::Center)
+                .width(Length::Fill)
+                .into(),
+            SourcePlacement::BeneathChips => column![
+                row![strip, Space::new().width(Length::Fill)]
+                    .width(Length::Fill)
+                    .align_y(Alignment::Center),
+                line,
+            ]
+            .spacing(theme::gap(Gap::Card))
+            .width(Length::Fill)
+            .into(),
+        }
     }
 
     fn grid(&self) -> Element<'a, Message> {
@@ -518,6 +527,20 @@ pub fn source_line(folders: usize, files: usize, scanned: Option<&str>) -> Strin
     };
 
     format!("{folders} \u{00b7} {files} \u{00b7} {recency}")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourcePlacement {
+    BesideChips,
+
+    BeneathChips,
+}
+
+pub fn source_placement(width: f32) -> SourcePlacement {
+    match Breakpoint::at(capped_window(width)) {
+        Breakpoint::Narrow | Breakpoint::Compact => SourcePlacement::BeneathChips,
+        _ => SourcePlacement::BesideChips,
+    }
 }
 
 pub fn count_line(total: usize) -> String {
@@ -817,8 +840,8 @@ mod tests {
     use screenroom_core::{LibraryItem, MediaKind};
 
     use super::{
-        Filter, Library, PAGE_TILES, SortChoice, capped_window, source_line, tile_title,
-        tile_width, visible_tiles,
+        Filter, Library, PAGE_TILES, SortChoice, SourcePlacement, capped_window, source_line,
+        source_placement, tile_title, tile_width, visible_tiles,
     };
     use crate::app::Screen;
     use crate::ui::components::poster::{CARD_GAP, card_columns};
@@ -892,6 +915,25 @@ mod tests {
         let cut = tile_title(emoji);
         assert_eq!(cut.chars().count(), 26, "no char boundary may be split");
         assert!(emoji.starts_with(cut));
+    }
+
+    #[test]
+    fn the_source_line_takes_its_own_row_before_it_can_wrap() {
+        for width in [320.0_f32, 600.0, 899.0, 900.0, 960.0, 1_099.0, f32::NAN] {
+            assert_eq!(
+                source_placement(width),
+                SourcePlacement::BeneathChips,
+                "at {width} the source line must not squeeze the chips"
+            );
+        }
+
+        for width in [1_100.0_f32, 1_280.0, 1_440.0, 3_440.0] {
+            assert_eq!(
+                source_placement(width),
+                SourcePlacement::BesideChips,
+                "at {width} the source line sits beside the chips"
+            );
+        }
     }
 
     #[test]
