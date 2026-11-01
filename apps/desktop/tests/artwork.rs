@@ -36,11 +36,11 @@ fn a_poster_is_a_scaled_jpeg_of_the_file() {
         poster.bytes.starts_with(&[0xFF, 0xD8]),
         "a JPEG was expected"
     );
-    assert_eq!(poster.width, 400, "the poster is scaled to card width");
+    assert_eq!(poster.width, 1280, "the poster is scaled to hero width");
 
-    assert_eq!(poster.height, 300);
+    assert_eq!(poster.height, 960);
     assert!(
-        poster.bytes.len() < 768 * 1024,
+        poster.bytes.len() < 2 * 1024 * 1024,
         "a poster must stay inside the size cap"
     );
 }

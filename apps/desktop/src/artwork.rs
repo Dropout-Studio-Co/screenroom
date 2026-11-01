@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 
 use screenroom_core::{ArtworkCandidate, Library};
 
-const POSTER_WIDTH: u32 = 400;
+const POSTER_WIDTH: u32 = 1280;
 
-const MAX_POSTER_BYTES: usize = 768 * 1024;
+const MAX_POSTER_BYTES: usize = 2 * 1024 * 1024;
 
 const EXTRACT_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -358,6 +358,27 @@ mod tests {
         let planted = directory.path().join("ffmpeg");
         std::fs::write(&planted, b"").expect("planted tool");
         assert_eq!(tool_in("ffmpeg", directory.path().as_os_str()), planted);
+    }
+
+    #[test]
+    fn a_poster_is_extracted_wide_enough_for_the_hero() {
+        const {
+            assert!(
+                POSTER_WIDTH >= 1280,
+                "a 530px hero at 1440 must not upscale"
+            )
+        };
+        const {
+            assert!(
+                MAX_POSTER_BYTES <= 2 * 1024 * 1024,
+                "one poster must stay bounded"
+            )
+        };
+        let args: Vec<String> = command_for(Path::new("/media/a.mkv"), 0)
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(args.contains(&"scale=1280:-2".to_string()));
     }
 
     #[test]
