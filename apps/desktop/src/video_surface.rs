@@ -124,6 +124,7 @@ impl Primitive for VideoPrimitive {
         }
 
         if let Some(texture) = &pipeline.texture {
+            crate::play_check::note_upload();
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture,

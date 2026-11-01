@@ -60,10 +60,15 @@ const QUIT_ROUTING_BUDGET: u8 = 40;
 
 fn hides_its_window() -> bool {
     crate::quit::check_requested()
+        || crate::play_check::requested()
         || std::env::var_os("SCREENROOM_WINDOW").is_some_and(|value| value == "hidden")
 }
 
 pub fn run() -> iced::Result {
+    if let Some(error) = crate::play_check::startup_error() {
+        eprintln!("play check refused: {error}");
+        return Ok(());
+    }
     let window = iced::window::Settings {
         visible: !hides_its_window(),
         ..Default::default()
@@ -405,6 +410,8 @@ pub struct App {
     probe_paused: Arc<AtomicBool>,
 
     background_work: bool,
+
+    play_check: Option<crate::play_check::Run>,
 
     player: Option<Player>,
     snapshot: PlayerSnapshot,
@@ -836,6 +843,7 @@ impl App {
             library_label,
             profile_id,
             capability: screenroom_player::capability(),
+            play_check: crate::play_check::Run::from_environment(),
             screen: Screen::Home,
             focus: 0,
             home: Vec::new(),
@@ -1687,6 +1695,68 @@ impl App {
             Ok(_) => {}
             Err(error) => self.report(&error),
         }
+    }
+
+    fn drive_play_check(&mut self) -> bool {
+        let Some(mut run) = self.play_check.take() else {
+            return false;
+        };
+        let done = self.advance_play_check(&mut run);
+        if !done {
+            self.play_check = Some(run);
+        }
+        done
+    }
+
+    fn advance_play_check(&mut self, run: &mut crate::play_check::Run) -> bool {
+        let now = std::time::Instant::now();
+        if !run.started() {
+            let player = match Player::start() {
+                Ok(player) => player,
+                Err(error) => {
+                    run.fail(format!("the player could not start: {error}"));
+                    let _ = run.report(now);
+                    return true;
+                }
+            };
+            player.load_at(run.config().media(), None);
+            self.player = Some(player);
+            self.screen = Screen::Player;
+            run.begin(now);
+            return false;
+        }
+        run.note_tick();
+        let decoded = self
+            .snapshot
+            .frame
+            .as_ref()
+            .map_or(0, |frame| frame.generation);
+        let delivered = self.frame.as_ref().map(|frame| frame.generation);
+        if let Some(frame) = self.frame.as_ref() {
+            run.note_size((frame.width, frame.height));
+        }
+        run.note(now, delivered, crate::play_check::uploads());
+        if run.sample_due(now) {
+            run.sample(
+                now,
+                (
+                    decoded,
+                    delivered.unwrap_or(0),
+                    crate::play_check::uploads(),
+                ),
+            );
+        }
+        if run.failure().is_none() && self.frame.is_none() && run.elapsed(now) > 8.0 {
+            run.fail("no decoded frame reached the application within eight seconds".to_string());
+        }
+        if run.failure().is_none() && run.elapsed(now) > run.config().seconds() + 30.0 {
+            run.fail("the run did not finish inside its deadline".to_string());
+        }
+        if run.finished(now) {
+            let _ = run.report(now);
+            return true;
+        }
+        false
     }
 
     fn poll(&mut self) {
@@ -3297,7 +3367,12 @@ impl App {
                     player.select_track(kind, id);
                 }
             }
-            Message::Tick => self.poll(),
+            Message::Tick => {
+                self.poll();
+                if self.drive_play_check() {
+                    return iced::exit();
+                }
+            }
             Message::Keyboard(event) => return self.handle_key(event),
             Message::Close => {
                 self.stop_playback();

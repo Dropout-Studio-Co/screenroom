@@ -46,8 +46,14 @@ per-viewer isolation, an unplugged drive, and SQLite crash/damage recovery.
 Supporting checks in the same tier, all windowless and all runnable on demand:
 `scripts/check-quit-routing.sh`, `scripts/verify-bundle.sh`,
 `cargo run --example library_bench` and `cargo run --example render_bench`. The
-offscreen frame budget they produce is a **ceiling**, not an on-screen frame rate;
-gate G2's on-screen half remains open.
+offscreen frame budget they produce is a **ceiling**, not an on-screen frame rate.
+The application's own path is now measured with a hidden window through
+`SCREENROOM_PLAY_CHECK`: **21.8–22.0 fps delivered and 21.7–21.9 fps uploaded at
+3840×2160** on four 4K fixtures, against 24.00 fps from the same player headless and
+a 48 Hz application loop — so the cost is in the frame-copy, upload and redraw path,
+not in decode. Uploads are observed, displayed frames are not: a hidden window gives
+no present callback, so gate G2's on-screen half remains open and needs an
+owner-approved visible session.
 
 ### Local installation (supporting check, not a gate)
 

@@ -1552,11 +1552,11 @@ range rather than presented at their mastered luminance, the curve is mpv's defa
 and unlabelled, and nothing here can ask macOS for an EDR surface. Not proven: a
 real HDR10 film on a real HDR display, and what a person sees.
 
-Gate G2's on-screen half is still open. The app can hide its window
-(`SCREENROOM_WINDOW=hidden`), but no check mode plays a file and reports the
-presented frame rate, so on-screen 4K remains unmeasured. Next action: add that
-check mode, then run it with `SCREENROOM_ALLOW_FOREGROUND=0` and record the
-presented rate, CPU and RSS.
+Gate G2's on-screen half is still open. The app's own path is now measured, hidden:
+**21.8–22.0 fps delivered and uploaded at 3840×2160** against a 24 fps source, while
+the same player headless delivers 24.00 fps — see the check-mode section below.
+Displayed frames remain unobservable without a visible window, which needs an
+owner-approved session.
 
 ### The post-load hold is fixed (2026-11-01)
 
@@ -1581,27 +1581,61 @@ All 335 workspace tests pass, including the desktop acceptance suite; clippy and
 rustfmt are clean. The owner's-media re-run stays **BLOCKED**: `/Volumes` holds only
 `mothership` and `Recovery`, so no 3240×2160 Main10 sample was reachable.
 
-### On-screen measurement needs a check mode, not an example (2026-11-01)
+### The check mode exists, and it separates decoded from presented (2026-11-01)
 
-Gate G2's on-screen half cannot come from the examples: they run offscreen with no
-window. What exists, confirmed in the code, and what blocks it:
+Gate G2's on-screen half needed the application's own presentation path, not an
+example. `SCREENROOM_PLAY_CHECK=<csv>` with `SCREENROOM_PLAY_CHECK_MEDIA=<file>`
+and `SCREENROOM_PLAY_CHECK_SECONDS=<5..300>` now runs the real application, plays
+that file through the real libmpv worker and the real `video_surface` upload, and
+writes a machine-readable report plus a per-second samples file. Setting the check
+variable forces the hidden window (`hides_its_window()`), so it cannot take focus,
+switch Spaces or open anything visible; an invalid configuration is refused before
+the window is built and exits with the reason on stderr.
 
-- `hides_its_window()` already keys off `SCREENROOM_WINDOW=hidden`, and `run()` sets
-  `visible: !hides_its_window()` with `.exit_on_close_request(false)`.
-- `apps/desktop/src/video_surface.rs::prepare` is the only place a frame reaches the
-  GPU (`queue.write_texture`, skipped while `uploaded_generation` is unchanged), so
-  a presented-frame counter belongs there and nowhere else.
-- `Message::Tick` drives `poll()` at `PLAYER_TICK`, so it can sample CPU/RSS and
-  enforce a deadline; `update` already returns `iced::exit()` on the quit path.
-- The blocker: playback is library-only. `open_player(&file_id, …)` takes a file id
-  from the library, so a path-based check has to scan the media's folder and open the
-  resulting item first. That plumbing was not landed here, because an unverified mode
-  is worse than a missing one.
+```bash
+SCREENROOM_PLAY_CHECK=/tmp/check.csv \
+SCREENROOM_PLAY_CHECK_MEDIA="/path/to/film.mkv" \
+SCREENROOM_PLAY_CHECK_SECONDS=10 \
+  ./target/release/screenroom-desktop
+```
 
-Plan for the next session: add `SCREENROOM_PLAY_CHECK=<csv>`,
-`SCREENROOM_PLAY_CHECK_MEDIA=<file>` and `SCREENROOM_PLAY_CHECK_SECONDS`; scan the
-media's folder, open the first item, count presentations in
-`video_surface::prepare`, sample `ps -o %cpu=,rss= -p <pid>` once per second, write
-`frames,fps,cpu_mean,rss_mean` and exit with `iced::exit()`. Run it with
-`SCREENROOM_WINDOW=hidden` and `SCREENROOM_ALLOW_FOREGROUND=0` on the 4K fixtures and
-confirm the frontmost application does not change.
+What it reports, deliberately kept apart: `decoded_fps` and `delivered_fps` (frames
+the player produced and the app picked up), `uploaded_fps` (calls to
+`queue.write_texture`, the only place a frame reaches the GPU), `startup_ms`,
+`measured_seconds`, `ticks_per_second`, worst and p95 frame gaps, CPU and RSS, the
+source size and the render target. `presented_frames` is written as
+**`unavailable`** with a note, because a hidden window gives this process no surface
+present callback — an upload is not proof that anything was displayed.
+
+It loads the file straight from its path (`Player::start` + `load_at`) instead of
+scanning its folder as planned, so nothing touches the library or the media folder.
+That deviation is what keeps the mode read-only and single-file.
+
+| Release build, hidden window, 10 s | 4K H.264 mono | 4K H.264 stereo | 4K H.264 silent | 4K HEVC Main10 HDR10 |
+| --- | ---: | ---: | ---: | ---: |
+| startup to first frame | 618 ms | 621 ms | 443 ms | 449 ms |
+| decoded / delivered fps | 22.010 | 21.816 | 21.826 | 21.962 |
+| uploaded fps | 21.904 | 21.709 | 21.721 | 21.858 |
+| worst / p95 gap | 70.9 / 58.0 ms | 67.2 / 58.3 ms | 67.4 / 59.3 ms | 72.0 / 61.5 ms |
+| CPU mean | 116.3 % | 121.9 % | 130.9 % | 185.7 % |
+| RSS mean | 402 MiB | 411 MiB | 380 MiB | 561 MiB |
+| render target | 3840×2160 | 3840×2160 | 3840×2160 | 3840×2160 |
+
+The same 4K mono file through `frame_stall auto-copy`, headless, reports **24.00 fps
+in 10.00 s with no gap ≥ 150 ms**, and the application's loop ran at **48.3 Hz**, so
+the 22 fps is neither decode nor tick-limited: the loss is in the app's own
+frame-copy, upload and redraw path, about 2 fps of 24. Presentation on a visible
+window is still unmeasured, so G2's on-screen half stays open — but it is now a
+measured 21.9 fps delivery path rather than an unknown.
+
+Failure paths, each run against the release binary: missing media and a report path
+inside the media folder are refused before any window exists (`play check refused:
+…`, exit 0, no report written, nothing created in the media folder); a file that
+decodes nothing finishes at the requested duration with `delivered_fps,0.000` and
+`failure,no decoded frame arrived`. A run that starts but never finishes also fails
+itself at `seconds + 30`. Thirteen unit tests cover the configuration rules, the CSV
+shape, gap accounting, the first-frame window and the failure line.
+
+Not proven: displayed frames, because there is no callback for them; and the owner's
+3240×2160 Main10 file, because `/Volumes` still holds only `mothership` and
+`Recovery`.

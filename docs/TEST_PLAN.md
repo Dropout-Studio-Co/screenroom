@@ -137,6 +137,7 @@ What runs today (`cargo test --workspace`, **225 tests, 0 failures** on macOS AR
 | `screenroom-desktop` unit | navigation, filters, autoplay decision, resume copy, close-path state, slider-percent rounding, agreement between the offered subtitle range and what the player accepts, the menu-bar routing being found by action rather than by title, **a first run that grants a folder, scans it, and leaves that folder byte-for-byte unchanged**, **a folder that moved under a new name keeping its works and resume point until it is relinked**, and **a damaged backup being refused with the library and its progress intact** |
 | `desktop/tests/playback.rs` | checkpoint policy against a real SQLite library and a real clip |
 | `scripts/check-quit-routing.sh` | that the running application re-pointed the menu bar's Quit (hidden window, no focus taken) |
+| `SCREENROOM_PLAY_CHECK=<csv> SCREENROOM_PLAY_CHECK_MEDIA=<file> ./target/release/screenroom-desktop` | the application's own 4K delivery: decoded, uploaded, gap and CPU/RSS figures, hidden window, no focus taken |
 
 **The two `*_check` examples are not unit tests.** They are run by hand against a
 copy of a scanned library, because what they verify only exists on a library built

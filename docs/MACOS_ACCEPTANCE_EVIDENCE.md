@@ -124,6 +124,28 @@ count of 264 is unchanged otherwise.
   is a design change rather than a tuning fix.
 - **Nothing was pushed, published or deployed.** Commits are local.
 
+## The application's own 4K path, measured (2026-11-01)
+
+`SCREENROOM_PLAY_CHECK` runs the real application hidden and reports what it can
+defend: decoded, delivered and uploaded rates, gaps, CPU, RSS and the render target.
+On four generated 4K fixtures in a release build it delivered **21.8–22.0 fps at
+3840×2160** for a 24 fps source (CPU mean 116–186 %, RSS mean 380–561 MiB). The same
+player headless reports 24.00 fps with no gap ≥ 150 ms, and the application loop ran
+at 48.3 Hz, so the ~2 fps is the app's frame-copy, upload and redraw cost.
+
+```bash
+SCREENROOM_PLAY_CHECK=/tmp/check.csv \
+SCREENROOM_PLAY_CHECK_MEDIA="/path/to/film.mkv" \
+SCREENROOM_PLAY_CHECK_SECONDS=10 \
+  ./target/release/screenroom-desktop
+```
+
+The frontmost application was the same before and after every run, no window was
+shown, and nothing was written into a media folder — a report path inside one is
+refused. **Displayed** frames are not claimed: the report writes
+`presented_frames,unavailable`. Step 8's 19.449 fps figure on the owner's hardest
+3240×2160 HEVC file is unchanged and still needs that drive.
+
 ## The smallest remaining manual session
 
 Ordered so the owner can stop early. Time is dominated by waiting, not by work.

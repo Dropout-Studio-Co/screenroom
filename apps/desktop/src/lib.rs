@@ -5,6 +5,7 @@ pub mod conversion;
 pub mod design;
 pub mod external;
 pub mod picker;
+pub mod play_check;
 pub mod playback;
 pub mod preview;
 pub mod probe;
