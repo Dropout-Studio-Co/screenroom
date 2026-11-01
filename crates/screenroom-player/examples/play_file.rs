@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "libmpv: {} via {} ({:?} bridge)",
         capability.api_version.as_deref().unwrap_or("-"),
         capability.library_path.as_deref().unwrap_or("-"),
-        screenroom_player::preferred_bridge()
+        screenroom_player::render_bridge()
     );
     if !capability.available {
         println!("libmpv is unavailable: {}", capability.reason);

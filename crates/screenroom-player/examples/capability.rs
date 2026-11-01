@@ -52,5 +52,5 @@ fn report(capability: &screenroom_player::PlayerCapability) {
         "api version:   {}",
         capability.api_version.as_deref().unwrap_or("-")
     );
-    println!("bridge:        {:?}", screenroom_player::preferred_bridge());
+    println!("bridge:        {:?}", screenroom_player::render_bridge());
 }

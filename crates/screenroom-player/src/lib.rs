@@ -75,12 +75,8 @@ pub enum RenderBridge {
     Direct3D11,
 }
 
-pub fn preferred_bridge() -> RenderBridge {
-    if cfg!(windows) {
-        RenderBridge::Direct3D11
-    } else {
-        RenderBridge::OpenGl
-    }
+pub fn render_bridge() -> RenderBridge {
+    RenderBridge::Software
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -945,12 +941,7 @@ mod tests {
     }
 
     #[test]
-    fn preferred_bridge_matches_platform() {
-        let bridge = preferred_bridge();
-        if cfg!(windows) {
-            assert_eq!(bridge, RenderBridge::Direct3D11);
-        } else {
-            assert_eq!(bridge, RenderBridge::OpenGl);
-        }
+    fn the_reported_bridge_is_the_one_the_player_actually_uses() {
+        assert_eq!(render_bridge(), RenderBridge::Software);
     }
 }

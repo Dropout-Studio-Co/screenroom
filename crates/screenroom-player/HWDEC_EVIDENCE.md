@@ -287,3 +287,75 @@ The worst `handle_event` left is the deferred refresh at 12–28 ms, under one f
 at 24 fps. Whole-workspace tests pass, clippy and rustfmt clean. Re-run with
 `frame_stall <mode> <file> <seconds> 150` to confirm the absence of the hold, and
 `SCREENROOM_PLAYER_TRACE=1` to see any slow iteration broken down by phase.
+
+## The zero-copy GPU path, measured (2026-11-01)
+
+The software renderer cannot go faster here: `render.h` gives it single-plane RGB
+only, so mpv converts YUV to RGB on the CPU, and the application then uploads every
+frame to the GPU. This section records the first isolated experiment of the
+alternative — libmpv rendering through OpenGL into an `IOSurface` that Metal reads
+directly — and what it actually delivered.
+
+Probe: `examples/gl-path-probe/probe.m`, built by hand (its README carries the
+command). It opens a headless `CGL` context, creates a 3840×2160 `IOSurface`,
+binds it to a GL texture with `CGLTexImageIOSurface2D`, makes that texture an FBO
+attachment, creates `mpv_render_context` with `MPV_RENDER_API_TYPE_OPENGL`, loads
+the file, renders every frame mpv requests, and then wraps the same `IOSurface` in
+a Metal texture to compare bytes. Nothing is shown, nothing is heard, and the
+media is opened read-only.
+
+**Resource sharing is real, not assumed.** `-[MTLDevice newTextureWithDescriptor:
+iosurface:plane:]` returned a texture and `getBytes:` over a 16-pixel run at the
+frame centre returned exactly the bytes OpenGL had written
+(`metal read B=255 G=12 R=0 A=255, surface B=255 G=12 R=0 A=255, identical=1`),
+so the picture crosses to Metal without a CPU copy.
+
+Apple M4, libmpv 0.41.0, generated 3840×2160 24 fps fixtures from `.artifacts/media`,
+`glFinish` after every frame, file looped, audio disabled:
+
+| Fixture | Delivered, paced | CPU (user+sys / real) | Peak RSS |
+|---|---:|---:|---:|
+| 4K H.264 8-bit | 22.91 fps | 26.7 % | 261 MiB |
+| 4K HEVC Main10 | 23.74 fps | 32.1 % | 498 MiB |
+| 4K HEVC Main10 HDR10 | 23.62 fps | 30.5 % | 441 MiB |
+
+The same files untimed (mpv decodes and renders as fast as it can, so nothing
+waits) render at 65.1 and 71.0 fps, 14.7 and 13.7 ms per frame including the
+`glFinish`.
+
+Against the shipped software path, on the same machine and the same kind of
+fixture (`SCREENROOM_PLAY_CHECK`, release build, 2026-11-01): 18.7–22.0 fps
+delivered, CPU 116–186 %, RSS 380–561 MiB. So the GPU path delivers the source rate
+instead of four frames in five, and uses roughly a quarter to a fifth of the CPU —
+which is the battery and fan cost of a 4K film, not a cosmetic difference.
+
+What is **not** proven, and therefore not claimed:
+
+- **Nothing has been presented through iced and wgpu.** The probe writes into an
+  `IOSurface` and reads it back once to prove the bytes; it never draws that
+  surface onto the application's swap chain.
+- **GL-to-Metal synchronisation is unproven without `glFinish`.** The numbers above
+  pay a full serialisation per frame. A production loop needs a shared event or
+  fence so the Metal sampling waits on the GL writes, and must keep the surface
+  alive until the GPU is done with it.
+- **HDR is unchanged.** The surface is 8-bit BGRA; an EDR path needs a 16-bit
+  float target and an EDR-enabled window, neither of which exists here.
+- **The owner's 3240×2160 Main10 sample was not measured**: `/Volumes` held only
+  `mothership` and `Recovery`, so all media here is generated.
+
+### Why the connection to the real UI is considered viable
+
+Checked against the installed crates rather than assumed:
+
+- `iced_wgpu`'s custom `Primitive::prepare` receives the live `&wgpu::Device`, and
+  `Primitive::draw` receives the render pass, so a texture created from the
+  `IOSurface` can be sampled inside the application's own pipeline.
+- `wgpu` 27 exports `hal` and `Device::as_hal::<wgpu::hal::api::Metal>()`, which
+  yields the `wgpu-hal` Metal device; `wgpu-hal` 27 exposes
+  `metal::Device::texture_from_raw`, and `wgpu::Device::create_texture_from_hal`
+  turns it into a `wgpu::Texture` that iced can bind.
+- The Metal device the surface must be created on is reachable from `wgpu-hal`
+  (`raw_device()`), so the surface and the texture come from one device.
+
+That path is unexercised end to end. It is the next task, and the software renderer
+stays the shipped default until it is measured in the application itself.
