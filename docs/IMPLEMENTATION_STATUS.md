@@ -2081,3 +2081,44 @@ Nothing was added to any workflow that makes it an always-on service: no cloud
 runner, no paid certificate (the signing key is optional and the release publishes
 unsigned without it), and no automatic deployment outside the owner's own
 machines.
+
+## Automatic media discovery: the core half (2026-11-02)
+
+**Status: the defects are fixed and the pure logic exists; the desktop watcher
+that feeds it is not wired yet.** Nothing here has run against a watcher, and the
+macOS and Windows monitoring research below is design evidence, not a shipped
+feature.
+
+Three defects that already existed are fixed, each with a test that fails without
+the fix:
+
+| Defect | What went wrong | Fix |
+| --- | --- | --- |
+| A stale mount point could empty the library | a drive's mount point survives as an empty folder, so a genuinely complete walk found nothing and withdrew every file: rows kept, everything disabled | a source records the volume's own identity; a walk may only withdraw when that identity still matches |
+| Every rescan re-read every file | about 1.28 GB read for ten thousand unchanged films | a file whose size and modification time still match is no longer fingerprinted |
+| One transaction per ingested file | a two-thousand-file copy was two thousand commits | a scan's ingests share one transaction |
+
+The new `watch` module holds the part of discovery that decides what a signal
+means, with no I/O: the media and rejection lists, how a burst collapses to one
+change per path inside a quiet window, and how changes become a bounded plan of
+files to ingest, forget or treat as moved. A rename becomes one relocation rather
+than a delete and an add. `scan_paths` ingests named files through the same
+machinery as a walk, so a watcher will hand over paths rather than a second
+pipeline.
+
+What the measurements and the prior art settled, and what they rule out:
+
+- Event-driven watching with a cheap stat-only reconciliation is the design. A
+  stat pass is about 1 ms for 775 files, against a 10 ms walk; an idle watcher
+  costs 0.028 % of one core and 6.4 MB. Polling a 10 ms walk every few seconds is
+  both slower to notice a change and keeps an external SSD awake.
+- Plex waits a 60-second quiet window and Jellyfin restarts a 60-second delay on
+  every event with a 12-hour backstop scan; Kodi's core has no watcher at all. No
+  serious media server treats continuous polling as its primary mechanism.
+- `notify` 8.2.1 never reads the completion byte count on Windows, so a buffer
+  overflow drops events silently. That is why a periodic stat pass is part of the
+  design rather than an optimisation.
+
+**Not done:** no watcher runs in the desktop application, no scan happens on
+launch, wake or mount, and `notify` is not yet a dependency. The gates that were
+blocked before stay blocked.

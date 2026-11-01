@@ -102,8 +102,10 @@ source that consumes it:
 | Variable | Effect | Where |
 | --- | --- | --- |
 | `SCREENROOM_LIBRARY=<file>` | opens that SQLite library instead of the default one | `app.rs` |
-| `SCREENROOM_OPEN_SCREEN=library\|settings\|detail` | starts on that screen; Detail opens the first Library item | `app.rs` (`open_requested_screen`) |
+| `SCREENROOM_OPEN_SCREEN=library\|settings\|detail\|player` | starts on that screen; Detail opens the first Library item, Player opens it and plays | `app.rs` (`open_requested_screen`) |
 | `SCREENROOM_WINDOW=hidden` | builds the window hidden and never activates it | `play_check.rs` (`requests_hidden_window`) |
+| `SCREENROOM_WINDOW_WIDTH=<px>` | opens at that width, so a breakpoint can be seen rather than inferred | `app.rs` (`verification_size`) |
+| `SCREENROOM_WINDOW_HEIGHT=<px>` | opens at that height | `app.rs` (`verification_size`) |
 | `SCREENROOM_AX_CHECK=<file>` | writes the accessibility receipt and exits; the default surface is Home | `accessibility.rs` |
 | `SCREENROOM_AX_CHECK_SCREEN=browse\|settings\|detail` | picks the surface that check walks | `app.rs` (`open_checked_screen`) |
 
