@@ -106,6 +106,58 @@ fn clip(path: &Path, seconds: f64) -> bool {
     encoded
 }
 
+fn black_clip(path: &Path, seconds: f64) -> bool {
+    let encoded = ffmpeg(vec![
+        "-f".into(),
+        "lavfi".into(),
+        "-i".into(),
+        format!("color=c=black:size=320x180:rate=24:duration={seconds}"),
+        "-f".into(),
+        "lavfi".into(),
+        "-i".into(),
+        format!("sine=frequency=440:duration={seconds}"),
+        "-c:v".into(),
+        "libx264".into(),
+        "-preset".into(),
+        "ultrafast".into(),
+        "-pix_fmt".into(),
+        "yuv420p".into(),
+        "-c:a".into(),
+        "aac".into(),
+        "-shortest".into(),
+        path.to_string_lossy().to_string(),
+    ]);
+    if encoded {
+        settle(path);
+    }
+    encoded
+}
+
+fn ink_in_rows_below(frame: &screenroom_player::Frame, fraction: f32) -> (usize, usize) {
+    let start = (frame.height as f32 * fraction) as u32;
+    let stride = frame.stride as usize;
+    let bytes = frame.bytes();
+    let mut ink = 0;
+    let mut total = 0;
+    for row in start..frame.height {
+        for column in 0..frame.width {
+            let index = row as usize * stride + column as usize * 4;
+            if index + 2 >= bytes.len() {
+                continue;
+            }
+            let luma = (u16::from(bytes[index])
+                + u16::from(bytes[index + 1])
+                + u16::from(bytes[index + 2]))
+                / 3;
+            total += 1;
+            if luma > 40 {
+                ink += 1;
+            }
+        }
+    }
+    (ink, total)
+}
+
 fn multilingual_film(path: &Path, seconds: f64) -> bool {
     let Some(folder) = path.parent() else {
         return false;
@@ -1540,6 +1592,82 @@ fn step_20_the_mini_player_keeps_playing_while_you_browse_and_reopens_the_full_o
     assert!(
         kept.position_ms > 0,
         "the place it reached was stored, not thrown away: {kept:#?}"
+    );
+}
+
+#[test]
+fn a_bengali_subtitle_is_drawn_into_the_picture() {
+    if !player_ready() {
+        return;
+    }
+    let media = Media::new();
+    let path = media.path("Bengali (2020)/Bengali (2020).mkv");
+    assert!(black_clip(&path, 6.0), "a black fixture is needed");
+    let subtitle = media.path("Bengali (2020)/bengali-cue.bn.srt");
+    std::fs::write(
+        &subtitle,
+        "1\n00:00:00,000 --> 00:00:06,000\nআমি বাংলায় গান গাই।\n",
+    )
+    .expect("subtitle");
+
+    let mut plain = fresh_app();
+    scan_folder(&mut plain, &media.root);
+    let plain_id = plain.browse.items[0].id.clone();
+    assert!(play(&mut plain, &plain_id), "the film plays");
+    assert!(
+        pump(&mut plain, Duration::from_secs(10), |app| app
+            .frame
+            .is_some()),
+        "a frame arrives"
+    );
+    let plain_frame = plain.frame.clone().expect("frame");
+    let (plain_ink, band) = ink_in_rows_below(&plain_frame, 0.75);
+    let _ = plain.update(Message::BackFromPlayer);
+
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(play(&mut app, &id), "the film plays");
+    let _ = app.update(Message::SubtitleChosen(
+        subtitle.to_string_lossy().to_string(),
+    ));
+    let stored = app
+        .subtitles
+        .first()
+        .cloned()
+        .expect("the subtitle is kept");
+    assert_eq!(stored.language, "Bengali");
+    let _ = app.update(Message::UseSubtitle(stored.id.clone()));
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert!(
+        pump(&mut app, Duration::from_secs(10), |app| app
+            .snapshot
+            .tracks
+            .iter()
+            .any(
+                |track| track.kind == TrackKind::Subtitle && track.selected
+            )),
+        "the imported subtitle reaches the player as a selected track"
+    );
+    let then = app.snapshot.position;
+    assert!(
+        pump(&mut app, Duration::from_secs(10), |app| app
+            .snapshot
+            .position
+            > then + 0.3),
+        "the film keeps advancing with the subtitle on"
+    );
+    let frame = app.frame.clone().expect("frame");
+    let (ink, _) = ink_in_rows_below(&frame, 0.75);
+    println!("subtitle band: {band} pixels, {plain_ink} without and {ink} with");
+    assert!(
+        plain_ink * 50 < band,
+        "the fixture is not black without a subtitle: {plain_ink} of {band}"
+    );
+    assert!(
+        ink > plain_ink + 100,
+        "a Bengali cue must be drawn into the picture: {ink} of {band} pixels lit, \
+         against {plain_ink} without it"
     );
 }
 
