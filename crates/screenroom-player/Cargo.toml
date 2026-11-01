@@ -11,5 +11,9 @@ repository.workspace = true
 thiserror.workspace = true
 libloading = "0.9"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-foundation = "0.3"
+objc2-io-surface = "0.3"
+
 [dev-dependencies]
 tempfile.workspace = true

@@ -45,8 +45,68 @@ fn quit_item_index(actions: &[Option<&CStr>]) -> Option<usize> {
 
 pub const CHECK_ENV: &str = "SCREENROOM_QUIT_CHECK";
 
+pub const TERMINATE_ENV: &str = "SCREENROOM_TERMINATE_CHECK";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminateRouting {
+    Routed,
+
+    Unsupported,
+
+    NoApplication,
+
+    NoMethod,
+}
+
+impl TerminateRouting {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Routed => "routed",
+            Self::Unsupported => "unsupported",
+            Self::NoApplication => "no-application",
+            Self::NoMethod => "no-method",
+        }
+    }
+
+    pub fn is_routed(self) -> bool {
+        matches!(self, Self::Routed)
+    }
+}
+
+impl std::fmt::Display for TerminateRouting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 pub fn check_path() -> Option<PathBuf> {
     std::env::var_os(CHECK_ENV).map(PathBuf::from)
+}
+
+pub fn terminate_check_path() -> Option<PathBuf> {
+    std::env::var_os(TERMINATE_ENV).map(PathBuf::from)
+}
+
+pub fn terminate_check_requested() -> bool {
+    terminate_check_path().is_some()
+}
+
+pub fn install_terminate_routing() -> TerminateRouting {
+    #[cfg(target_os = "macos")]
+    {
+        imp::install_terminate()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        TerminateRouting::Unsupported
+    }
+}
+
+pub fn request_termination() {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        imp::terminate_application()
+    }
 }
 
 pub fn check_requested() -> bool {
@@ -70,10 +130,15 @@ pub fn route_quit_through_close() -> QuitRouting {
 
 #[cfg(target_os = "macos")]
 mod imp {
-    use objc2::msg_send;
-    use objc2::runtime::{AnyClass, AnyObject, Sel};
+    use std::ffi::c_void;
+    use std::sync::atomic::{AtomicPtr, Ordering};
 
-    use super::{CLOSE_SELECTOR, QuitRouting, quit_item_index};
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
+
+    use super::{CLOSE_SELECTOR, QuitRouting, TerminateRouting, quit_item_index};
+
+    static PREVIOUS_TERMINATE: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
     unsafe fn find_quit_item(menu: *mut AnyObject) -> Option<*mut AnyObject> {
         if let Some(item) = unsafe { item_that_quits(menu) } {
@@ -144,6 +209,94 @@ mod imp {
         }
         QuitRouting::Routed
     }
+
+    unsafe fn application() -> *mut AnyObject {
+        let Some(class) = AnyClass::get(c"NSApplication") else {
+            return std::ptr::null_mut();
+        };
+        unsafe { msg_send![class, sharedApplication] }
+    }
+
+    unsafe fn close_target(application: *mut AnyObject) -> *mut AnyObject {
+        let key: *mut AnyObject = unsafe { msg_send![application, keyWindow] };
+        if !key.is_null() {
+            return key;
+        }
+        let main: *mut AnyObject = unsafe { msg_send![application, mainWindow] };
+        if !main.is_null() {
+            return main;
+        }
+        let windows: *mut AnyObject = unsafe { msg_send![application, windows] };
+        if windows.is_null() {
+            return std::ptr::null_mut();
+        }
+        let count: isize = unsafe { msg_send![windows, count] };
+        for index in 0..count {
+            let window: *mut AnyObject = unsafe { msg_send![windows, objectAtIndex: index] };
+            if window.is_null() {
+                continue;
+            }
+            let closable: objc2::runtime::Bool = unsafe { msg_send![window, isClosable] };
+            if closable.as_bool() {
+                return window;
+            }
+        }
+        std::ptr::null_mut()
+    }
+
+    unsafe fn forward_termination(application: *mut AnyObject, command: Sel) {
+        let previous = PREVIOUS_TERMINATE.load(Ordering::Acquire);
+        if previous.is_null() {
+            return;
+        }
+        let previous: unsafe extern "C-unwind" fn(*mut AnyObject, Sel) =
+            unsafe { std::mem::transmute(previous) };
+        unsafe { previous(application, command) };
+    }
+
+    unsafe extern "C-unwind" fn close_instead_of_terminating(
+        application: *mut AnyObject,
+        command: Sel,
+    ) {
+        let window = unsafe { close_target(application) };
+        if window.is_null() {
+            unsafe { forward_termination(application, command) };
+            return;
+        }
+        let closable: objc2::runtime::Bool = unsafe { msg_send![window, isClosable] };
+        if !closable.as_bool() {
+            unsafe { forward_termination(application, command) };
+            return;
+        }
+        let no_sender: *mut AnyObject = std::ptr::null_mut();
+        let _: () = unsafe { msg_send![window, performClose: no_sender] };
+    }
+
+    pub fn install_terminate() -> TerminateRouting {
+        let Some(class) = AnyClass::get(c"NSApplication") else {
+            return TerminateRouting::NoApplication;
+        };
+        let Some(method) = class.instance_method(Sel::register(c"terminate:")) else {
+            return TerminateRouting::NoMethod;
+        };
+        let replacement: Imp = unsafe {
+            std::mem::transmute::<unsafe extern "C-unwind" fn(*mut AnyObject, Sel), Imp>(
+                close_instead_of_terminating,
+            )
+        };
+        let previous = unsafe { method.set_implementation(replacement) };
+        PREVIOUS_TERMINATE.store(previous as *const () as *mut c_void, Ordering::Release);
+        TerminateRouting::Routed
+    }
+
+    pub unsafe fn terminate_application() {
+        let application = unsafe { application() };
+        if application.is_null() {
+            return;
+        }
+        let no_sender: *mut AnyObject = std::ptr::null_mut();
+        let _: () = unsafe { msg_send![application, terminate: no_sender] };
+    }
 }
 
 #[cfg(test)]
@@ -177,5 +330,24 @@ mod tests {
         assert!(QuitRouting::Unsupported.is_graceful());
         assert!(!QuitRouting::NoMenu.is_graceful());
         assert!(!QuitRouting::NoQuitItem.is_graceful());
+    }
+
+    #[test]
+    fn terminate_routing_is_only_settled_when_the_method_was_replaced() {
+        assert!(TerminateRouting::Routed.is_routed());
+        for failure in [
+            TerminateRouting::Unsupported,
+            TerminateRouting::NoApplication,
+            TerminateRouting::NoMethod,
+        ] {
+            assert!(!failure.is_routed(), "{failure} must not read as routed");
+        }
+        assert_eq!(TerminateRouting::NoMethod.to_string(), "no-method");
+    }
+
+    #[test]
+    fn the_terminate_check_reports_through_its_own_environment_variable() {
+        assert_eq!(TERMINATE_ENV, "SCREENROOM_TERMINATE_CHECK");
+        assert_ne!(TERMINATE_ENV, CHECK_ENV);
     }
 }

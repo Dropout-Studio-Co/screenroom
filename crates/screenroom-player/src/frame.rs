@@ -1,5 +1,8 @@
 use std::sync::Arc;
 
+#[cfg(target_os = "macos")]
+use crate::SurfaceFrame;
+
 #[derive(Debug, Clone)]
 pub struct Frame {
     pub width: u32,
@@ -13,18 +16,76 @@ pub struct Frame {
     pub offset: usize,
 
     pub generation: u64,
+
+    #[cfg(target_os = "macos")]
+    pub surface: Option<Arc<SurfaceFrame>>,
 }
 
 impl Frame {
-    pub fn bytes(&self) -> &[u8] {
+    pub fn cpu(
+        width: u32,
+        height: u32,
+        stride: u32,
+        rgba: Arc<Vec<u8>>,
+        offset: usize,
+        generation: u64,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            stride,
+            rgba,
+            offset,
+            generation,
+            #[cfg(target_os = "macos")]
+            surface: None,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn gpu(width: u32, height: u32, surface: Arc<SurfaceFrame>, generation: u64) -> Self {
+        Self {
+            width,
+            height,
+            stride: surface.bytes_per_row(),
+            rgba: Arc::new(Vec::new()),
+            offset: 0,
+            generation,
+            surface: Some(surface),
+        }
+    }
+
+    pub fn is_bgra(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.surface.is_some()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+
+    pub fn with_pixels<R>(&self, f: impl FnOnce(&[u8], usize) -> R) -> R {
+        #[cfg(target_os = "macos")]
+        if let Some(surface) = &self.surface {
+            return surface.with_pixels(|bytes| f(bytes, surface.bytes_per_row() as usize));
+        }
         let start = self.offset.min(self.rgba.len());
-        &self.rgba[start..]
+        f(&self.rgba[start..], self.stride as usize)
     }
 
     pub fn is_well_formed(&self) -> bool {
-        self.width > 0
-            && self.height > 0
-            && self.stride as usize >= self.width as usize * 4
+        if self.width == 0 || self.height == 0 {
+            return false;
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(surface) = &self.surface {
+            return surface.width() == self.width
+                && surface.height() == self.height
+                && surface.bytes_per_row() as usize >= self.width as usize * 4;
+        }
+        self.stride as usize >= self.width as usize * 4
             && self.rgba.len() >= self.offset + self.stride as usize * self.height as usize
     }
 
@@ -32,27 +93,37 @@ impl Frame {
         if x >= self.width || y >= self.height || !self.is_well_formed() {
             return None;
         }
-        let bytes = self.bytes();
-        let offset = y as usize * self.stride as usize + x as usize * 4;
-        Some([
-            bytes[offset],
-            bytes[offset + 1],
-            bytes[offset + 2],
-            bytes[offset + 3],
-        ])
+        #[cfg(target_os = "macos")]
+        if let Some(surface) = &self.surface {
+            return surface
+                .read_pixel(x, y)
+                .map(|pixel| to_rgba(pixel, channels_are_bgra(self.is_bgra())));
+        }
+        let bgra = channels_are_bgra(self.is_bgra());
+        self.with_pixels(|bytes, stride| {
+            let offset = y as usize * stride + x as usize * 4;
+            Some(to_rgba(
+                [
+                    bytes[offset],
+                    bytes[offset + 1],
+                    bytes[offset + 2],
+                    bytes[offset + 3],
+                ],
+                bgra,
+            ))
+        })
     }
 
     pub fn is_blank(&self) -> bool {
         let row_bytes = self.width as usize * 4;
-        let stride = self.stride as usize;
-        let bytes = self.bytes();
-        (0..self.height as usize).all(|y| {
-            let start = y * stride;
-            bytes.get(start..start + row_bytes).is_some_and(|row| {
-                row.as_chunks::<4>()
-                    .0
-                    .iter()
-                    .all(|pixel| pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0 && pixel[3] == 0)
+        self.with_pixels(|bytes, stride| {
+            (0..self.height as usize).all(|y| {
+                let start = y * stride;
+                bytes.get(start..start + row_bytes).is_some_and(|row| {
+                    row.as_chunks::<4>().0.iter().all(|pixel| {
+                        pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0 && pixel[3] == 0
+                    })
+                })
             })
         })
     }
@@ -63,12 +134,34 @@ impl Frame {
         if !self.is_well_formed() {
             return out;
         }
-        let bytes = self.bytes();
-        for (y, row) in out.chunks_exact_mut(row_bytes).enumerate() {
-            let start = y * self.stride as usize;
-            row.copy_from_slice(&bytes[start..start + row_bytes]);
+        self.with_pixels(|bytes, stride| {
+            for (y, row) in out.chunks_exact_mut(row_bytes).enumerate() {
+                let start = y * stride;
+                row.copy_from_slice(&bytes[start..start + row_bytes]);
+            }
+        });
+        if channels_are_bgra(self.is_bgra()) {
+            swizzle_bgra_to_rgba(&mut out);
         }
         out
+    }
+}
+
+fn channels_are_bgra(surface_bgra: bool) -> bool {
+    surface_bgra
+}
+
+fn to_rgba(pixel: [u8; 4], bgra: bool) -> [u8; 4] {
+    if bgra {
+        [pixel[2], pixel[1], pixel[0], pixel[3]]
+    } else {
+        pixel
+    }
+}
+
+fn swizzle_bgra_to_rgba(bytes: &mut [u8]) {
+    for pixel in bytes.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
     }
 }
 
@@ -77,14 +170,7 @@ mod tests {
     use super::*;
 
     fn frame(width: u32, height: u32, bytes: Vec<u8>) -> Frame {
-        Frame {
-            width,
-            height,
-            stride: width * 4,
-            rgba: Arc::new(bytes),
-            offset: 0,
-            generation: 1,
-        }
+        Frame::cpu(width, height, width * 4, Arc::new(bytes), 0, 1)
     }
 
     fn padded(width: u32, height: u32, stride: u32) -> Frame {
@@ -95,14 +181,7 @@ mod tests {
                 bytes[offset..offset + 4].copy_from_slice(&[10, 20, 30, 255]);
             }
         }
-        Frame {
-            width,
-            height,
-            stride,
-            rgba: Arc::new(bytes),
-            offset: 0,
-            generation: 2,
-        }
+        Frame::cpu(width, height, stride, Arc::new(bytes), 0, 2)
     }
 
     #[test]
@@ -111,14 +190,7 @@ mod tests {
         assert!(!frame(2, 2, vec![0; 15]).is_well_formed());
         assert!(!frame(0, 2, vec![]).is_well_formed());
         assert!(padded(2, 2, 16).is_well_formed());
-        let narrow = Frame {
-            width: 2,
-            height: 2,
-            stride: 4,
-            rgba: Arc::new(vec![0; 8]),
-            offset: 0,
-            generation: 3,
-        };
+        let narrow = Frame::cpu(2, 2, 4, Arc::new(vec![0; 8]), 0, 3);
         assert!(
             !narrow.is_well_formed(),
             "a row narrower than its pixels is invalid"
@@ -129,30 +201,19 @@ mod tests {
     fn an_alignment_prefix_is_outside_the_pixels_and_still_valid() {
         let mut bytes = vec![0xEEu8; 64];
         bytes.extend_from_slice(&[10, 20, 30, 255].repeat(4));
-        let frame = Frame {
-            width: 2,
-            height: 2,
-            stride: 8,
-            rgba: Arc::new(bytes),
-            offset: 64,
-            generation: 4,
-        };
+        let frame = Frame::cpu(2, 2, 8, Arc::new(bytes), 64, 4);
         assert!(frame.is_well_formed());
         assert_eq!(frame.pixel(0, 0), Some([10, 20, 30, 255]));
         assert_eq!(frame.tight_pixels(), [10, 20, 30, 255].repeat(4));
-        assert_eq!(frame.bytes().len(), 16);
+        assert_eq!(
+            frame.with_pixels(|bytes, stride| (bytes.len(), stride)),
+            (16, 8)
+        );
     }
 
     #[test]
     fn an_offset_past_the_buffer_is_not_well_formed() {
-        let frame = Frame {
-            width: 2,
-            height: 2,
-            stride: 8,
-            rgba: Arc::new(vec![0; 64]),
-            offset: 60,
-            generation: 5,
-        };
+        let frame = Frame::cpu(2, 2, 8, Arc::new(vec![0; 64]), 60, 5);
         assert!(!frame.is_well_formed());
         assert_eq!(frame.pixel(0, 0), None);
     }
@@ -205,5 +266,82 @@ mod tests {
         let frame = padded(1, 1, 256);
         assert!(frame.pixel(1, 0).is_none());
         assert!(frame.pixel(0, 1).is_none());
+    }
+
+    #[test]
+    fn a_cpu_frame_is_not_treated_as_bgra() {
+        let frame = frame(1, 1, vec![10, 20, 30, 255]);
+        assert!(!frame.is_bgra());
+        assert_eq!(frame.pixel(0, 0), Some([10, 20, 30, 255]));
+        assert_eq!(frame.tight_pixels(), vec![10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn a_bgra_picture_is_handed_out_as_rgba() {
+        assert_eq!(to_rgba([30, 20, 10, 255], true), [10, 20, 30, 255]);
+        assert_eq!(to_rgba([10, 20, 30, 255], false), [10, 20, 30, 255]);
+
+        let mut bytes = vec![30, 20, 10, 255, 60, 50, 40, 128];
+        swizzle_bgra_to_rgba(&mut bytes);
+        assert_eq!(bytes, vec![10, 20, 30, 255, 40, 50, 60, 128]);
+    }
+
+    #[test]
+    fn a_cpu_frame_lends_its_pixels_with_its_own_stride() {
+        let frame = padded(1, 1, 16);
+        let (len, stride, first) =
+            frame.with_pixels(|bytes, stride| (bytes.len(), stride, bytes[0]));
+        assert_eq!(len, 16);
+        assert_eq!(stride, 16);
+        assert_eq!(first, 10);
+    }
+
+    #[test]
+    fn a_frame_can_cross_a_thread_boundary() {
+        fn send_and_sync<T: Send + Sync>() {}
+        send_and_sync::<Frame>();
+        send_and_sync::<Arc<Frame>>();
+    }
+
+    #[cfg(target_os = "macos")]
+    mod gpu {
+        use super::*;
+
+        fn surface() -> Arc<SurfaceFrame> {
+            Arc::new(SurfaceFrame::new(32, 18).expect("a small surface exists"))
+        }
+
+        #[test]
+        fn a_surface_frame_is_well_formed_and_measures_its_surface() {
+            let surface = surface();
+            let frame = Frame::gpu(32, 18, Arc::clone(&surface), 7);
+            assert!(frame.is_well_formed());
+            assert_eq!(frame.stride, surface.bytes_per_row());
+            assert_eq!(frame.width, 32);
+            assert_eq!(frame.height, 18);
+        }
+
+        #[test]
+        fn a_surface_frame_reports_its_own_dimensions_as_the_validity_rule() {
+            let frame = Frame::gpu(64, 18, surface(), 8);
+            assert!(
+                !frame.is_well_formed(),
+                "the surface must be the size the frame claims"
+            );
+            assert_eq!(frame.pixel(0, 0), None);
+            assert!(!Frame::gpu(0, 18, surface(), 9).is_well_formed());
+        }
+
+        #[test]
+        fn a_fresh_surface_frame_is_blank_and_reads_zeroed_bgra() {
+            let frame = Frame::gpu(32, 18, surface(), 10);
+            assert!(frame.is_blank());
+            assert_eq!(frame.pixel(16, 9), Some([0, 0, 0, 0]));
+            assert_eq!(frame.pixel(32, 9), None);
+            assert_eq!(frame.tight_pixels().len(), 32 * 4 * 18);
+            let (len, stride) = frame.with_pixels(|bytes, stride| (bytes.len(), stride));
+            assert_eq!(stride, frame.stride as usize);
+            assert_eq!(len, stride * 18);
+        }
     }
 }

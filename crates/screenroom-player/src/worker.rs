@@ -518,8 +518,77 @@ fn run(
     runner.play_loop(&commands, &shared, &wake);
 }
 
+enum FrameRenderer {
+    Software(SoftwareRenderer),
+    #[cfg(target_os = "macos")]
+    Gpu(crate::gl_render::GlRenderer),
+}
+
+impl FrameRenderer {
+    fn create(core: &Mpv, wake: Arc<WakeSignal>) -> Result<Self, PlayerError> {
+        let wants_software = std::env::var("SCREENROOM_RENDER")
+            .map(|value| value.eq_ignore_ascii_case("software"))
+            .unwrap_or(false);
+        if wants_software {
+            crate::set_render_bridge(crate::RenderBridge::Software);
+            return SoftwareRenderer::new(core, wake).map(Self::Software);
+        }
+
+        #[cfg(target_os = "macos")]
+        if let Ok(renderer) = crate::gl_render::GlRenderer::with_wake(core, Arc::clone(&wake)) {
+            crate::set_render_bridge(crate::RenderBridge::OpenGl);
+            return Ok(Self::Gpu(renderer));
+        } else if std::env::var_os("SCREENROOM_PLAYER_TRACE").is_some() {
+            eprintln!("[worker] no OpenGL render path on this machine; drawing frames on the CPU");
+        }
+
+        crate::set_render_bridge(crate::RenderBridge::Software);
+        SoftwareRenderer::new(core, wake).map(Self::Software)
+    }
+
+    fn decode_policy(&self, requested: HwdecMode) -> &'static str {
+        match self {
+            Self::Software(_) => requested.as_option(),
+            #[cfg(target_os = "macos")]
+            Self::Gpu(_) => "auto",
+        }
+    }
+
+    fn take_dirty(&self) -> bool {
+        match self {
+            Self::Software(renderer) => renderer.take_dirty(),
+            #[cfg(target_os = "macos")]
+            Self::Gpu(renderer) => renderer.take_dirty(),
+        }
+    }
+
+    fn update_flags(&self) -> Result<u64, PlayerError> {
+        match self {
+            Self::Software(renderer) => renderer.update_flags(),
+            #[cfg(target_os = "macos")]
+            Self::Gpu(renderer) => renderer.update_flags(),
+        }
+    }
+
+    fn set_target(&mut self, width: u32, height: u32) {
+        match self {
+            Self::Software(renderer) => renderer.set_target(width, height),
+            #[cfg(target_os = "macos")]
+            Self::Gpu(renderer) => renderer.set_target(width, height),
+        }
+    }
+
+    fn render(&mut self) -> Result<Option<Frame>, PlayerError> {
+        match self {
+            Self::Software(renderer) => renderer.render(),
+            #[cfg(target_os = "macos")]
+            Self::Gpu(renderer) => renderer.render(),
+        }
+    }
+}
+
 struct Runner {
-    renderer: SoftwareRenderer,
+    renderer: FrameRenderer,
     max_dimension: u32,
     core: Mpv,
     library: Arc<LibMpv>,
@@ -594,7 +663,8 @@ impl Runner {
         }
         let mut core = Mpv::new_with_options(&library, &options)?;
         core.set_wakeup_signal(Arc::clone(&wake));
-        let renderer = SoftwareRenderer::new(&core, Arc::clone(&wake))?;
+        let renderer = FrameRenderer::create(&core, Arc::clone(&wake))?;
+        core.set_property("hwdec", renderer.decode_policy(hwdec))?;
 
         core.observe("time-pos", FORMAT_DOUBLE, ID_TIME_POS)?;
         core.observe("duration", FORMAT_DOUBLE, ID_DURATION)?;

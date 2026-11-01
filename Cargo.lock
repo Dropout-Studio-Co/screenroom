@@ -2581,7 +2581,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
 dependencies = [
  "bitflags 2.13.2",
+ "block2 0.6.2",
  "dispatch2",
+ "libc",
  "objc2 0.6.5",
 ]
 
@@ -2696,8 +2698,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "180788110936d59bab6bd83b6060ffdfffb3b922ba1396b312ae795e1de9d81d"
 dependencies = [
  "bitflags 2.13.2",
+ "libc",
  "objc2 0.6.5",
  "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -3502,6 +3506,7 @@ name = "screenroom-desktop"
 version = "0.1.0"
 dependencies = [
  "iced",
+ "metal",
  "objc2 0.6.5",
  "rfd",
  "screenroom-core",
@@ -3516,6 +3521,8 @@ name = "screenroom-player"
 version = "0.1.0"
 dependencies = [
  "libloading 0.9.0",
+ "objc2-core-foundation",
+ "objc2-io-surface",
  "tempfile",
  "thiserror 2.0.21",
 ]

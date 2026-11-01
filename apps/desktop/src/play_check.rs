@@ -24,7 +24,8 @@ pub fn requests_hidden_window() -> bool {
     if std::env::var(WINDOW_ENV).is_ok_and(|value| value == "hidden") {
         return true;
     }
-    (requested() || crate::quit::check_requested()) && !visible_requested()
+    (requested() || crate::quit::check_requested() || crate::quit::terminate_check_requested())
+        && !visible_requested()
 }
 
 pub fn startup_error() -> Option<String> {
@@ -50,6 +51,16 @@ static UPLOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 
 pub fn note_upload() {
     UPLOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+static IMPORTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn note_import() {
+    IMPORTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn imports() -> u64 {
+    IMPORTS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 pub fn uploads() -> u64 {
@@ -402,9 +413,15 @@ impl Run {
                     .unwrap_or(0.0)
             })
             .unwrap_or(0.0);
-        let window = self
+        let measured = self
             .first_delivered
             .map(|first| now.duration_since(first).as_secs_f64())
+            .unwrap_or(elapsed)
+            .max(0.001);
+        let delivered_until = self.last_change.unwrap_or(now);
+        let window = self
+            .first_delivered
+            .map(|first| delivered_until.duration_since(first).as_secs_f64())
             .unwrap_or(elapsed)
             .max(0.001);
         let first = self.samples.first().copied();
@@ -431,7 +448,8 @@ impl Run {
         let mut push = |key: &str, value: String| rows.push((key.to_string(), value));
         push("media", self.config.media().display().to_string());
         push("sampled_seconds", format!("{elapsed:.3}"));
-        push("measured_seconds", format!("{window:.3}"));
+        push("measured_seconds", format!("{measured:.3}"));
+        push("delivering_seconds", format!("{window:.3}"));
         push("startup_ms", format!("{startup_ms:.1}"));
         push(
             "ticks_per_second",
@@ -454,6 +472,8 @@ impl Run {
         );
         push("delivered_total", delivered_delta.to_string());
         push("uploaded_total", uploaded_delta.to_string());
+        push("imported_total", imports().to_string());
+        push("imported_fps", format!("{:.3}", imports() as f64 / window));
         push(
             "worst_gap_ms",
             format!("{:.3}", gaps.iter().copied().fold(0.0_f64, f64::max)),

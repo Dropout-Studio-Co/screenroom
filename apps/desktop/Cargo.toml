@@ -21,6 +21,8 @@ rfd = "0.15"
 
 objc2 = "0.6"
 
+metal = "0.32"
+
 [dev-dependencies]
 tempfile.workspace = true
 

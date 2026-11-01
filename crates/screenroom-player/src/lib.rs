@@ -9,7 +9,20 @@ mod frame;
 mod render;
 mod worker;
 
+#[cfg(target_os = "macos")]
+pub mod gl_render;
+
+#[cfg(target_os = "macos")]
+pub mod surface;
+
 pub use frame::Frame;
+
+#[cfg(target_os = "macos")]
+pub use gl_render::GlRenderer;
+
+#[cfg(target_os = "macos")]
+pub use surface::SurfaceFrame;
+
 pub use worker::{
     HwdecMode, MediaTrack, NO_TRACK, Player, PlayerCommand, PlayerFailure, PlayerSnapshot,
     SUB_POSITION_RANGE, SUB_SCALE_RANGE, TrackKind,
@@ -76,7 +89,22 @@ pub enum RenderBridge {
 }
 
 pub fn render_bridge() -> RenderBridge {
-    RenderBridge::Software
+    match ACTIVE_BRIDGE.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => RenderBridge::OpenGl,
+        2 => RenderBridge::Direct3D11,
+        _ => RenderBridge::Software,
+    }
+}
+
+static ACTIVE_BRIDGE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub(crate) fn set_render_bridge(bridge: RenderBridge) {
+    let value = match bridge {
+        RenderBridge::Software => 0,
+        RenderBridge::OpenGl => 1,
+        RenderBridge::Direct3D11 => 2,
+    };
+    ACTIVE_BRIDGE.store(value, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -223,6 +251,7 @@ pub(crate) struct RenderSymbols {
     free: unsafe extern "C" fn(*mut c_void),
     render: unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int,
     update: unsafe extern "C" fn(*mut c_void) -> u64,
+    report_swap: Option<unsafe extern "C" fn(*mut c_void)>,
     set_update_callback:
         unsafe extern "C" fn(*mut c_void, Option<unsafe extern "C" fn(*mut c_void)>, *mut c_void),
 }
@@ -235,6 +264,7 @@ type FnCommand = unsafe extern "C" fn(MpvHandle, *const *const c_char) -> c_int;
 type FnGetProperty = unsafe extern "C" fn(MpvHandle, *const c_char, c_int, *mut c_void) -> c_int;
 
 type FnGetPropertyString = unsafe extern "C" fn(MpvHandle, *const c_char) -> *mut c_char;
+type FnSetPropertyString = unsafe extern "C" fn(MpvHandle, *const c_char, *const c_char) -> c_int;
 type FnFree = unsafe extern "C" fn(*mut c_void);
 type FnErrorString = unsafe extern "C" fn(c_int) -> *const c_char;
 type FnWaitEvent = unsafe extern "C" fn(MpvHandle, f64) -> *mut RawEvent;
@@ -251,6 +281,7 @@ struct Symbols {
     command: FnCommand,
     get_property: FnGetProperty,
     get_property_string: FnGetPropertyString,
+    set_property_string: FnSetPropertyString,
     free: FnFree,
     error_string: FnErrorString,
     wait_event: FnWaitEvent,
@@ -323,6 +354,9 @@ impl LibMpv {
                 get_property_string: *library
                     .get(b"mpv_get_property_string\0")
                     .map_err(|error| missing(path, "mpv_get_property_string", error))?,
+                set_property_string: *library
+                    .get(b"mpv_set_property_string\0")
+                    .map_err(|error| missing(path, "mpv_set_property_string", error))?,
                 free: *library
                     .get(b"mpv_free\0")
                     .map_err(|error| missing(path, "mpv_free", error))?,
@@ -383,6 +417,10 @@ fn render_symbols(library: &Library) -> Option<RenderSymbols> {
             free: *library.get(b"mpv_render_context_free\0").ok()?,
             render: *library.get(b"mpv_render_context_render\0").ok()?,
             update: *library.get(b"mpv_render_context_update\0").ok()?,
+            report_swap: library
+                .get(b"mpv_render_context_report_swap\0")
+                .ok()
+                .map(|symbol| *symbol),
             set_update_callback: *library
                 .get(b"mpv_render_context_set_update_callback\0")
                 .ok()?,
@@ -654,6 +692,19 @@ impl Mpv {
         let code =
             unsafe { (self.library.symbols.command)(self.handle.as_ptr(), pointers.as_ptr()) };
         self.check(code, &format!("mpv_command({})", arguments[0]))
+    }
+
+    pub fn set_property(&self, name: &str, value: &str) -> Result<(), PlayerError> {
+        let name = to_cstring(name)?;
+        let value = to_cstring(value)?;
+        let code = unsafe {
+            (self.library.symbols.set_property_string)(
+                self.handle.as_ptr(),
+                name.as_ptr(),
+                value.as_ptr(),
+            )
+        };
+        self.check(code, "mpv_set_property_string")
     }
 
     pub fn get_string(&self, name: &str) -> Result<Option<String>, PlayerError> {

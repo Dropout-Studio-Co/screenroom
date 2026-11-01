@@ -38,10 +38,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let capability = screenroom_player::capability();
     println!(
-        "libmpv: {} via {} ({:?} bridge)",
+        "libmpv: {} via {}",
         capability.api_version.as_deref().unwrap_or("-"),
-        capability.library_path.as_deref().unwrap_or("-"),
-        screenroom_player::render_bridge()
+        capability.library_path.as_deref().unwrap_or("-")
     );
     if !capability.available {
         println!("libmpv is unavailable: {}", capability.reason);
@@ -242,6 +241,7 @@ fn run_one(player: &Player, path: &Path, seconds: f64, dump_dir: Option<&Path>) 
     }
     let elapsed = delivery_started.elapsed();
     let delivered = seen.len().saturating_sub(1);
+    println!("  bridge:    {:?}", screenroom_player::render_bridge());
     println!(
         "  delivery:  {delivered} frames in {:.2?} ({:.1} fps), worst gap {worst_gap:.2?}",
         elapsed,

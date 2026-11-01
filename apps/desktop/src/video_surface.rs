@@ -42,6 +42,28 @@ pub struct VideoPrimitive {
     bounds: Rectangle,
 }
 
+pub fn surface_key(frame: &Frame) -> Option<usize> {
+    #[cfg(target_os = "macos")]
+    {
+        frame
+            .surface
+            .as_ref()
+            .map(|surface| surface.as_ptr() as usize)
+            .filter(|key| *key != 0)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = frame;
+        None
+    }
+}
+
+const MAX_IMPORTED_SURFACES: usize = 12;
+
+pub fn holds_a_gpu_surface(frame: &Frame) -> bool {
+    surface_key(frame).is_some()
+}
+
 impl Program<crate::app::Message> for VideoSurface {
     type State = ();
     type Primitive = VideoPrimitive;
@@ -81,7 +103,33 @@ impl Primitive for VideoPrimitive {
         );
         if pipeline.uploaded_generation == Some(frame.generation)
             && pipeline.texture_size == (frame.width, frame.height)
+            && pipeline.uploaded_surface == surface_key(frame)
         {
+            return;
+        }
+
+        #[cfg(target_os = "macos")]
+        if let Some(surface) = frame.surface.clone() {
+            if pipeline.imported_size != (frame.width, frame.height)
+                || pipeline.imported.len() >= MAX_IMPORTED_SURFACES
+            {
+                pipeline.imported.clear();
+                pipeline.imported_size = (frame.width, frame.height);
+            }
+            let key = surface.as_ptr() as usize;
+            if !pipeline.imported.contains_key(&key) {
+                let Some(imported) = import_surface(device, pipeline, &surface, frame) else {
+                    return;
+                };
+                pipeline.imported.insert(key, imported);
+            }
+            if let Some(imported) = pipeline.imported.get(&key) {
+                pipeline.bind_group = Some(imported.bind_group.clone());
+            }
+            crate::play_check::note_import();
+            pipeline.texture_size = (frame.width, frame.height);
+            pipeline.uploaded_generation = Some(frame.generation);
+            pipeline.uploaded_surface = Some(key);
             return;
         }
 
@@ -101,7 +149,7 @@ impl Primitive for VideoPrimitive {
                 view_formats: &[],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            pipeline.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            pipeline.cpu_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("screenroom-video-frame"),
                 layout: &pipeline.layout,
                 entries: &[
@@ -122,6 +170,7 @@ impl Primitive for VideoPrimitive {
             pipeline.texture = Some(texture);
             pipeline.texture_size = (frame.width, frame.height);
         }
+        pipeline.bind_cpu_group();
 
         if let Some(texture) = &pipeline.texture {
             crate::play_check::note_upload();
@@ -147,6 +196,7 @@ impl Primitive for VideoPrimitive {
         }
 
         pipeline.uploaded_generation = Some(frame.generation);
+        pipeline.uploaded_surface = None;
     }
 
     fn draw(&self, pipeline: &Self::Pipeline, render_pass: &mut wgpu::RenderPass<'_>) -> bool {
@@ -168,8 +218,157 @@ pub struct VideoPipeline {
     fit_buffer: wgpu::Buffer,
     bind_group: Option<wgpu::BindGroup>,
     texture: Option<wgpu::Texture>,
+    cpu_bind_group: Option<wgpu::BindGroup>,
     texture_size: (u32, u32),
     uploaded_generation: Option<u64>,
+    uploaded_surface: Option<usize>,
+    #[cfg(target_os = "macos")]
+    imported: std::collections::HashMap<usize, ImportedSurface>,
+    #[cfg(target_os = "macos")]
+    imported_size: (u32, u32),
+}
+
+#[cfg(target_os = "macos")]
+struct ImportedSurface {
+    texture: wgpu::Texture,
+    bind_group: wgpu::BindGroup,
+}
+
+#[cfg(target_os = "macos")]
+impl std::fmt::Debug for ImportedSurface {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImportedSurface")
+            .field("size", &(self.texture.width(), self.texture.height()))
+            .finish_non_exhaustive()
+    }
+}
+
+impl VideoPipeline {
+    fn bind_cpu_group(&mut self) {
+        self.bind_group = self.cpu_bind_group.clone();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn import_surface(
+    device: &wgpu::Device,
+    pipeline: &VideoPipeline,
+    surface: &screenroom_player::SurfaceFrame,
+    frame: &Frame,
+) -> Option<ImportedSurface> {
+    let texture = macos::texture_from_surface(device, surface, frame)?;
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("screenroom-video-surface-imported"),
+        layout: &pipeline.layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&pipeline.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: pipeline.fit_buffer.as_entire_binding(),
+            },
+        ],
+    });
+    Some(ImportedSurface {
+        texture,
+        bind_group,
+    })
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use super::Frame;
+    use metal::foreign_types::ForeignType;
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use screenroom_player::SurfaceFrame;
+
+    pub fn texture_from_surface(
+        device: &wgpu::Device,
+        surface: &SurfaceFrame,
+        frame: &Frame,
+    ) -> Option<wgpu::Texture> {
+        let width = frame.width;
+        let height = frame.height;
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        let hal_device = unsafe { device.as_hal::<wgpu::hal::api::Metal>() }?;
+        let device_pointer: *mut AnyObject = {
+            let guarded = hal_device.raw_device();
+            let metal_device = guarded.lock();
+            metal_device.as_ptr().cast::<AnyObject>()
+        };
+        if device_pointer.is_null() {
+            return None;
+        }
+
+        let descriptor = metal::TextureDescriptor::new();
+        descriptor.set_width(width as u64);
+        descriptor.set_height(height as u64);
+        descriptor.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm_sRGB);
+        descriptor.set_texture_type(metal::MTLTextureType::D2);
+        descriptor.set_usage(metal::MTLTextureUsage::ShaderRead);
+        descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
+
+        let descriptor_object: *mut AnyObject = descriptor.as_ptr().cast::<AnyObject>();
+        let surface_object: *mut AnyObject = surface.as_ptr().cast::<AnyObject>();
+
+        let raw: *mut AnyObject = unsafe {
+            msg_send![
+                device_pointer,
+                newTextureWithDescriptor: descriptor_object,
+                iosurface: surface_object,
+                plane: 0usize
+            ]
+        };
+        if raw.is_null() {
+            return None;
+        }
+        let texture = unsafe { metal::Texture::from_ptr(raw.cast()) };
+
+        let hal_texture = unsafe {
+            wgpu::hal::metal::Device::texture_from_raw(
+                texture,
+                wgpu::TextureFormat::Bgra8UnormSrgb,
+                metal::MTLTextureType::D2,
+                1,
+                1,
+                wgpu::hal::CopyExtent {
+                    width,
+                    height,
+                    depth: 1,
+                },
+            )
+        };
+
+        let description = wgpu::TextureDescriptor {
+            label: Some("screenroom-video-surface-imported"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        };
+
+        Some(unsafe {
+            device.create_texture_from_hal::<wgpu::hal::api::Metal>(hal_texture, &description)
+        })
+    }
 }
 
 impl std::fmt::Debug for VideoPipeline {
@@ -273,12 +472,22 @@ impl shader::Pipeline for VideoPipeline {
             fit_buffer,
             bind_group: None,
             texture: None,
+            cpu_bind_group: None,
             texture_size: (0, 0),
             uploaded_generation: None,
+            uploaded_surface: None,
+            #[cfg(target_os = "macos")]
+            imported: std::collections::HashMap::new(),
+            #[cfg(target_os = "macos")]
+            imported_size: (0, 0),
         }
     }
 
-    fn trim(&mut self) {}
+    fn trim(&mut self) {
+        #[cfg(target_os = "macos")]
+        self.imported.clear();
+        self.bind_group = self.cpu_bind_group.clone();
+    }
 }
 
 fn bytemuck_f32(values: &[f32; 4]) -> &[u8] {
@@ -440,16 +649,16 @@ mod tests {
 
     #[test]
     fn a_frame_from_the_player_is_accepted_by_the_surface() {
-        let frame = Frame {
-            width: 2,
-            height: 2,
-            stride: 8,
-            rgba: std::sync::Arc::new(vec![7; 16]),
-            offset: 0,
-            generation: 3,
-        };
+        let frame = Frame::cpu(2, 2, 8, std::sync::Arc::new(vec![7; 16]), 0, 3);
         assert!(frame.is_well_formed());
         let surface = VideoSurface::new(Some(frame));
         assert!(surface.frame.is_some());
+    }
+
+    #[test]
+    fn only_a_frame_carrying_a_surface_is_imported() {
+        let cpu = Frame::cpu(2, 2, 8, std::sync::Arc::new(vec![7; 16]), 0, 3);
+        assert!(!holds_a_gpu_surface(&cpu));
+        assert_eq!(surface_key(&cpu), None);
     }
 }

@@ -260,6 +260,8 @@ impl SoftwareRenderer {
             rgba,
             offset,
             generation: self.generation,
+            #[cfg(target_os = "macos")]
+            surface: None,
         }))
     }
 
