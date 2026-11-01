@@ -60,7 +60,7 @@ fn progress_survives_reopening_the_library() {
         let mut tracker = opened.tracker;
         assert!(
             tracker
-                .record(&library, 30_000, 120_000, false)
+                .record(&library, 30_000, 120_000, false, false)
                 .expect("checkpoint")
         );
         tracker.close(&library).expect("close");
@@ -83,7 +83,7 @@ fn a_finished_file_resumes_from_the_start() {
         .tracker;
     assert!(
         tracker
-            .record(&library, 120_000, 120_000, true)
+            .record(&library, 120_000, 120_000, true, false)
             .expect("checkpoint")
     );
     drop(library);
@@ -106,16 +106,54 @@ fn checkpoints_are_throttled_but_a_seek_is_not() {
         .expect("open")
         .tracker;
 
-    assert!(tracker.record(&library, 1_000, 60_000, false).unwrap());
+    assert!(
+        tracker
+            .record(&library, 1_000, 60_000, false, false)
+            .unwrap()
+    );
 
-    assert!(!tracker.record(&library, 1_500, 60_000, false).unwrap());
+    assert!(
+        !tracker
+            .record(&library, 1_500, 60_000, false, false)
+            .unwrap()
+    );
 
-    assert!(tracker.record(&library, 2_200, 60_000, false).unwrap());
+    assert!(
+        tracker
+            .record(&library, 2_200, 60_000, false, false)
+            .unwrap()
+    );
 
     tracker.seek(&library).expect("seek generation");
-    assert!(tracker.record(&library, 2_300, 60_000, false).unwrap());
+    assert!(
+        tracker
+            .record(&library, 2_300, 60_000, false, false)
+            .unwrap()
+    );
     tracker.close(&library).expect("close");
     assert_eq!(stored_position(&database, &file_id).0, 2_300);
+}
+
+#[test]
+fn stopping_a_viewing_stores_where_it_reached_even_inside_the_throttle() {
+    let directory = TempDir::new().expect("temp dir");
+    let (database, file_id) = seeded(&directory, "Film.2020.mkv");
+    let library = Library::open(&database).expect("library");
+    let mut tracker = PlaybackTracker::open(&library, &profile(&library), &file_id)
+        .expect("open")
+        .tracker;
+
+    assert!(tracker.record(&library, 0, 60_000, false, false).unwrap());
+    assert!(
+        !tracker.record(&library, 250, 60_000, false, false).unwrap(),
+        "a quarter of a second is inside the checkpoint interval"
+    );
+    assert!(
+        tracker.record(&library, 250, 60_000, false, true).unwrap(),
+        "stopping must store the place reached, not the last throttled one"
+    );
+    tracker.close(&library).expect("close");
+    assert_eq!(stored_position(&database, &file_id).0, 250);
 }
 
 #[test]
@@ -126,8 +164,8 @@ fn a_zero_duration_is_never_written() {
     let mut tracker = PlaybackTracker::open(&library, &profile(&library), &file_id)
         .expect("open")
         .tracker;
-    assert!(!tracker.record(&library, 5_000, 0, false).unwrap());
-    assert!(!tracker.record(&library, -10, 60_000, false).unwrap());
+    assert!(!tracker.record(&library, 5_000, 0, false, false).unwrap());
+    assert!(!tracker.record(&library, -10, 60_000, false, false).unwrap());
     tracker.close(&library).expect("close");
     assert_eq!(stored_position(&database, &file_id).0, 0);
 }
@@ -226,6 +264,7 @@ fn a_real_playback_session_resumes_after_the_library_is_reopened() {
             &library,
             snapshot.position_ms(),
             snapshot.duration_ms(),
+            false,
             false,
         )
         .expect("checkpoint");

@@ -1532,14 +1532,14 @@ fn step_20_the_mini_player_keeps_playing_while_you_browse_and_reopens_the_full_o
     assert!(app.active.is_none(), "and stops the file");
     assert!(app.frame.is_none(), "with no frame left behind");
     assert!(!app.snapshot.loaded);
+    let kept = app
+        .library
+        .item(&id, Some(&app.profile_id))
+        .expect("read")
+        .expect("kept");
     assert!(
-        app.library
-            .item(&id, Some(&app.profile_id))
-            .expect("read")
-            .expect("kept")
-            .position_ms
-            > 0,
-        "the place it reached was stored, not thrown away"
+        kept.position_ms > 0,
+        "the place it reached was stored, not thrown away: {kept:#?}"
     );
 }
 

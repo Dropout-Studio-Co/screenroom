@@ -219,6 +219,18 @@ impl MediaTrack {
 
 pub const NO_TRACK: i64 = 0;
 
+const TRACK_SETTLE_READS: u8 = 6;
+
+const TRACK_SETTLE_PASSES: u8 = 8;
+
+fn kind_slot(kind: TrackKind) -> usize {
+    match kind {
+        TrackKind::Video => 0,
+        TrackKind::Audio => 1,
+        TrackKind::Subtitle => 2,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum PlayerCommand {
     Load {
@@ -548,6 +560,9 @@ struct Runner {
     last_time_pos: Option<f64>,
     awaiting_position: bool,
     metadata_dirty: bool,
+    playback_started: bool,
+    suppressed: [bool; 3],
+    metadata_retries: u8,
     ticks: crate::FrameTicks,
 }
 
@@ -632,6 +647,9 @@ impl Runner {
             last_time_pos: None,
             awaiting_position: false,
             metadata_dirty: false,
+            playback_started: false,
+            suppressed: [false; 3],
+            metadata_retries: 0,
             ticks,
         })
     }
@@ -690,7 +708,7 @@ impl Runner {
             if had_frame {
                 self.present(shared);
             }
-            if !had_frame && self.metadata_dirty {
+            if !had_frame && self.metadata_dirty && self.playback_started {
                 self.refresh_metadata(shared);
             }
             let render_time = phase.elapsed();
@@ -757,6 +775,9 @@ impl Runner {
         self.last_time_pos = None;
         self.awaiting_position = false;
         self.metadata_dirty = false;
+        self.playback_started = false;
+        self.suppressed = [false; 3];
+        self.metadata_retries = 0;
         self.audio_pts = None;
         self.avsync = None;
         self.total_avsync_change = None;
@@ -906,6 +927,7 @@ impl Runner {
             self.fail("track_failed", error.to_string(), shared);
             return;
         }
+        self.suppressed[kind_slot(kind)] = id == NO_TRACK;
         self.tracks = read_tracks(&self.core);
         let tracks = self.tracks.clone();
         publish(shared, |snapshot| snapshot.tracks = tracks);
@@ -946,6 +968,9 @@ impl Runner {
         self.last_time_pos = None;
         self.awaiting_position = false;
         self.metadata_dirty = false;
+        self.playback_started = false;
+        self.suppressed = [false; 3];
+        self.metadata_retries = 0;
         publish(shared, |snapshot| {
             snapshot.load_id = self.load_id;
             snapshot.position_ready = false;
@@ -1006,6 +1031,9 @@ impl Runner {
                     }
                     self.seek_started = false;
                 }
+                self.playback_started = true;
+                self.metadata_retries = 0;
+                self.metadata_dirty = true;
                 self.publish_snapshot(shared);
             }
             event::VIDEO_RECONFIG if self.loaded => self.update_target(),
@@ -1168,8 +1196,14 @@ impl Runner {
     }
 
     fn refresh_metadata(&mut self, shared: &Arc<Mutex<PlayerSnapshot>>) {
-        self.metadata_dirty = false;
-        self.tracks = read_tracks(&self.core);
+        let tracks = self.read_settled_tracks();
+        let settled = tracks_settled(&tracks, &self.suppressed);
+        if !settled && self.metadata_retries < TRACK_SETTLE_PASSES {
+            self.metadata_retries += 1;
+        } else {
+            self.metadata_dirty = false;
+            self.tracks = tracks;
+        }
         if self.duration <= 0.0
             && let Ok(duration) = self.core.get_f64("duration")
             && duration.is_finite()
@@ -1181,6 +1215,17 @@ impl Runner {
             self.hardware_decoder = self.core.get_string("hwdec-current").ok().flatten();
         }
         self.publish_snapshot(shared);
+    }
+
+    fn read_settled_tracks(&self) -> Vec<MediaTrack> {
+        let mut tracks = read_tracks(&self.core);
+        for _ in 1..TRACK_SETTLE_READS {
+            if tracks_settled(&tracks, &self.suppressed) {
+                break;
+            }
+            tracks = read_tracks(&self.core);
+        }
+        tracks
     }
 
     fn update_target(&mut self) {
@@ -1344,6 +1389,17 @@ impl Runner {
             snapshot.hardware_decoder = hardware_decoder;
         });
     }
+}
+
+fn tracks_settled(tracks: &[MediaTrack], suppressed: &[bool; 3]) -> bool {
+    [TrackKind::Video, TrackKind::Audio]
+        .iter()
+        .enumerate()
+        .all(|(slot, kind)| {
+            let present: Vec<&MediaTrack> =
+                tracks.iter().filter(|track| track.kind == *kind).collect();
+            present.is_empty() || suppressed[slot] || present.iter().any(|track| track.selected)
+        })
 }
 
 fn read_tracks(core: &Mpv) -> Vec<MediaTrack> {

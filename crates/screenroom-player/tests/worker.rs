@@ -863,7 +863,7 @@ fn tracks_are_enumerated_and_can_be_switched() {
     );
     assert!(
         audio.iter().filter(|track| track.selected).count() == 1,
-        "exactly one audio track should be selected at load"
+        "exactly one audio track should be selected at load: {audio:#?}"
     );
 
     let wanted = audio

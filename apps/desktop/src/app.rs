@@ -1711,7 +1711,7 @@ impl App {
         }
     }
 
-    fn save(&mut self, active: &mut Active, snapshot: &PlayerSnapshot, ended: bool) {
+    fn save(&mut self, active: &mut Active, snapshot: &PlayerSnapshot, ended: bool, force: bool) {
         if !snapshot_is_current(active, snapshot) || snapshot.duration_ms() <= 0 {
             return;
         }
@@ -1720,6 +1720,7 @@ impl App {
             snapshot.position_ms(),
             snapshot.duration_ms(),
             ended,
+            force,
         ) {
             Ok(_) => {}
             Err(error) => self.report(&error),
@@ -1812,7 +1813,7 @@ impl App {
 
         if let Some(mut active) = self.active.take() {
             let snapshot = self.snapshot.clone();
-            self.save(&mut active, &snapshot, ended);
+            self.save(&mut active, &snapshot, ended, false);
             self.active = Some(active);
         }
 
@@ -1863,7 +1864,7 @@ impl App {
             .map(|player| player.snapshot())
             .unwrap_or_else(|| self.snapshot.clone());
         if let Some(mut active) = self.active.take() {
-            self.save(&mut active, &snapshot, snapshot.ended);
+            self.save(&mut active, &snapshot, snapshot.ended, true);
             if let Err(error) = active.tracker.close(&self.library) {
                 self.report(&error);
             }
@@ -1882,7 +1883,7 @@ impl App {
         if let Some(mut active) = self.active.take() {
             let snapshot = self.player.as_ref().map(|player| player.snapshot());
             if let Some(snapshot) = snapshot {
-                self.save(&mut active, &snapshot, snapshot.ended);
+                self.save(&mut active, &snapshot, snapshot.ended, true);
             }
             if let Err(error) = active.tracker.close(&self.library) {
                 self.report(&error);

@@ -61,13 +61,15 @@ impl PlaybackTracker {
         position_ms: i64,
         duration_ms: i64,
         ended: bool,
+        force: bool,
     ) -> Result<bool, CoreError> {
         if self.closed || duration_ms <= 0 || position_ms < 0 {
             return Ok(false);
         }
 
         let position_ms = position_ms.min(duration_ms);
-        let due = ended
+        let due = force
+            || ended
             || match self.last_saved_ms {
                 None => true,
                 Some(last) => (position_ms - last).abs() >= CHECKPOINT_INTERVAL_MS,
