@@ -135,27 +135,27 @@ fn black_clip(path: &Path, seconds: f64) -> bool {
 
 fn ink_in_rows_below(frame: &screenroom_player::Frame, fraction: f32) -> (usize, usize) {
     let start = (frame.height as f32 * fraction) as u32;
-    let stride = frame.stride as usize;
-    let bytes = frame.bytes();
-    let mut ink = 0;
-    let mut total = 0;
-    for row in start..frame.height {
-        for column in 0..frame.width {
-            let index = row as usize * stride + column as usize * 4;
-            if index + 2 >= bytes.len() {
-                continue;
-            }
-            let luma = (u16::from(bytes[index])
-                + u16::from(bytes[index + 1])
-                + u16::from(bytes[index + 2]))
-                / 3;
-            total += 1;
-            if luma > 40 {
-                ink += 1;
+    frame.with_pixels(|bytes, stride| {
+        let mut ink = 0;
+        let mut total = 0;
+        for row in start..frame.height {
+            for column in 0..frame.width {
+                let index = row as usize * stride + column as usize * 4;
+                if index + 2 >= bytes.len() {
+                    continue;
+                }
+                let luma = (u16::from(bytes[index])
+                    + u16::from(bytes[index + 1])
+                    + u16::from(bytes[index + 2]))
+                    / 3;
+                total += 1;
+                if luma > 40 {
+                    ink += 1;
+                }
             }
         }
-    }
-    (ink, total)
+        (ink, total)
+    })
 }
 
 fn multilingual_film(path: &Path, seconds: f64) -> bool {
@@ -259,6 +259,17 @@ fn anamorphic_film(path: &Path) -> bool {
         settle(path);
     }
     encoded
+}
+
+fn settle_jobs(app: &mut App) {
+    for _ in 0..600 {
+        app.drain_backup();
+        if app.backup_job.is_none() && app.restore_job.is_none() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("a backup or a restore did not finish within six seconds");
 }
 
 fn fresh_app() -> App {
@@ -1064,6 +1075,7 @@ fn step_13_a_restore_undoes_a_change_and_names_the_safety_copy() {
         backup.to_string_lossy().to_string(),
     ));
     let _ = app.update(Message::BackupNow);
+    settle_jobs(&mut app);
     assert!(
         app.status
             .as_deref()
@@ -1094,6 +1106,7 @@ fn step_13_a_restore_undoes_a_change_and_names_the_safety_copy() {
     );
     let _ = app.update(Message::RestoreNow);
 
+    settle_jobs(&mut app);
     let status = app.status.clone().unwrap_or_default();
     assert!(
         status.starts_with("Restored"),

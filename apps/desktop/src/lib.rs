@@ -1,5 +1,8 @@
 pub mod app;
 pub mod artwork;
+pub mod backup_job;
+pub mod cast_session;
+pub mod cast_stream;
 pub mod casting;
 pub mod conversion;
 pub mod design;

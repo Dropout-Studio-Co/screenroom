@@ -58,6 +58,10 @@ const SUGGESTIONS: i64 = 8;
 
 const QUIT_ROUTING_BUDGET: u8 = 40;
 
+const MODE_SETTLE: Duration = Duration::from_millis(1_500);
+
+const TERMINATE_CHECK_DELAY: Duration = Duration::from_millis(1_800);
+
 fn hides_its_window() -> bool {
     crate::play_check::requests_hidden_window()
 }
@@ -464,6 +468,9 @@ pub struct App {
 
     restore_path: String,
     armed_restore: Option<String>,
+    backup_job: Option<crate::backup_job::BackupJob>,
+    restore_job: Option<crate::backup_job::RestoreJob>,
+    queued_backup: Option<PathBuf>,
 
     conversion_folder: String,
     conversions: Vec<ConversionJob>,
@@ -497,6 +504,12 @@ pub struct App {
     quit_routing: crate::quit::QuitRouting,
 
     quit_check: Option<PathBuf>,
+
+    mode_change: Option<(iced::window::Mode, std::time::Instant)>,
+
+    terminate_check: Option<PathBuf>,
+    terminate_routing: crate::quit::TerminateRouting,
+    terminate_deadline: Option<std::time::Instant>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -722,6 +735,10 @@ pub enum Message {
 
     Keyboard(keyboard::Event),
 
+    RequestTerminate,
+
+    CancelBackup,
+
     Close,
 }
 
@@ -815,6 +832,12 @@ impl App {
         let (mut app, task) = Self::launch();
         app.quit_routing_budget = QUIT_ROUTING_BUDGET;
         app.quit_check = crate::quit::check_path();
+        app.terminate_check = crate::quit::terminate_check_path();
+        app.terminate_routing = crate::quit::install_terminate_routing();
+        app.terminate_deadline = app
+            .terminate_check
+            .as_ref()
+            .map(|_| std::time::Instant::now() + TERMINATE_CHECK_DELAY);
         app.background_work = true;
 
         app.ensure_artwork();
@@ -924,6 +947,9 @@ impl App {
             bookmark_access: String::new(),
             restore_path: String::new(),
             armed_restore: None,
+            backup_job: None,
+            restore_job: None,
+            queued_backup: None,
             conversion_folder,
             conversions: Vec::new(),
             conversion_runner: None,
@@ -947,6 +973,10 @@ impl App {
             quit_routing_budget: 0,
             quit_routing: crate::quit::QuitRouting::Unsupported,
             quit_check: None,
+            mode_change: None,
+            terminate_check: None,
+            terminate_routing: crate::quit::TerminateRouting::Unsupported,
+            terminate_deadline: None,
         };
         app.sync_language_inputs();
         app.reload();
@@ -963,6 +993,9 @@ impl App {
     }
 
     fn reload(&mut self) {
+        if self.restore_job.is_some() {
+            return;
+        }
         self.reload_home();
         self.reload_browse();
         self.reload_administration();
@@ -1791,7 +1824,30 @@ impl App {
     }
 
     fn poll(&mut self) {
+        if self
+            .mode_change
+            .is_some_and(|(_, since)| since.elapsed() >= MODE_SETTLE)
+        {
+            self.mode_change = None;
+        }
+        if self
+            .terminate_deadline
+            .is_some_and(|at| std::time::Instant::now() >= at)
+        {
+            self.terminate_deadline = None;
+            crate::quit::request_termination();
+        }
+
+        self.drain_backup();
+        if self.restore_job.is_some() {
+            return;
+        }
         self.drain_scan();
+        if self.scan_token.is_none()
+            && let Some(destination) = self.queued_backup.take()
+        {
+            self.start_backup(destination);
+        }
         self.drain_durations();
         self.drain_conversion();
         self.drain_preview();
@@ -2356,17 +2412,110 @@ impl App {
             self.error = Some("Choose where the backup should be written.".to_string());
             return;
         }
-        match self.library.backup_to(PathBuf::from(&raw)) {
-            Ok(report) => {
-                self.error = None;
+        if self.backup_job.is_some() || self.restore_job.is_some() {
+            self.status = Some(
+                "A backup or a restore is already running. Wait for it to finish.".to_string(),
+            );
+            return;
+        }
+        let destination = PathBuf::from(&raw);
+        if self.scan_token.is_some() {
+            self.queued_backup = Some(destination);
+            self.status = Some("The backup will start when this scan finishes.".to_string());
+            return;
+        }
+        self.start_backup(destination);
+    }
+
+    fn start_backup(&mut self, destination: PathBuf) {
+        self.error = None;
+        self.status = Some(format!(
+            "Backing up to {} — the window stays usable while it writes.",
+            destination.display()
+        ));
+        self.backup_job = Some(crate::backup_job::BackupJob::start(
+            Arc::clone(&self.library),
+            destination,
+        ));
+    }
+
+    fn cancel_backup(&mut self) {
+        let Some(job) = &self.backup_job else {
+            return;
+        };
+        job.cancel();
+        self.status = Some("Stopping the backup…".to_string());
+    }
+
+    fn drain_backup(&mut self) {
+        let mut finished = None;
+        if let Some(job) = &mut self.backup_job {
+            if let Some(written) = job.take_progress() {
                 self.status = Some(format!(
-                    "Backed up {} KB — {}.",
-                    report.bytes / 1024,
-                    report.info
+                    "Backing up — {} written so far.",
+                    crate::backup_job::megabytes(written)
                 ));
             }
-            Err(error) => self.report(&error),
+            if let Some(outcome) = job.take_outcome() {
+                finished = Some((job.destination().to_path_buf(), outcome));
+            }
         }
+        if let Some((destination, outcome)) = finished {
+            self.backup_job = None;
+            match outcome {
+                Ok(report) => {
+                    self.error = None;
+                    self.status = Some(format!(
+                        "Backed up {} KB to {} — {}.",
+                        report.bytes / 1024,
+                        destination.display(),
+                        report.info
+                    ));
+                }
+                Err(error) => self.report(&error),
+            }
+        }
+
+        let mut restored = None;
+        if let Some(job) = &mut self.restore_job
+            && let Some(outcome) = job.take_outcome()
+        {
+            restored = Some(outcome);
+        }
+        if let Some(outcome) = restored {
+            self.restore_job = None;
+            match outcome {
+                Ok(report) => self.after_restore(report),
+                Err(error) => self.report(&error),
+            }
+        }
+    }
+
+    fn after_restore(&mut self, report: screenroom_core::RestoreReport) {
+        self.preferences = self.library.preferences().unwrap_or_default();
+        self.sync_language_inputs();
+
+        if !self
+            .library
+            .profiles()
+            .map(|profiles| profiles.iter().any(|profile| profile.id == self.profile_id))
+            .unwrap_or(false)
+        {
+            self.profile_id = opening_profile(&self.library, &self.preferences);
+        }
+
+        self.artwork.clear();
+        self.artwork_aspect.clear();
+        self.artwork_queued.clear();
+        self.artwork_failed.clear();
+        self.artwork_failures = 0;
+        self.detail = None;
+        self.reload();
+        let safety = report
+            .previous_saved_to
+            .map(|path| format!(" The previous library is at {path}."))
+            .unwrap_or_default();
+        self.status = Some(format!("Restored {} entries.{safety}", report.info.works));
     }
 
     fn inspect_restore(&mut self) {
@@ -2403,35 +2552,21 @@ impl App {
             return;
         }
         self.armed_restore = None;
-        match self.library.restore_from(PathBuf::from(&raw)) {
-            Ok(report) => {
-                self.preferences = self.library.preferences().unwrap_or_default();
-                self.sync_language_inputs();
-
-                if !self
-                    .library
-                    .profiles()
-                    .map(|profiles| profiles.iter().any(|profile| profile.id == self.profile_id))
-                    .unwrap_or(false)
-                {
-                    self.profile_id = opening_profile(&self.library, &self.preferences);
-                }
-
-                self.artwork.clear();
-                self.artwork_aspect.clear();
-                self.artwork_queued.clear();
-                self.artwork_failed.clear();
-                self.artwork_failures = 0;
-                self.detail = None;
-                self.reload();
-                let safety = report
-                    .previous_saved_to
-                    .map(|path| format!(" The previous library is at {path}."))
-                    .unwrap_or_default();
-                self.status = Some(format!("Restored {} entries.{safety}", report.info.works));
-            }
-            Err(error) => self.report(&error),
+        if self.backup_job.is_some() || self.restore_job.is_some() {
+            self.status = Some(
+                "A backup or a restore is already running. Wait for it to finish.".to_string(),
+            );
+            return;
         }
+        self.error = None;
+        self.status = Some(
+            "Restoring — the window keeps drawing, and reading the library waits until it ends."
+                .to_string(),
+        );
+        self.restore_job = Some(crate::backup_job::RestoreJob::start(
+            Arc::clone(&self.library),
+            PathBuf::from(&raw),
+        ));
     }
 
     fn stop_preview(&mut self) {
@@ -3343,6 +3478,7 @@ impl App {
             Message::RemoveSubtitle(id) => self.remove_subtitle(&id),
             Message::LookForReceivers => self.look_for_receivers(),
             Message::BackupNow => self.backup_now(),
+            Message::CancelBackup => self.cancel_backup(),
             Message::RestorePathChanged(value) => {
                 self.restore_path = value;
 
@@ -3381,6 +3517,7 @@ impl App {
             Message::PlayNextNow => self.play_up_next(),
             Message::ModeChanged(mode) => {
                 self.fullscreen = mode == iced::window::Mode::Fullscreen;
+                self.mode_change = None;
             }
             Message::CancelNext => {
                 if self.up_next.take().is_some() {
@@ -3407,8 +3544,16 @@ impl App {
                 }
             }
             Message::Keyboard(event) => return self.handle_key(event),
+            Message::RequestTerminate => {
+                crate::quit::request_termination();
+            }
             Message::Close => {
+                let reached = self
+                    .player
+                    .as_ref()
+                    .map(|player| player.snapshot().position);
                 self.stop_playback();
+                self.record_terminate_check(reached);
                 return iced::exit();
             }
         }
@@ -3557,8 +3702,10 @@ impl App {
                         return Task::none();
                     }
 
-                    if self.fullscreen {
-                        return self.toggle_fullscreen();
+                    if self.fullscreen
+                        || self.pending_mode() == Some(iced::window::Mode::Fullscreen)
+                    {
+                        return self.leave_fullscreen();
                     }
                     self.leave_player();
                 }
@@ -3610,15 +3757,53 @@ impl App {
         Task::none()
     }
 
-    fn toggle_fullscreen(&mut self) -> Task<Message> {
-        self.fullscreen = !self.fullscreen;
-        let mode = if self.fullscreen {
-            iced::window::Mode::Fullscreen
-        } else {
-            iced::window::Mode::Windowed
-        };
+    fn pending_mode(&self) -> Option<iced::window::Mode> {
+        self.mode_change
+            .filter(|(_, since)| since.elapsed() < MODE_SETTLE)
+            .map(|(mode, _)| mode)
+    }
+
+    fn request_mode(&mut self, mode: iced::window::Mode) -> Task<Message> {
+        self.fullscreen = mode == iced::window::Mode::Fullscreen;
+        self.mode_change = Some((mode, std::time::Instant::now()));
 
         iced::window::latest().and_then(move |id| iced::window::set_mode(id, mode))
+    }
+
+    fn toggle_fullscreen(&mut self) -> Task<Message> {
+        if self.pending_mode().is_some() {
+            return Task::none();
+        }
+        let mode = if self.fullscreen {
+            iced::window::Mode::Windowed
+        } else {
+            iced::window::Mode::Fullscreen
+        };
+        self.request_mode(mode)
+    }
+
+    fn leave_fullscreen(&mut self) -> Task<Message> {
+        if self.pending_mode() == Some(iced::window::Mode::Windowed) {
+            return Task::none();
+        }
+        self.request_mode(iced::window::Mode::Windowed)
+    }
+
+    fn record_terminate_check(&self, reached_seconds: Option<f64>) {
+        let Some(path) = &self.terminate_check else {
+            return;
+        };
+        let reached = match reached_seconds {
+            Some(seconds) if seconds.is_finite() && seconds > 0.0 => format!("{seconds:.3}"),
+            _ => "-".to_string(),
+        };
+        let text = format!("closed {} {reached}\n", self.terminate_routing);
+        if let Err(error) = std::fs::write(path, text) {
+            eprintln!(
+                "screenroom: could not write the terminate check to {}: {error}",
+                path.display()
+            );
+        }
     }
 
     fn seek_step(&mut self, delta: f64) {
@@ -4884,6 +5069,12 @@ impl App {
         let higher = (self.preferences.subtitle_position_percent + 5)
             .min(Preferences::SUBTITLE_POSITION_MAX_PERCENT);
         let lower = self.preferences.subtitle_position_percent.saturating_sub(5);
+        if self.backup_job.is_some() {
+            actions.push((
+                "Cancel the backup that is running".to_string(),
+                Message::CancelBackup,
+            ));
+        }
         for profile in &self.profiles {
             if profile.id != self.profile_id {
                 actions.push((
@@ -5892,7 +6083,120 @@ mod tests {
         assert_eq!(app.screen, Screen::Player, "the film is still open");
 
         let _ = app.handle_key(press(Key::Named(Named::Escape)));
-        assert_ne!(app.screen, Screen::Player);
+        assert_ne!(
+            app.screen,
+            Screen::Player,
+            "a second Escape, now that the film is out of fullscreen, leaves it"
+        );
+    }
+
+    #[test]
+    fn one_escape_cancels_a_fullscreen_entry_that_has_not_landed_yet() {
+        use iced::keyboard::key::Named;
+        use iced::keyboard::{Event, Key, Modifiers};
+
+        let (mut app, _directory) = app_with(2);
+        app.screen = Screen::Player;
+        let press = |key: Key| Event::KeyPressed {
+            key,
+            modified_key: Key::Unidentified,
+            physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::Escape),
+            location: iced::keyboard::Location::Standard,
+            modifiers: Modifiers::empty(),
+            text: None,
+            repeat: false,
+        };
+
+        let _ = app.update(Message::ToggleFullscreen);
+        assert!(app.fullscreen);
+        assert_eq!(app.pending_mode(), Some(iced::window::Mode::Fullscreen));
+
+        let _ = app.handle_key(press(Key::Named(Named::Escape)));
+        assert!(
+            !app.fullscreen,
+            "one Escape cancels the entry instead of dismissing the film"
+        );
+        assert_eq!(app.screen, Screen::Player, "and the film is untouched");
+        assert_eq!(app.pending_mode(), Some(iced::window::Mode::Windowed));
+    }
+
+    #[test]
+    fn a_second_fullscreen_request_while_one_is_in_flight_is_ignored() {
+        let (mut app, _directory) = app_with(2);
+        app.screen = Screen::Player;
+
+        let _ = app.update(Message::ToggleFullscreen);
+        assert!(
+            app.fullscreen,
+            "the flag follows the mode that was asked for"
+        );
+        assert_eq!(app.pending_mode(), Some(iced::window::Mode::Fullscreen));
+
+        let _ = app.update(Message::ToggleFullscreen);
+        assert!(
+            app.fullscreen,
+            "a second f must not flip back before the window has answered the first"
+        );
+
+        let _ = app.update(Message::ModeChanged(iced::window::Mode::Fullscreen));
+        assert_eq!(
+            app.pending_mode(),
+            None,
+            "the window settling clears the in-flight request"
+        );
+
+        let _ = app.update(Message::ToggleFullscreen);
+        assert!(!app.fullscreen, "after the window settles, f toggles again");
+    }
+
+    #[test]
+    fn a_late_fullscreen_report_does_not_dismiss_a_film_that_was_being_left() {
+        use iced::keyboard::key::Named;
+        use iced::keyboard::{Event, Key, Modifiers};
+
+        let (mut app, _directory) = app_with(2);
+        app.screen = Screen::Player;
+        let press = |key: Key| Event::KeyPressed {
+            key,
+            modified_key: Key::Unidentified,
+            physical_key: iced::keyboard::key::Physical::Code(iced::keyboard::key::Code::Escape),
+            location: iced::keyboard::Location::Standard,
+            modifiers: Modifiers::empty(),
+            text: None,
+            repeat: false,
+        };
+
+        let _ = app.update(Message::ToggleFullscreen);
+        let _ = app.handle_key(press(Key::Named(Named::Escape)));
+
+        let _ = app.update(Message::ModeChanged(iced::window::Mode::Fullscreen));
+        assert_eq!(
+            app.screen,
+            Screen::Player,
+            "a fullscreen report that lands after the exit began must not dismiss the film"
+        );
+
+        let _ = app.update(Message::ModeChanged(iced::window::Mode::Windowed));
+        assert!(!app.fullscreen);
+        assert_eq!(app.pending_mode(), None);
+        assert_eq!(app.screen, Screen::Player, "and the film is still open");
+    }
+
+    #[test]
+    fn closing_the_window_records_that_the_terminate_path_ran() {
+        let (mut app, directory) = app_with(2);
+        let report = directory.path().join("terminate.txt");
+        app.terminate_check = Some(report.clone());
+        app.terminate_routing = crate::quit::TerminateRouting::Routed;
+        app.screen = Screen::Player;
+
+        let _ = app.update(Message::Close);
+
+        let text = std::fs::read_to_string(&report).expect("the close path wrote its receipt");
+        assert!(
+            text.starts_with("closed routed"),
+            "the receipt names the routing that was installed: {text:?}"
+        );
     }
 
     #[test]
@@ -6030,6 +6334,17 @@ mod tests {
         app.screen = Screen::Browse;
         app.reload_browse();
         (app, directory)
+    }
+
+    fn settle_jobs(app: &mut App) {
+        for _ in 0..600 {
+            app.drain_backup();
+            if app.backup_job.is_none() && app.restore_job.is_none() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("a backup or a restore did not finish within six seconds");
     }
 
     #[test]
@@ -6824,6 +7139,7 @@ mod tests {
         let backup = directory.path().join("backup.db");
         app.backup_path = backup.to_string_lossy().to_string();
         let _ = app.update(Message::BackupNow);
+        settle_jobs(&mut app);
         assert!(backup.is_file(), "the backup is written: {:?}", app.error);
         assert!(app.error.is_none(), "unexpected error: {:?}", app.error);
 
@@ -6855,6 +7171,7 @@ mod tests {
 
         app.restore_path = backup.to_string_lossy().to_string();
         let _ = app.update(Message::RestoreNow);
+        settle_jobs(&mut app);
         assert!(app.armed_restore.is_some(), "restore asks before replacing");
         assert_eq!(
             app.library
@@ -6866,6 +7183,7 @@ mod tests {
         );
 
         let _ = app.update(Message::RestoreNow);
+        settle_jobs(&mut app);
         assert!(app.armed_restore.is_none());
         assert!(app.error.is_none(), "unexpected error: {:?}", app.error);
         assert_eq!(
@@ -6897,6 +7215,7 @@ mod tests {
         app.restore_path = backup.to_string_lossy().to_string();
         let _ = app.update(Message::RestoreNow);
         let _ = app.update(Message::RestoreNow);
+        settle_jobs(&mut app);
         assert!(app.error.is_none(), "unexpected error: {:?}", app.error);
         assert_eq!(app.preferences.subtitle_language.as_deref(), Some("bn"));
         assert_eq!(
@@ -7389,6 +7708,7 @@ mod tests {
 
         let _ = app.update(Message::RestoreNow);
         let _ = app.update(Message::RestoreNow);
+        settle_jobs(&mut app);
 
         let error = app
             .error
