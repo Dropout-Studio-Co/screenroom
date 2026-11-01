@@ -5,7 +5,7 @@ use rusqlite::OptionalExtension;
 use super::{Library, now_ms};
 use crate::error::{CoreError, Result};
 
-pub const MAX_ARTWORK_BYTES: usize = 768 * 1024;
+pub const MAX_ARTWORK_BYTES: usize = 2 * 1024 * 1024;
 
 pub const MAX_ARTWORK_SIDE: i64 = 4096;
 
