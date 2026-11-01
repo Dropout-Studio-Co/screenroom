@@ -4610,90 +4610,27 @@ impl App {
                 .height(Length::Fill)
                 .into();
         }
-        let mut shell = column![self.header()];
+
+        let mut content = body;
         if let Some(strip) = self.scan_strip() {
-            shell = shell.push(strip);
+            content = column![strip, content]
+                .spacing(design::tokens().spacing.content_pad)
+                .width(Length::Fill)
+                .into();
         }
         if self.mini && self.screen != Screen::Player {
-            shell = shell.push(self.mini_view());
-        }
-        shell = shell.push(body).push(self.footer());
-        container(shell.spacing(design::tokens().spacing.content_pad))
-            .style(|_theme| design::page_style())
-            .padding(design::tokens().spacing.shell_pad)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-    }
-
-    fn header(&self) -> Element<'_, Message> {
-        let tokens = design::tokens();
-        let capability = if self.capability.available {
-            format!(
-                "libmpv {}",
-                self.capability.api_version.as_deref().unwrap_or("?")
-            )
-        } else {
-            format!("no playback — {}", self.capability.reason)
-        };
-
-        let mut nav = row![
-            button(text("Home").size(tokens.type_scale.label))
-                .on_press(Message::GoHome)
-                .style(design::quiet_style(self.screen == Screen::Home))
-                .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            button(text("Library").size(tokens.type_scale.label))
-                .on_press(Message::GoBrowse)
-                .style(design::quiet_style(self.screen == Screen::Browse))
-                .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            button(text("Settings").size(tokens.type_scale.label))
-                .on_press(Message::GoSettings)
-                .style(design::quiet_style(self.screen == Screen::Settings))
-                .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-        ]
-        .spacing(tokens.spacing.field_x)
-        .align_y(Alignment::Center);
-
-        let label = self.screen_label();
-        if !matches!(self.screen, Screen::Home | Screen::Settings) {
-            nav = nav.push(
-                text(label)
-                    .size(tokens.type_scale.caption)
-                    .color(tokens.palette.ink_muted),
-            );
+            content = column![content, self.mini_view()]
+                .spacing(design::tokens().spacing.content_pad)
+                .width(Length::Fill)
+                .into();
         }
 
-        let mut facts: iced::widget::Row<'_, Message> = row![].spacing(tokens.spacing.field_x);
-        if !self.capability.available {
-            facts = facts.push(
-                text(capability)
-                    .size(tokens.type_scale.micro)
-                    .color(tokens.palette.destructive),
-            );
-        }
-
-        container(
-            row![
-                text("Screenroom").size(tokens.type_scale.subtitle),
-                nav,
-                Space::new().width(Length::Fill),
-                button(text("Refresh").size(tokens.type_scale.caption))
-                    .on_press(Message::Refresh)
-                    .style(design::quiet_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                button(text("Close").size(tokens.type_scale.caption))
-                    .on_press(Message::Close)
-                    .style(design::quiet_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                facts,
-            ]
-            .spacing(tokens.spacing.field_x)
-            .align_y(Alignment::Center),
+        crate::ui::shell::frame(
+            content,
+            Some(self.screen),
+            self.status.as_deref(),
+            self.error.as_deref(),
         )
-        .style(|_theme| design::container_style(Level::Panel, false))
-        .padding(tokens.spacing.content_pad)
-        .width(Length::Fill)
-        .into()
     }
 
     fn screen_label(&self) -> String {
@@ -4709,41 +4646,6 @@ impl App {
             Screen::Player => "Player".to_string(),
             Screen::Settings => "Settings".to_string(),
         }
-    }
-
-    fn footer(&self) -> Element<'_, Message> {
-        let tokens = design::tokens();
-        let line = if let Some(error) = &self.error {
-            text(error.clone())
-                .size(tokens.type_scale.caption)
-                .color(tokens.palette.destructive)
-        } else if let Some(status) = &self.status {
-            text(status.clone()).size(tokens.type_scale.caption)
-        } else {
-            text("").size(tokens.type_scale.caption)
-        };
-        let hint = match self.screen {
-            Screen::Player => {
-                "Space play/pause · ←/→ seek 10s · m mute · f fullscreen · s skip segment · \
-                 i intro mark · c credits mark · Esc back"
-            }
-            Screen::Detail => "Enter play · f favourite · w watchlist · m watched · Esc back",
-            Screen::Settings => "Esc back · ⌘1 Home · ⌘2 Library",
-            _ => "Arrows move · Enter opens · ⌘1 Home · ⌘2 Library · ⌘3 Settings · Esc back",
-        };
-        container(
-            row![
-                line,
-                Space::new().width(Length::Fill),
-                text(hint)
-                    .size(tokens.type_scale.micro)
-                    .color(tokens.palette.ink_muted),
-            ]
-            .spacing(tokens.spacing.field_x)
-            .align_y(Alignment::Center),
-        )
-        .width(Length::Fill)
-        .into()
     }
 
     fn home_view(&self) -> Element<'_, Message> {
