@@ -37,18 +37,29 @@ guard let process = arguments.first else {
     fail("usage: capture-window <process-name> --list", code: 2)
 }
 
-let description =
-    (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
-        as? [[String: Any]]) ?? []
+func windows(onScreenOnly: Bool) -> [[String: Any]] {
+    let options: CGWindowListOption = onScreenOnly
+        ? [.optionOnScreenOnly, .excludeDesktopElements]
+        : [.optionAll, .excludeDesktopElements]
+    return (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
+}
+
+let description = windows(onScreenOnly: true)
 
 // Layer 0 excludes menus, tooltips and other helper windows that share an owner.
-let candidates =
-    description
-    .filter { window in
-        (window[kCGWindowOwnerName as String] as? String) == process
-            && ((window[kCGWindowLayer as String] as? Int) ?? 0) == 0
-    }
-    .sorted { area($0) > area($1) }
+func owned(_ list: [[String: Any]]) -> [[String: Any]] {
+    list
+        .filter { window in
+            (window[kCGWindowOwnerName as String] as? String) == process
+                && ((window[kCGWindowLayer as String] as? Int) ?? 0) == 0
+        }
+        .sorted { area($0) > area($1) }
+}
+
+var candidates = owned(description)
+if candidates.isEmpty {
+    candidates = owned(windows(onScreenOnly: false))
+}
 
 for window in candidates {
     let number = window[kCGWindowNumber as String] as? Int ?? 0

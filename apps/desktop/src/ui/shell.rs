@@ -5,8 +5,8 @@ use crate::ui::theme::{self, Gap};
 use iced::widget::canvas::{self, Canvas, Program};
 use iced::widget::{Space, button, column, container, row, stack, text};
 use iced::{
-    Alignment, Background, Border, Element, Length, Padding, Point, Rectangle, Renderer, Shadow,
-    Theme, mouse,
+    Alignment, Background, Border, Color, Element, Length, Padding, Point, Rectangle, Renderer,
+    Shadow, Theme, mouse,
 };
 
 pub const BAR_HEIGHT: f32 = 76.0;
@@ -180,12 +180,18 @@ pub fn frame<'a>(
 }
 
 fn bar_style(hero: bool) -> container::Style {
+    let background = if hero {
+        Some(Background::Gradient(iced::Gradient::Linear(
+            iced::gradient::Linear::new(iced::Radians(std::f32::consts::FRAC_PI_2))
+                .add_stop(0.0, Color::from_rgba(0.039, 0.039, 0.039, 0.94))
+                .add_stop(0.5, Color::from_rgba(0.039, 0.039, 0.039, 0.66))
+                .add_stop(1.0, Color::from_rgba(0.039, 0.039, 0.039, 0.0)),
+        )))
+    } else {
+        Some(Background::Color(theme::ground()))
+    };
     container::Style {
-        background: if hero {
-            None
-        } else {
-            Some(Background::Color(theme::ground()))
-        },
+        background,
         text_color: Some(theme::ink()),
         ..container::Style::default()
     }
@@ -272,3 +278,4 @@ mod tests {
         assert!(shell::status_bar(None, Some("backup_failed: disk full").into()).is_some());
     }
 }
+
