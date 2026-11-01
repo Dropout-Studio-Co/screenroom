@@ -81,14 +81,20 @@ pub fn run() -> iced::Result {
         ..Default::default()
     };
 
-    iced::application(App::new, App::update, App::view)
+    let mut application = iced::application(App::new, App::update, App::view)
         .title("Screenroom")
         .theme(App::theme)
         .subscription(App::subscription)
         .window(window)
         .window_size((1280.0, 800.0))
         .exit_on_close_request(false)
-        .run()
+        .default_font(crate::ui::theme::regular());
+
+    for font in crate::ui::theme::font_data() {
+        application = application.font(font);
+    }
+
+    application.run()
 }
 
 fn library_path() -> Option<PathBuf> {

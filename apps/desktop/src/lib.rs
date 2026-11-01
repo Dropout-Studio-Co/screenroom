@@ -14,4 +14,5 @@ pub mod playback;
 pub mod preview;
 pub mod probe;
 pub mod quit;
+pub mod ui;
 pub mod video_surface;

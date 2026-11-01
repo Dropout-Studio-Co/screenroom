@@ -11,7 +11,7 @@ repository.workspace = true
 screenroom-core = { path = "../../crates/screenroom-core" }
 screenroom-player = { path = "../../crates/screenroom-player" }
 
-iced = { version = "0.14", features = ["wgpu", "image"] }
+iced = { version = "0.14", features = ["wgpu", "image", "canvas"] }
 
 wgpu = "27"
 
