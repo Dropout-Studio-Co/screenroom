@@ -31,11 +31,6 @@ pub struct StoredSubtitle {
 
     pub created_ms: i64,
 }
-
-pub fn language_label(body: &str, filename: &str) -> String {
-    let code = suggestion(body, filename);
-    describe(&code).to_string()
-}
 fn suggestion(body: &str, filename: &str) -> String {
     let name = filename.rsplit('/').next().unwrap_or(filename);
     let stem = name.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(name);

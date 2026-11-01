@@ -1595,3 +1595,38 @@ fn step_21_a_subtitle_is_kept_and_handed_to_the_player_without_touching_the_orig
     );
     let _ = app.update(Message::BackFromPlayer);
 }
+
+#[test]
+fn step_22_receiver_discovery_is_your_choice_and_never_claims_that_casting_works() {
+    let mut app = fresh_app();
+    assert!(app.receivers.is_empty());
+    assert!(
+        app.casting_note()
+            .contains("only when you press the button"),
+        "nothing is probed behind the owner's back: {}",
+        app.casting_note()
+    );
+
+    let response = "HTTP/1.1 200 OK\r\nST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n\
+                    USN: uuid:2222::urn:schemas-upnp-org:device:MediaRenderer:1\r\n\
+                    LOCATION: http://192.168.1.30:9197/dmr\r\n\
+                    SERVER: Linux/4.0 UPnP/1.0 LivingRoomTV/1.0\r\n\r\n";
+    let found =
+        crate::casting::parse_response(response, "192.168.1.30:1900".parse().expect("address"))
+            .expect("a receiver");
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    app.cast_search = Some(receiver);
+    assert!(app.casting_note().contains("Looking for cast receivers"));
+    sender.send(Ok(vec![found])).expect("send");
+    let _ = app.update(Message::Tick);
+
+    assert_eq!(app.receivers.len(), 1, "the answer was not shown");
+    assert!(app.cast_search.is_none(), "the probe is finished");
+    assert!(app.cast_searched);
+    let note = app.casting_note();
+    assert!(note.contains("discovery only"), "got {note}");
+    assert!(note.contains("no stream has been sent"), "got {note}");
+    assert_eq!(app.receivers[0].kind, "DLNA MediaRenderer");
+    assert!(app.error.is_none(), "{:?}", app.error);
+}

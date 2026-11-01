@@ -419,6 +419,10 @@ pub struct App {
     markers: Vec<SegmentMarker>,
     subtitles: Vec<screenroom_core::StoredSubtitle>,
 
+    receivers: Vec<crate::casting::Receiver>,
+    cast_search: Option<std::sync::mpsc::Receiver<Result<Vec<crate::casting::Receiver>, String>>>,
+    cast_searched: bool,
+
     preview: Option<Preview>,
     preview_frame: Option<Frame>,
     preview_shown: Option<String>,
@@ -600,6 +604,8 @@ pub enum Message {
     UseSubtitle(String),
 
     RemoveSubtitle(String),
+
+    LookForReceivers,
 
     CancelScan,
 
@@ -855,6 +861,9 @@ impl App {
             mini: false,
             markers: Vec::new(),
             subtitles: Vec::new(),
+            receivers: Vec::new(),
+            cast_search: None,
+            cast_searched: false,
             preview: None,
             preview_frame: None,
             preview_shown: None,
@@ -1457,6 +1466,57 @@ impl App {
         Task::none()
     }
 
+    fn casting_note(&self) -> String {
+        if self.cast_search.is_some() {
+            return "Looking for cast receivers on this network…".to_string();
+        }
+        if !self.cast_searched {
+            return "Nothing has been looked for. Discovery runs only when you press the button, 
+                 and this build cannot cast to anything it finds."
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+        crate::casting::summary(self.receivers.len())
+    }
+
+    fn look_for_receivers(&mut self) {
+        if self.cast_search.is_some() {
+            self.status = Some("A discovery run is already in progress.".to_string());
+            return;
+        }
+        self.cast_searched = true;
+        self.receivers.clear();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.cast_search = Some(receiver);
+        self.status = Some("Looking for cast receivers on this network…".to_string());
+        std::thread::spawn(move || {
+            let outcome = crate::casting::discover(Duration::from_millis(1_200), 12);
+            let _ = sender.send(outcome);
+        });
+    }
+
+    fn drain_cast_discovery(&mut self) {
+        let Some(receiver) = self.cast_search.take() else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok(Ok(found)) => {
+                self.receivers = found;
+                self.cast_searched = true;
+                self.status = Some(self.casting_note());
+            }
+            Ok(Err(error)) => {
+                self.cast_searched = true;
+                self.error = Some(error);
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                self.cast_search = Some(receiver);
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+        }
+    }
+
     fn reload_subtitles(&mut self, file_id: &str) {
         match self.library.subtitles_for(file_id) {
             Ok(subtitles) => self.subtitles = subtitles,
@@ -1634,6 +1694,7 @@ impl App {
         self.drain_durations();
         self.drain_conversion();
         self.drain_preview();
+        self.drain_cast_discovery();
 
         if self.drain_artwork() > 0 {
             self.queue_artwork(true);
@@ -3177,6 +3238,7 @@ impl App {
             Message::SubtitleChosen(path) => self.subtitle_chosen(&path),
             Message::UseSubtitle(id) => self.use_subtitle(&id),
             Message::RemoveSubtitle(id) => self.remove_subtitle(&id),
+            Message::LookForReceivers => self.look_for_receivers(),
             Message::BackupNow => self.backup_now(),
             Message::RestorePathChanged(value) => {
                 self.restore_path = value;
@@ -4545,6 +4607,38 @@ impl App {
             );
         }
 
+        let mut casting = column![
+            note(
+                "Receivers are looked for on this network only when you press the button below. \
+                 Finding one is not casting: this build has no stream endpoint, so nothing is sent \
+                 to a device and no media leaves this machine.",
+            ),
+            row![
+                button(text("Look for receivers").size(tokens.type_scale.label))
+                    .on_press(Message::LookForReceivers)
+                    .style(design::action_style(false))
+                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                text(self.casting_note())
+                    .size(tokens.type_scale.micro)
+                    .color(tokens.palette.ink_muted),
+            ]
+            .spacing(tokens.spacing.field_x)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(tokens.spacing.field_y);
+        for receiver in &self.receivers {
+            casting = casting.push(
+                column![
+                    text(receiver.name.clone()).size(tokens.type_scale.body),
+                    note(&format!(
+                        "{} · {} · {}",
+                        receiver.kind, receiver.address, receiver.from
+                    )),
+                ]
+                .spacing(tokens.spacing.field_y / 2.0),
+            );
+        }
+
         let restore_armed = self.armed_restore.is_some();
         let data = column![
             text("Back up".to_string()).size(tokens.type_scale.label),
@@ -4626,6 +4720,8 @@ impl App {
             panel(folders.into()),
             heading("Saved sources"),
             panel(saved.into()),
+            heading("Casting"),
+            panel(casting.into()),
             heading("Data"),
             panel(data.into()),
             heading("Conversion"),

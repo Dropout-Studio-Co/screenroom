@@ -1,5 +1,6 @@
 pub mod app;
 pub mod artwork;
+pub mod casting;
 pub mod conversion;
 pub mod design;
 pub mod external;

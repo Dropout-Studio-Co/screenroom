@@ -1441,3 +1441,32 @@ fake control.**
 - **Not proven:** nothing was searched online, because nothing may be; the
   panel has not been looked at in a window; no provider-downloaded subtitle has
   been retained or tested for reuse.
+
+## F19 — receiver discovery, with casting itself refused (2026-11-01)
+
+**Discovery is implemented and honest. Sending media to a receiver is not.**
+
+- The PRD asks for *real receiver detection plus reachable, permitted stream and
+  compatible codec*, and says any temporary LAN endpoint must be confined,
+  session-scoped and off by default. The detection half exists; the streaming
+  half does not, and the panel says so in words rather than offering a button
+  that cannot work.
+- `apps/desktop/src/casting.rs` sends one SSDP `M-SEARCH` for
+  `urn:schemas-upnp-org:device:MediaRenderer:1`, waits at most 3 s and collects
+  at most 12 answers. `parse_response` is pure and strict: `HTTP/1.1 200` only,
+  a `MediaRenderer` `ST`/`NT`, an `http(s)` `LOCATION`, no answer over 8 KiB and
+  no `file:` location. Duplicate USNs are dropped and the device's own `SERVER`
+  header is what names it, otherwise the IP is shown.
+- Settings → *Casting* shows the rule, the button and the summary. The probe runs
+  **only** on that press — nothing is sent at startup — and the summary after the
+  run says plainly that it is discovery only, that this build cannot cast and
+  that no stream has been sent.
+- `drain_cast_discovery` keeps the probe off the UI thread and reports failure
+  as an error with the socket's own words.
+- **Tests added:** four parser tests (a real-shaped renderer answer, other
+  devices and malformed/oversized/`file:` answers refused, the exact probe
+  shape, summary wording) and `step_22` (nothing probed by default, a result
+  arrives through the drain, the flag clears, the honest summary).
+- **Not proven:** no receiver was discovered on a real network, because that
+  needs a live LAN and would be a network action this session did not take; no
+  media has been cast, and no compatibility check exists to claim.
