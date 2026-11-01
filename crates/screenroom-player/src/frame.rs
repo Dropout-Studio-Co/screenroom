@@ -53,6 +53,8 @@ pub enum ToneMapping {
     MpvDefault,
 
     Passthrough,
+
+    Bt2390,
 }
 
 impl ToneMapping {
@@ -60,6 +62,26 @@ impl ToneMapping {
         match self {
             Self::MpvDefault => "mpv default",
             Self::Passthrough => "none",
+            Self::Bt2390 => "bt.2390",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetPrimaries {
+    Auto,
+
+    Bt709,
+
+    Bt2020,
+}
+
+impl TargetPrimaries {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Bt709 => "bt.709",
+            Self::Bt2020 => "bt.2020",
         }
     }
 }
@@ -74,6 +96,8 @@ pub struct OutputDescription {
 
     pub transfer: OutputTransfer,
 
+    pub primaries: TargetPrimaries,
+
     pub tone_mapping: ToneMapping,
 }
 
@@ -84,6 +108,7 @@ impl OutputDescription {
             extended_range_requested: false,
             target_peak_nits: None,
             transfer: OutputTransfer::Srgb,
+            primaries: TargetPrimaries::Auto,
             tone_mapping: ToneMapping::MpvDefault,
         }
     }
@@ -94,7 +119,8 @@ impl OutputDescription {
             extended_range_requested: true,
             target_peak_nits,
             transfer: OutputTransfer::Pq,
-            tone_mapping: ToneMapping::Passthrough,
+            primaries: TargetPrimaries::Bt709,
+            tone_mapping: ToneMapping::Bt2390,
         }
     }
 
@@ -127,9 +153,10 @@ impl OutputDescription {
             None => String::new(),
         };
         format!(
-            "{} bits per channel, {}/bt.2020, tone mapping {}{peak}",
+            "{} bits per channel, {}/{}, tone mapping {}{peak}",
             self.bits_per_channel(),
             self.transfer.as_str(),
+            self.primaries.as_str(),
             self.tone_mapping.as_str()
         )
     }
@@ -609,17 +636,19 @@ mod tests {
     }
 
     #[test]
-    fn an_extended_output_description_names_its_peak_and_passthrough() {
-        let output = OutputDescription::extended_float(Some(1000));
+    fn the_output_description_of_an_extended_surface_states_its_real_target() {
+        let output = OutputDescription::extended_float(Some(406));
         assert!(output.is_extended_range());
         assert_eq!(output.bits_per_channel(), 16);
         assert_eq!(output.transfer, OutputTransfer::Pq);
-        assert_eq!(output.tone_mapping, ToneMapping::Passthrough);
+        assert_eq!(output.primaries, TargetPrimaries::Bt709);
+        assert_eq!(output.tone_mapping, ToneMapping::Bt2390);
         let label = output.label();
         assert!(label.contains("16 bits per channel"));
-        assert!(label.contains("pq"));
-        assert!(label.contains("target peak 1000 nits"));
-        assert!(label.contains("none"));
+        assert!(label.contains("pq/bt.709"));
+        assert!(label.contains("target peak 406 nits"));
+        assert!(label.contains("bt.2390"));
+        assert!(!label.contains("none"), "passthrough is no longer claimed");
     }
 
     #[cfg(target_os = "macos")]

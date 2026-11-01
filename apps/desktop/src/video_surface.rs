@@ -106,7 +106,7 @@ impl Primitive for VideoPrimitive {
         queue.write_buffer(
             &pipeline.fit_buffer,
             0,
-            bytemuck_f32(&[fit_x, fit_y, 0.0, 0.0]),
+            bytemuck_f32(&[fit_x, fit_y, extended_range_mode(&frame.format), 0.0]),
         );
         if pipeline.uploaded_generation == Some(frame.generation)
             && pipeline.texture_size == (frame.width, frame.height)
@@ -151,7 +151,7 @@ impl Primitive for VideoPrimitive {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
@@ -300,12 +300,12 @@ mod macos {
     fn texture_formats(format: PixelFormat) -> (metal::MTLPixelFormat, wgpu::TextureFormat) {
         match format {
             PixelFormat::Bgra8 => (
-                metal::MTLPixelFormat::BGRA8Unorm_sRGB,
-                wgpu::TextureFormat::Bgra8UnormSrgb,
+                metal::MTLPixelFormat::BGRA8Unorm,
+                wgpu::TextureFormat::Bgra8Unorm,
             ),
             PixelFormat::Rgba8 => (
-                metal::MTLPixelFormat::RGBA8Unorm_sRGB,
-                wgpu::TextureFormat::Rgba8UnormSrgb,
+                metal::MTLPixelFormat::RGBA8Unorm,
+                wgpu::TextureFormat::Rgba8Unorm,
             ),
             PixelFormat::Rgba16Float => (
                 metal::MTLPixelFormat::RGBA16Float,
@@ -346,7 +346,7 @@ mod macos {
         descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
 
         let descriptor_object: *mut AnyObject = descriptor.as_ptr().cast::<AnyObject>();
-        let surface_object: *mut AnyObject = surface.as_ptr().cast::<AnyObject>();
+        let surface_object = surface.as_ptr();
 
         let raw: *mut AnyObject = unsafe {
             msg_send![
@@ -408,9 +408,11 @@ impl std::fmt::Debug for VideoPipeline {
 
 impl shader::Pipeline for VideoPipeline {
     fn new(device: &wgpu::Device, _queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
+        note_target_format(format);
+
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("screenroom-video-surface"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(SHADER.as_str().into()),
         });
 
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -522,24 +524,59 @@ fn bytemuck_f32(values: &[f32; 4]) -> &[u8] {
     }
 }
 
-const SHADER: &str = r#"
-struct Fit {
+fn extended_range_mode(format: &screenroom_player::PixelFormat) -> f32 {
+    if format.is_extended_range() { 1.0 } else { 0.0 }
+}
+
+static TARGET_FORMAT: std::sync::OnceLock<wgpu::TextureFormat> = std::sync::OnceLock::new();
+
+fn note_target_format(format: wgpu::TextureFormat) {
+    let first = TARGET_FORMAT.set(format).is_ok();
+    if first && crate::play_check::requested() {
+        eprintln!(
+            "video surface: target {format:?}, extended range {}",
+            format == wgpu::TextureFormat::Rgba16Float
+        );
+    }
+}
+
+pub fn target_format() -> Option<wgpu::TextureFormat> {
+    TARGET_FORMAT.get().copied()
+}
+
+static SHADER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    use screenroom_player::{
+        PQ_C1, PQ_C2, PQ_C3, PQ_M1, PQ_M2, PQ_MAXIMUM_NITS, REFERENCE_WHITE_NITS,
+    };
+    let (m1, m2, c1, c2, c3) = (PQ_M1, PQ_M2, PQ_C1, PQ_C2, PQ_C3);
+    let (maximum, white) = (PQ_MAXIMUM_NITS, REFERENCE_WHITE_NITS as f32);
+    format!(
+        r#"
+const PQ_M1: f32 = {m1:?};
+const PQ_M2: f32 = {m2:?};
+const PQ_C1: f32 = {c1:?};
+const PQ_C2: f32 = {c2:?};
+const PQ_C3: f32 = {c3:?};
+const PQ_MAXIMUM_NITS: f32 = {maximum:?};
+const REFERENCE_WHITE_NITS: f32 = {white:?};
+
+struct Fit {{
     fit: vec2<f32>,
-    padding: vec2<f32>,
-};
+    extended_range: f32,
+    padding: f32,
+}};
 
 @group(0) @binding(0) var frame_texture: texture_2d<f32>;
 @group(0) @binding(1) var frame_sampler: sampler;
 @group(0) @binding(2) var<uniform> fit: Fit;
 
-struct VertexOutput {
+struct VertexOutput {{
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
-};
+}};
 
 @vertex
-fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
-    // One oversized triangle covering the widget bounds.
+fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {{
     var positions = array<vec2<f32>, 3>(
         vec2<f32>(-1.0, -3.0),
         vec2<f32>(-1.0, 1.0),
@@ -554,23 +591,38 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
     out.position = vec4<f32>(positions[index], 0.0, 1.0);
     out.uv = uvs[index];
     return out;
-}
+}}
+
+fn pq_to_extended_linear(code: vec3<f32>) -> vec3<f32> {{
+    let clamped = clamp(code, vec3<f32>(0.0), vec3<f32>(1.0));
+    let powered = pow(clamped, vec3<f32>(1.0 / PQ_M2));
+    let numerator = max(powered - vec3<f32>(PQ_C1), vec3<f32>(0.0));
+    let denominator = vec3<f32>(PQ_C2) - vec3<f32>(PQ_C3) * powered;
+    let luminance = pow(numerator / denominator, vec3<f32>(1.0 / PQ_M1)) * vec3<f32>(PQ_MAXIMUM_NITS);
+    return luminance / vec3<f32>(REFERENCE_WHITE_NITS);
+}}
+
+fn srgb_encode(value: vec3<f32>) -> vec3<f32> {{
+    let above = 1.055 * pow(max(value, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
+    let below = value * 12.92;
+    return select(above, below, value <= vec3<f32>(0.0031308));
+}}
 
 @fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    // `fit` is the fraction of each axis the video occupies, so the source
-    // coordinate is found by dividing: pixels outside 0..1 are the bars and are
-    // drawn black. Multiplying here would stretch the picture instead.
-    var uv = (input.uv - vec2<f32>(0.5, 0.5)) / fit.fit + vec2<f32>(0.5, 0.5);
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {{
+    let uv = (input.uv - vec2<f32>(0.5, 0.5)) / fit.fit + vec2<f32>(0.5, 0.5);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {{
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    }
-    // libmpv leaves the frame's fourth byte undefined, so opacity is forced here
-    // rather than trusted from the buffer. Doing it on the GPU also keeps the
-    // host-side frame path free of per-pixel work.
-    return vec4<f32>(textureSample(frame_texture, frame_sampler, uv).rgb, 1.0);
-}
-"#;
+    }}
+    let sampled = textureSample(frame_texture, frame_sampler, uv).rgb;
+    if (fit.extended_range > 0.5) {{
+        return vec4<f32>(srgb_encode(pq_to_extended_linear(sampled)), 1.0);
+    }}
+    return vec4<f32>(sampled, 1.0);
+}}
+"#
+    )
+});
 
 #[cfg(test)]
 mod tests {
@@ -686,5 +738,319 @@ mod tests {
         let cpu = Frame::cpu(2, 2, 8, std::sync::Arc::new(vec![7; 16]), 0, 3);
         assert!(!holds_a_gpu_surface(&cpu));
         assert_eq!(surface_key(&cpu), None);
+    }
+
+    #[test]
+    fn the_extended_range_flag_follows_the_frame_format_not_the_display() {
+        assert_eq!(
+            extended_range_mode(&screenroom_player::PixelFormat::Bgra8),
+            0.0
+        );
+        assert_eq!(
+            extended_range_mode(&screenroom_player::PixelFormat::Rgba8),
+            0.0
+        );
+        assert_eq!(
+            extended_range_mode(&screenroom_player::PixelFormat::Rgba16Float),
+            1.0
+        );
+    }
+
+    #[test]
+    fn the_shader_curve_is_generated_from_the_shared_constants() {
+        let shader = SHADER.as_str();
+        for (name, value) in [
+            ("PQ_M1", screenroom_player::PQ_M1),
+            ("PQ_M2", screenroom_player::PQ_M2),
+            ("PQ_C1", screenroom_player::PQ_C1),
+            ("PQ_C2", screenroom_player::PQ_C2),
+            ("PQ_C3", screenroom_player::PQ_C3),
+            ("PQ_MAXIMUM_NITS", screenroom_player::PQ_MAXIMUM_NITS),
+        ] {
+            let declaration = format!("const {name}: f32 = {value:?};");
+            assert!(shader.contains(&declaration), "missing {declaration}");
+        }
+        assert!(shader.contains(&format!(
+            "const REFERENCE_WHITE_NITS: f32 = {:?};",
+            screenroom_player::REFERENCE_WHITE_NITS as f32
+        )));
+        assert!(shader.contains("fit.extended_range > 0.5"));
+    }
+
+    use iced::widget::shader::Pipeline;
+
+    fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        use iced::futures::executor::block_on;
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let adapter =
+            block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+        block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
+    }
+
+    #[cfg(target_os = "macos")]
+    const READBACK_SHADER: &str = r#"
+@group(0) @binding(0) var frame_texture: texture_2d<f32>;
+@group(0) @binding(1) var frame_sampler: sampler;
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
+    var positions = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -3.0),
+        vec2<f32>(-1.0, 1.0),
+        vec2<f32>(3.0, 1.0),
+    );
+    var uvs = array<vec2<f32>, 3>(
+        vec2<f32>(0.0, 2.0),
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(2.0, 0.0),
+    );
+    var out: VertexOutput;
+    out.position = vec4<f32>(positions[index], 0.0, 1.0);
+    out.uv = uvs[index];
+    return out;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(frame_texture, frame_sampler, input.uv);
+}
+"#;
+
+    #[cfg(target_os = "macos")]
+    fn fill(surface: &screenroom_player::SurfaceFrame, bytes: [u8; 4]) {
+        let stride = surface.bytes_per_row() as usize;
+        let height = surface.height() as usize;
+        let base = surface.base_address();
+        for row in 0..height {
+            for column in 0..surface.width() as usize {
+                let offset = row * stride + column * 4;
+                unsafe {
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), base.add(offset), 4);
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sample_first_pixel(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+    ) -> [u8; 4] {
+        let size = 64u32;
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("readback"),
+            size: wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let source_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("readback"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("readback"),
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&source_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&device.create_sampler(
+                        &wgpu::SamplerDescriptor {
+                            mag_filter: wgpu::FilterMode::Nearest,
+                            min_filter: wgpu::FilterMode::Nearest,
+                            ..Default::default()
+                        },
+                    )),
+                },
+            ],
+        });
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("readback"),
+            source: wgpu::ShaderSource::Wgsl(READBACK_SHADER.into()),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("readback"),
+            bind_group_layouts: &[&layout],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("readback"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readback"),
+            size: (size * size * 4) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("readback"),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("readback"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(size * 4),
+                    rows_per_image: Some(size),
+                },
+            },
+            wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(Some(encoder.finish()));
+
+        let slice = readback.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        let data = slice.get_mapped_range();
+        let offset = ((size / 2) * size * 4 + (size / 2) * 4) as usize;
+        let pixel = [
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ];
+        drop(data);
+        readback.unmap();
+        pixel
+    }
+
+    #[test]
+    fn an_imported_surface_is_sampled_the_way_iced_presents_it() {
+        let Some((device, queue)) = device() else {
+            return;
+        };
+
+        let surface = std::sync::Arc::new(
+            screenroom_player::SurfaceFrame::new(8, 8).expect("a surface exists"),
+        );
+        fill(&surface, [128, 128, 128, 255]);
+        let frame = Frame::gpu(8, 8, std::sync::Arc::clone(&surface), 1);
+        let texture =
+            macos::texture_from_surface(&device, &surface, &frame).expect("the surface imports");
+        let sampled = sample_first_pixel(&device, &queue, &texture);
+
+        println!("sampled_mid_grey {:?}", sampled);
+        assert_eq!(sampled[3], 255);
+        let channel = f32::from(sampled[1]) / 255.0;
+        assert!(
+            (channel - 0.5).abs() < 0.02,
+            "an eight bit sRGB code must reach the shader unchanged so the picture is \
+         displayed the way iced tags the layer, got {channel}"
+        );
+        assert_eq!(sampled, [128, 128, 128, 255]);
+    }
+
+    #[test]
+    fn the_picture_shader_compiles_for_both_targets() {
+        use iced::futures::executor::block_on;
+        let Some((device, queue)) = device() else {
+            return;
+        };
+        for format in [
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::TextureFormat::Rgba16Float,
+        ] {
+            device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let pipeline = VideoPipeline::new(&device, &queue, format);
+            let error = block_on(device.pop_error_scope());
+            assert!(
+                error.is_none(),
+                "{format:?} rejected the pipeline: {error:?}"
+            );
+            assert_eq!(pipeline.texture_size, (0, 0));
+            assert!(pipeline.bind_group.is_none());
+        }
     }
 }

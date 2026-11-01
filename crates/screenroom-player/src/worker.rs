@@ -414,6 +414,11 @@ impl Player {
         max_dimension: u32,
     ) -> Result<Self, PlayerError> {
         let shared = Arc::new(Mutex::new(PlayerSnapshot::default()));
+        let display = if hdr == HdrMode::Extended {
+            crate::display::extended_range_target()
+        } else {
+            crate::display::DisplayTarget::sdr()
+        };
         let (commands, queue) = mpsc::channel();
         let (ready_sender, ready) = mpsc::channel();
         let wake = Arc::new(WakeSignal::new());
@@ -431,7 +436,11 @@ impl Player {
                     ready_sender,
                     thread_wake,
                     thread_ticks,
-                    OutputPolicy { hwdec, hdr },
+                    OutputPolicy {
+                        hwdec,
+                        hdr,
+                        display,
+                    },
                     max_dimension,
                 )
             })
@@ -550,11 +559,13 @@ impl Drop for Player {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct OutputPolicy {
     hwdec: HwdecMode,
 
     hdr: HdrMode,
+
+    display: crate::display::DisplayTarget,
 }
 
 fn run(
@@ -671,10 +682,11 @@ impl FrameRenderer {
         }
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     fn enable_extended_range(
         &mut self,
         core: &Mpv,
-        peak_nits: Option<u32>,
+        target: crate::display::DisplayTarget,
     ) -> Result<OutputDescription, PlayerError> {
         match self {
             Self::Software(_) => Err(PlayerError::Unavailable(
@@ -682,7 +694,7 @@ impl FrameRenderer {
             )),
             #[cfg(target_os = "macos")]
             Self::Gpu(renderer) => {
-                let output = crate::gl_render::enable_extended_range(core, peak_nits)?;
+                let output = crate::gl_render::enable_extended_range(core, target)?;
                 renderer.set_output(output.clone());
                 Ok(output)
             }
@@ -750,8 +762,8 @@ struct Runner {
     metadata_retries: u8,
     ticks: crate::FrameTicks,
     hdr: HdrMode,
+    display: crate::display::DisplayTarget,
     source_extended: Option<bool>,
-    source_peak_nits: Option<u32>,
 }
 
 impl Runner {
@@ -844,8 +856,8 @@ impl Runner {
             metadata_retries: 0,
             ticks,
             hdr: policy.hdr,
+            display: policy.display,
             source_extended: None,
-            source_peak_nits: None,
         })
     }
 
@@ -978,7 +990,6 @@ impl Runner {
         self.total_avsync_change = None;
         self.mistimed_frames = None;
         self.source_extended = None;
-        self.source_peak_nits = None;
         let load_id_for_snapshot = self.load_id;
         publish(shared, |snapshot| {
             snapshot.load_id = load_id_for_snapshot;
@@ -1360,15 +1371,7 @@ impl Runner {
                 self.source_extended = Some(gamma_is_extended_range(gamma.as_deref()));
                 self.settle_output(shared);
             }
-            ID_VIDEO_MAX_CLL | ID_VIDEO_MAX_LUMA => {
-                let value = unsafe { *(property.data as *const f64) };
-                if value.is_finite() && value >= 1.0 {
-                    let nits = value.round().clamp(1.0, 10_000.0) as u32;
-                    self.source_peak_nits =
-                        Some(self.source_peak_nits.map_or(nits, |known| known.max(nits)));
-                    self.settle_output(shared);
-                }
-            }
+            ID_VIDEO_MAX_CLL | ID_VIDEO_MAX_LUMA => self.settle_output(shared),
             _ => {}
         }
         self.publish_snapshot(shared);
@@ -1588,18 +1591,6 @@ impl Runner {
         );
         let current = self.renderer.output();
         if extended == current.format.is_extended_range() {
-            if extended
-                && self.source_peak_nits.is_some()
-                && self.source_peak_nits != current.target_peak_nits
-            {
-                match self
-                    .renderer
-                    .enable_extended_range(&self.core, self.source_peak_nits)
-                {
-                    Ok(output) => trace!("output peak is now {}", output.label()),
-                    Err(error) => trace!("the peak update was refused: {error}"),
-                }
-            }
             return;
         }
         if extended && !self.renderer.supports_extended_range() {
@@ -1608,7 +1599,7 @@ impl Runner {
         }
         let outcome = if extended {
             self.renderer
-                .enable_extended_range(&self.core, self.source_peak_nits)
+                .enable_extended_range(&self.core, self.display)
         } else {
             self.renderer.disable_extended_range(&self.core)
         };

@@ -23,16 +23,13 @@ mod receipt {
     use screenroom_player::half_to_f32;
     use screenroom_player::surface::format_fourcc;
     use screenroom_player::{
-        Frame, GlRenderer, HdrMode, HwdecMode, LibMpv, Mpv, OutputDescription, OutputTransfer,
-        PixelFormat, Player, ToneMapping,
+        DisplayTarget, Frame, GlRenderer, HdrMode, HwdecMode, LibMpv, Mpv, OutputDescription,
+        OutputTransfer, PQ_MAXIMUM_NITS, PixelFormat, Player, REFERENCE_WHITE_NITS,
+        TargetPrimaries, ToneMapping, extended_range_target, pq_code_to_extended_linear,
+        pq_code_to_nits, relative_luminance_to_pq,
     };
 
-    const SDR_WHITE_NITS: f64 = 100.0;
-    const M1: f64 = 0.159_301_757_812_5;
-    const M2: f64 = 78.843_75;
-    const C1: f64 = 0.835_937_5;
-    const C2: f64 = 18.851_562_5;
-    const C3: f64 = 18.687_5;
+    const REFERENCE_WHITE: f64 = REFERENCE_WHITE_NITS as f64;
 
     #[derive(Default)]
     struct Stats {
@@ -148,7 +145,18 @@ mod receipt {
                 failures.push("the half-float surface did not exceed 256 distinct values");
             }
             if extended.stats.above_sdr_white == 0 {
-                failures.push("no sampled pixel rose above SDR white");
+                failures.push("no sampled pixel rose above the reference white");
+            }
+            if f64::from(pq_code_to_extended_linear(
+                extended.stats.peak_luma_code as f32,
+            )) <= 1.0
+            {
+                failures.push("the tone-mapped surface never rose above reference white");
+            }
+            if let Some(display) = extended.display
+                && extended.stats.peak_luma > f64::from(display.peak_nits()) * 1.05
+            {
+                failures.push("the delivered peak exceeded the tone mapping target");
             }
             if mode == "both" || mode == "all" {
                 print_comparison(extended);
@@ -221,6 +229,7 @@ mod receipt {
     struct Pass {
         output: OutputDescription,
         surface: Option<SurfaceFrameReading>,
+        display: Option<DisplayTarget>,
         stats: Stats,
     }
 
@@ -257,6 +266,7 @@ mod receipt {
         wait_for_file(&core)?;
 
         let mut output = OutputDescription::default();
+        let mut display = None;
         match target {
             Target::Sdr8 => {}
             Target::Float8 => {
@@ -265,13 +275,18 @@ mod receipt {
                     extended_range_requested: false,
                     target_peak_nits: None,
                     transfer: OutputTransfer::Srgb,
+                    primaries: TargetPrimaries::Auto,
                     tone_mapping: ToneMapping::MpvDefault,
                 };
                 renderer.set_output(output.clone());
             }
             Target::Extended => {
-                let peak = peak_override.or_else(|| read_peak_nits(&core));
-                output = enable_extended_range(&core, peak)?;
+                let target = match peak_override {
+                    Some(nits) => DisplayTarget::with_peak_nits(nits),
+                    None => extended_range_target(),
+                };
+                display = Some(target);
+                output = enable_extended_range(&core, target)?;
                 renderer.set_output(output.clone());
             }
         }
@@ -324,9 +339,15 @@ mod receipt {
             internal_format: target_internal_format(surface.format()),
         });
         let stats = measure(&frame, target == Target::Extended);
+        println!(
+            "pass {} source_peak_nits {:?}",
+            target.label(),
+            read_peak_nits(&core)
+        );
         Ok(Pass {
             output,
             surface,
+            display,
             stats,
         })
     }
@@ -402,12 +423,35 @@ mod receipt {
             println!("[{label}] mean_nits {:.1}", pass.stats.mean_luma);
             println!("[{label}] peak_nits {:.1}", pass.stats.peak_luma);
             println!(
-                "[{label}] peak_vs_sdr_white {:.3}",
-                pass.stats.peak_luma / SDR_WHITE_NITS
+                "[{label}] peak_vs_reference_white {:.3}",
+                pass.stats.peak_luma / REFERENCE_WHITE
             );
             println!(
-                "[{label}] above_sdr_white {} of {}",
+                "[{label}] above_reference_white {} of {}",
                 pass.stats.above_sdr_white, pass.stats.samples
+            );
+            println!(
+                "[{label}] delivered_peak_extended_linear {:.6}",
+                f64::from(pq_code_to_extended_linear(pass.stats.peak_luma_code as f32))
+            );
+            println!(
+                "[{label}] delivered_peak_green_extended_linear {:.6}",
+                f64::from(pq_code_to_extended_linear(
+                    pass.stats.peak_green_code as f32
+                ))
+            );
+        }
+        if let Some(display) = pass.display {
+            println!("[{label}] display {}", display.label());
+            println!("[{label}] display_headroom {:.3}", display.headroom);
+            println!("[{label}] display_peak_nits {}", display.peak_nits());
+            println!(
+                "[{label}] display_ceiling_extended_linear {:.3}",
+                display.extended_linear_peak()
+            );
+            println!(
+                "[{label}] display_assumption {}",
+                display.assumption.as_str()
             );
         }
     }
@@ -420,9 +464,22 @@ mod receipt {
         );
         println!("objective_peak_nits {:.1}", extended.stats.peak_luma);
         println!(
-            "objective_peak_over_sdr_white {:.3}",
-            extended.stats.peak_luma / SDR_WHITE_NITS
+            "objective_peak_over_reference_white {:.3}",
+            extended.stats.peak_luma / REFERENCE_WHITE
         );
+        println!(
+            "objective_delivered_peak_extended_linear {:.6}",
+            f64::from(pq_code_to_extended_linear(
+                extended.stats.peak_luma_code as f32
+            ))
+        );
+        if let Some(display) = extended.display {
+            println!(
+                "objective_display_peak_nits {} objective_display_headroom {:.3}",
+                display.peak_nits(),
+                display.headroom
+            );
+        }
         println!("objective_mean_nits {:.1}", extended.stats.mean_luma);
         println!(
             "objective_mean_luma_code {:.6}",
@@ -475,7 +532,7 @@ mod receipt {
                             sum_luma_code += luma_code;
                             stats.peak_luma = stats.peak_luma.max(luma);
                             stats.peak_luma_code = stats.peak_luma_code.max(luma_code);
-                            if luma > SDR_WHITE_NITS {
+                            if luma > REFERENCE_WHITE {
                                 stats.above_sdr_white += 1;
                             }
                         }
@@ -507,18 +564,12 @@ mod receipt {
     }
 
     fn pq_from_nits(nits: f64) -> f64 {
-        let ratio = (nits / 10_000.0).clamp(0.0, 1.0).powf(M1);
-        ((C1 + C2 * ratio) / (1.0 + C3 * ratio)).powf(M2)
+        f64::from(relative_luminance_to_pq(
+            (nits / f64::from(PQ_MAXIMUM_NITS)) as f32,
+        ))
     }
 
     fn pq_to_nits(encoded: f32) -> f64 {
-        let value = f64::from(encoded).clamp(0.0, 1.0);
-        let power = value.powf(1.0 / M2);
-        let numerator = (power - C1).max(0.0);
-        let denominator = C2 - C3 * power;
-        if denominator <= 0.0 {
-            return 0.0;
-        }
-        10_000.0 * (numerator / denominator).powf(1.0 / M1)
+        f64::from(pq_code_to_nits(encoded))
     }
 }

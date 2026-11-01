@@ -610,22 +610,25 @@ cannot display.
 - **No real HDR10 film and no HDR display were involved.** The owner's media was not
   mounted and nothing was shown.
 
-### What the lead must wire in `apps/desktop` (not changed here)
+### What the lead had to wire in `apps/desktop` (2026-11-01; since done)
 
-1. `apps/desktop/src/video_surface.rs` hardcodes the imported format:
-   `metal::MTLPixelFormat::BGRA8Unorm_sRGB` and `wgpu::TextureFormat::Bgra8UnormSrgb`
-   (lines 317, 341, 363). It must map `surface.format()`:
-   `PixelFormat::Bgra8 → Bgra8UnormSrgb`, `PixelFormat::Rgba16Float → Rgba16Float`.
-   Sampling a PQ surface through an sRGB view is wrong even before EDR.
+Recorded as written on 2026-11-01, and resolved on 2026-11-02 — see "HDR10 on
+screen" below for what actually shipped, which differs from item 2.
+
+1. `apps/desktop/src/video_surface.rs` hardcoded the imported format:
+   `metal::MTLPixelFormat::BGRA8Unorm_sRGB` and `wgpu::TextureFormat::Bgra8UnormSrgb`.
+   It now maps `surface.format()`, and on 2026-11-02 the eight-bit mapping was
+   changed to the non-sRGB format as well, because the renderer's convention is
+   sRGB-encoded values (see the 2026-11-02 section).
 2. The app's own `CAMetalLayer` (or a patched `iced_wgpu`) must set
-   `wantsExtendedDynamicRangeContent = YES` and
-   `colorspace = kCGColorSpaceITUR_2100_PQ` when the published
-   `OutputDescription.transfer` is `Pq`; wgpu only flips the EDR flag, never the
-   colours space.
-3. Settings should print `PlayerSnapshot.output.label()`, so the app states what the
-   surface carries instead of implying HDR.
-4. Do **not** set `SCREENROOM_HDR=extended` until 1 and 2 exist; today that would
-   hand the desktop layer a 16F `IOSurface` it imports as 8-bit sRGB.
+   `wantsExtendedDynamicRangeContent = YES` and a colour space for the picture.
+   It was done with a vendored `iced_wgpu`; the colour space is
+   `kCGColorSpaceExtendedSRGB`, not `kCGColorSpaceITUR_2100_PQ`, because one
+   drawable carries the UI as well as the picture.
+3. Settings prints `PlayerSnapshot.output.label()`, and the label now names the
+   real target: `16 bits per channel, pq/bt.709, tone mapping bt.2390, target
+   peak 406 nits`.
+4. `SCREENROOM_HDR` is still the opt-in and still off by default.
 
 ### One concurrent-edit note
 

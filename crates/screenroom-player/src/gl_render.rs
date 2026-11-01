@@ -3,13 +3,12 @@ use std::ptr::{self, NonNull};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::display::DisplayTarget;
 use crate::frame::{OutputDescription, PixelFormat};
 use crate::surface::SurfaceFrame;
 use crate::{Frame, LibMpv, Mpv, PlayerError, RenderSymbols, WakeSignal};
 
 pub const UPDATE_FRAME: u64 = 1;
-
-pub const DEFAULT_TARGET_PEAK_NITS: u32 = 1000;
 
 const SURFACE_POOL_SIZE: usize = 3;
 const MAX_SURFACE_POOL_SIZE: usize = 16;
@@ -241,7 +240,7 @@ impl Slot {
                 height as i32,
                 channels,
                 samples,
-                surface.as_ptr(),
+                surface.as_ptr().cast(),
                 0,
             )
         };
@@ -335,12 +334,12 @@ pub fn clamp_target(width: u32, height: u32) -> (u32, u32) {
     (width.max(1), height.max(1))
 }
 
-fn extended_range_values(peak_nits: u32) -> [(&'static str, String); 5] {
+fn extended_range_values(target: DisplayTarget) -> [(&'static str, String); 5] {
     [
-        ("target-prim", "bt.2020".to_string()),
+        ("target-prim", "bt.709".to_string()),
         ("target-trc", "pq".to_string()),
-        ("target-peak", peak_nits.to_string()),
-        ("tone-mapping", "clip".to_string()),
+        ("target-peak", target.peak_nits().to_string()),
+        ("tone-mapping", "bt.2390".to_string()),
         ("hdr-compute-peak", "no".to_string()),
     ]
 }
@@ -357,13 +356,12 @@ fn extended_range_reset_values() -> [(&'static str, &'static str); 5] {
 
 pub fn enable_extended_range(
     core: &Mpv,
-    peak_nits: Option<u32>,
+    target: DisplayTarget,
 ) -> Result<OutputDescription, PlayerError> {
-    let peak = peak_nits.unwrap_or(DEFAULT_TARGET_PEAK_NITS);
-    for (name, value) in extended_range_values(peak) {
+    for (name, value) in extended_range_values(target) {
         core.set_property(name, &value)?;
     }
-    Ok(OutputDescription::extended_float(Some(peak)))
+    Ok(OutputDescription::extended_float(Some(target.peak_nits())))
 }
 
 pub fn reset_extended_range(core: &Mpv) -> Result<(), PlayerError> {
@@ -649,6 +647,7 @@ impl Drop for GlRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frame::TargetPrimaries;
 
     #[test]
     fn a_free_slot_is_the_first_surface_nobody_holds() {
@@ -714,19 +713,29 @@ mod tests {
     }
 
     #[test]
-    fn extended_range_asks_mpv_for_pq_without_tone_mapping() {
-        let values = extended_range_values(1000);
+    fn extended_range_asks_mpv_to_tone_map_into_the_real_display() {
+        let values = extended_range_values(DisplayTarget::with_headroom(2.0));
         let lookup = |key: &str| {
             values
                 .iter()
                 .find(|(name, _)| *name == key)
                 .map(|(_, value)| value.as_str())
         };
-        assert_eq!(lookup("target-prim"), Some("bt.2020"));
+        assert_eq!(lookup("target-prim"), Some("bt.709"));
         assert_eq!(lookup("target-trc"), Some("pq"));
-        assert_eq!(lookup("target-peak"), Some("1000"));
-        assert_eq!(lookup("tone-mapping"), Some("clip"));
+        assert_eq!(lookup("target-peak"), Some("406"));
+        assert_eq!(lookup("tone-mapping"), Some("bt.2390"));
         assert_eq!(lookup("hdr-compute-peak"), Some("no"));
+    }
+
+    #[test]
+    fn an_assumed_display_gets_a_reference_white_tone_map_instead_of_a_guess() {
+        let values = extended_range_values(DisplayTarget::sdr());
+        let peak = values
+            .iter()
+            .find(|(name, _)| *name == "target-peak")
+            .map(|(_, value)| value.as_str());
+        assert_eq!(peak, Some("203"));
     }
 
     #[test]
@@ -735,12 +744,18 @@ mod tests {
         for (name, value) in reset {
             assert_eq!(value, "auto", "{name} must return to auto");
         }
-        assert_eq!(reset.len(), extended_range_values(1000).len());
+        assert_eq!(
+            reset.len(),
+            extended_range_values(DisplayTarget::sdr()).len()
+        );
     }
 
     #[test]
     fn the_default_output_of_a_fresh_renderer_is_eight_bit_sdr() {
         assert_eq!(OutputDescription::default().format, PixelFormat::Bgra8);
-        assert_eq!(DEFAULT_TARGET_PEAK_NITS, 1000);
+        assert_eq!(
+            OutputDescription::default().primaries,
+            TargetPrimaries::Auto
+        );
     }
 }

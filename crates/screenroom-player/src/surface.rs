@@ -1,4 +1,3 @@
-use std::ffi::c_void;
 use std::ptr;
 
 use objc2_core_foundation::{CFDictionary, CFNumber, CFRetained, CFString};
@@ -147,8 +146,8 @@ impl SurfaceFrame {
         self.surface.pixel_format()
     }
 
-    pub fn as_ptr(&self) -> *mut c_void {
-        CFRetained::as_ptr(&self.surface).as_ptr().cast()
+    pub fn as_ptr(&self) -> *mut IOSurfaceRef {
+        CFRetained::as_ptr(&self.surface).as_ptr()
     }
 
     pub fn base_address(&self) -> *mut u8 {

@@ -87,6 +87,9 @@ Thumbs.db
 /credentials/
 /secrets/
 
+# The vendored renderer is a standalone package with its own lockfile.
+/vendor/iced_wgpu/Cargo.lock
+
 # Keep lockfiles for reproducible builds.
 !Cargo.lock
 !**/Cargo.lock

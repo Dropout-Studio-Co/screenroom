@@ -6,7 +6,7 @@ members = [
   "crates/screenroom-player",
 ]
 
-exclude = ["reference", ".worktrees"]
+exclude = ["reference", ".worktrees", "vendor"]
 
 [workspace.package]
 version = "0.1.0"
@@ -28,3 +28,6 @@ tempfile = "3"
 [profile.release]
 panic = "abort"
 lto = "thin"
+
+[patch.crates-io]
+iced_wgpu = { path = "vendor/iced_wgpu" }
