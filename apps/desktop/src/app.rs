@@ -59,9 +59,7 @@ const SUGGESTIONS: i64 = 8;
 const QUIT_ROUTING_BUDGET: u8 = 40;
 
 fn hides_its_window() -> bool {
-    crate::quit::check_requested()
-        || crate::play_check::requested()
-        || std::env::var_os("SCREENROOM_WINDOW").is_some_and(|value| value == "hidden")
+    crate::play_check::requests_hidden_window()
 }
 
 pub fn run() -> iced::Result {
@@ -1736,6 +1734,7 @@ impl App {
             run.note_size((frame.width, frame.height));
         }
         run.note(now, delivered, crate::play_check::uploads());
+        run.note_drawn(crate::play_check::draws(), now);
         if run.sample_due(now) {
             run.sample(
                 now,

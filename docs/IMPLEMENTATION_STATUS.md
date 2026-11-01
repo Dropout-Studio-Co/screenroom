@@ -1636,9 +1636,9 @@ That deviation is what keeps the mode read-only and single-file.
 The same 4K mono file through `frame_stall auto-copy`, headless, reports **24.00 fps
 in 10.00 s with no gap ≥ 150 ms**, and the application's loop ran at **48.3 Hz**, so
 the 22 fps is neither decode nor tick-limited: the loss is in the app's own
-frame-copy, upload and redraw path, about 2 fps of 24. Presentation on a visible
-window is still unmeasured, so G2's on-screen half stays open — but it is now a
-measured 21.9 fps delivery path rather than an unknown.
+frame-copy, upload and redraw path, about 2 fps of 24 — a reading the interleaved A/B
+below corrects. Presentation on a visible window was unmeasured at this point; it is
+counted in the next section.
 
 Failure paths, each run against the release binary: missing media and a report path
 inside the media folder are refused before any window exists (`play check refused:
@@ -1648,6 +1648,50 @@ decodes nothing finishes at the requested duration with `delivered_fps,0.000` an
 itself at `seconds + 30`. Thirteen unit tests cover the configuration rules, the CSV
 shape, gap accounting, the first-frame window and the failure line.
 
-Not proven: displayed frames, because there is no callback for them; and the owner's
-3240×2160 Main10 file, because `/Volumes` still holds only `mothership` and
-`Recovery`.
+Not proven at that point: displayed frames, because there was no callback for them;
+and the owner's 3240×2160 Main10 file, because `/Volumes` still held only
+`mothership` and `Recovery`. The first of those is now closed, below.
+
+### Presented frames counted, and an installed bundle walked (2026-11-01)
+
+`presented_frames` no longer has to be `unavailable`. The video primitive counts its
+own draws (`video_surface` calls `play_check::note_draw` once per drawn frame), the
+check reads that counter on every tick, and the report now separates three numbers:
+`uploaded_fps` (texture writes), `drawn_fps` (times the video surface was drawn) and
+`presented_fps` (the same draws, published only when the window was visible). A hidden
+run keeps `presented_frames,unavailable` and says why.
+
+The obvious implementation was wrong, and the measurement caught it. Subscribing to
+`iced::window::frames()` to collect `RedrawRequested` fed those events back into
+`update`, each redraw asked for another, and the application drew at **124.6 Hz** for
+a 12.6 fps picture — an instrument that changed what it measured. The counter in the
+primitive has no such loop. An interleaved A/B against the previous commit (three 4K
+pairs, two 1080p pairs, same machine, same load) puts both builds inside each other's
+noise: 4K delivered 19.212 / 18.992 / 18.936 before and 18.895 / 18.714 / 19.021
+after; 1080p 26.435 / 26.449 before and 26.490 / 26.407 after.
+
+That A/B also corrects the earlier reading of the ~2 fps gap. Today's 4K figure is
+18.7–19.2 fps for both builds, `uploaded_fps` equals `delivered_fps` (exactly one
+texture write per frame), and the machine's load average was 13–24 throughout. There
+is no spare frame in the upload path; the difference from the 21.8–22.0 fps recorded
+under a quieter machine is load, not code. What is genuinely left is the design change
+named before: a GPU (zero-copy) render bridge, or presenting at the source rate
+instead of the window's cadence.
+
+A visible run needs the owner's go-ahead, so it is opt-in twice: the window is shown
+only with `SCREENROOM_WINDOW=visible` **and** `SCREENROOM_ALLOW_FOREGROUND=1`. With
+both set, a 4K run reported `drawn_fps,51.467` and `presented_fps,51.467` over 383
+frames. CPU and RSS sampling also moved off the interface thread onto its own
+one-second thread, so a measurement no longer forks `ps` between two frames.
+
+The installed bundle was then walked with that approval: `dist/Screenroom.app`, a
+scratch library of six generated files, Home → Library (six items, posters drawn) →
+focus → Detail → Player (`bench-4k`, 0:04 / 0:06, audio `aac`) → Space to pause →
+Settings → ⌘Q. The session opened while playing, **5 042 ms** was stored, and after
+the quit the session count was 0 with the position still 5 042 ms. Its menu bar
+enumerated as an Apple menu and a `Screenroom` menu, the menu-bar Quit mechanism
+reported `routed` from the bundle binary itself, and the same bundle reported
+`presented_fps,51.467` on a visible 4K run. Screens are in
+`.artifacts/evidence/walk/`. The window did hold focus for the duration, which is what
+was asked for, and the frontmost application was `Finder` afterwards rather than the
+one that had it before.

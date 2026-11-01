@@ -134,9 +134,9 @@ count of 264 is unchanged otherwise.
 - **The owner's SSD was not mounted**, so no real media was played and all media
   here is generated. The 830-file library evidence from 2026-10-29 stands as it
   was recorded; it was not re-run.
-- **No 4K HEVC measurement was taken**, so the 19.4 fps figure is unchanged and
-  the limitation is still open. It needs the GPU (zero-copy) render bridge, which
-  is a design change rather than a tuning fix.
+- **No 4K HEVC measurement was taken on the owner's own file**, so the 19.4 fps
+  figure is unchanged and the limitation is still open. It needs the GPU
+  (zero-copy) render bridge, which is a design change rather than a tuning fix.
 - **Nothing was pushed, published or deployed.** Commits are local.
 
 ## The application's own 4K path, measured (2026-11-01)
@@ -157,9 +157,35 @@ SCREENROOM_PLAY_CHECK_SECONDS=10 \
 
 The frontmost application was the same before and after every run, no window was
 shown, and nothing was written into a media folder — a report path inside one is
-refused. **Displayed** frames are not claimed: the report writes
-`presented_frames,unavailable`. Step 8's 19.449 fps figure on the owner's hardest
-3240×2160 HEVC file is unchanged and still needs that drive.
+refused. Step 8's 19.449 fps figure on the owner's hardest 3240×2160 HEVC file is
+unchanged and still needs that drive.
+
+## Presented frames counted, and the installed bundle walked (2026-11-01)
+
+The check counts displayed frames now instead of declaring them unknown. `drawn_fps`
+is how often the video surface was drawn; `presented_fps` publishes that number when
+the window was visible and stays `unavailable` when it was hidden.
+
+| Run, release build, 8 s | decoded | uploaded | drawn | presented |
+| --- | ---: | ---: | ---: | ---: |
+| 4K H.264, hidden, 3840×2160 | 18.813 | 18.813 | 51.467 | unavailable |
+| 4K H.264, visible, owner-approved | 18.813 | 18.813 | 51.467 | **51.467 (383 frames)** |
+| 1080p, hidden | 26.470 | 26.335 | 51.590 | unavailable |
+
+The same 4K fixture delivered 18.936–19.212 on the previous commit inside interleaved
+pairs, so this build neither gains nor loses delivery, and `uploaded_fps` equals
+`delivered_fps` — one texture write per frame. Drawing at 51 fps for a 24 fps source
+is the window's cadence, not 51 distinct pictures on screen.
+
+`dist/Screenroom.app` was then walked end to end, with the owner's approval for the
+visible session: Home, Library (six scanned items, posters drawn), Detail, Player
+(`bench-4k`, 0:04 / 0:06, audio `aac`), Space to pause, Settings, ⌘Q. A session was
+open while playing, **5 042 ms** was stored, and after the quit the session count was
+0 with the position still 5 042 ms. The bundle's own binary reported `routed` for the
+menu-bar Quit mechanism and `presented_fps,51.467` for a visible 4K run. Screens are
+in `.artifacts/evidence/walk/`. The window did hold focus for the duration — that is
+what was asked for — and the frontmost application was `Finder` afterwards rather than
+the application that had it before.
 
 ## The smallest remaining manual session
 

@@ -5,12 +5,26 @@ use std::time::{Duration, Instant};
 pub const REPORT_ENV: &str = "SCREENROOM_PLAY_CHECK";
 pub const MEDIA_ENV: &str = "SCREENROOM_PLAY_CHECK_MEDIA";
 pub const SECONDS_ENV: &str = "SCREENROOM_PLAY_CHECK_SECONDS";
+pub const WINDOW_ENV: &str = "SCREENROOM_WINDOW";
+pub const FOREGROUND_ENV: &str = "SCREENROOM_ALLOW_FOREGROUND";
 pub const DEFAULT_SECONDS: f64 = 15.0;
 pub const MIN_SECONDS: f64 = 5.0;
 pub const MAX_SECONDS: f64 = 300.0;
 
 pub fn requested() -> bool {
     std::env::var_os(REPORT_ENV).is_some()
+}
+
+pub fn visible_requested() -> bool {
+    std::env::var(WINDOW_ENV).is_ok_and(|value| value == "visible")
+        && std::env::var(FOREGROUND_ENV).is_ok_and(|value| value == "1")
+}
+
+pub fn requests_hidden_window() -> bool {
+    if std::env::var(WINDOW_ENV).is_ok_and(|value| value == "hidden") {
+        return true;
+    }
+    (requested() || crate::quit::check_requested()) && !visible_requested()
 }
 
 pub fn startup_error() -> Option<String> {
@@ -40,6 +54,16 @@ pub fn note_upload() {
 
 pub fn uploads() -> u64 {
     UPLOADS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+static DRAWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn note_draw() {
+    DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn draws() -> u64 {
+    DRAWS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 #[derive(Debug, Clone)]
@@ -158,7 +182,62 @@ pub struct Run {
     samples: Vec<Sample>,
     next_sample: Option<Instant>,
     rendered: (u32, u32),
+    visible: bool,
+    drawn_frames: u64,
+    drawn_seen: u64,
+    sampler: Option<Sampler>,
     failure: Option<String>,
+}
+
+const MAX_GAPS: usize = 20_000;
+
+pub struct Sampler {
+    reading: std::sync::Arc<std::sync::Mutex<Option<(f64, u64)>>>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Sampler {
+    pub fn start(interval: Duration) -> Self {
+        let reading = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let pid = std::process::id();
+        let shared = std::sync::Arc::clone(&reading);
+        let flag = std::sync::Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            loop {
+                if let Some(value) = sample_process(pid)
+                    && let Ok(mut slot) = shared.lock()
+                {
+                    *slot = Some(value);
+                }
+                for _ in 0..(interval.as_millis() / 25).max(1) {
+                    if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            }
+        });
+        Self {
+            reading,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    pub fn latest(&self) -> Option<(f64, u64)> {
+        self.reading.lock().ok().and_then(|slot| *slot)
+    }
+}
+
+impl Drop for Sampler {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 impl Run {
@@ -178,8 +257,32 @@ impl Run {
             samples: Vec::new(),
             next_sample: None,
             rendered: (0, 0),
+            visible: visible_requested(),
+            drawn_frames: 0,
+            drawn_seen: 0,
+            sampler: None,
             failure: None,
         }
+    }
+
+    pub fn note_window(&mut self, visible: bool) {
+        self.visible = visible;
+    }
+
+    pub fn note_drawn(&mut self, total: u64, _now: Instant) {
+        if self.started.is_none() {
+            return;
+        }
+        if total <= self.drawn_seen {
+            return;
+        }
+        let delta = total - self.drawn_seen;
+        if self.drawn_seen == 0 {
+            self.drawn_seen = total;
+            return;
+        }
+        self.drawn_seen = total;
+        self.drawn_frames += delta;
     }
 
     pub fn config(&self) -> &Config {
@@ -194,6 +297,9 @@ impl Run {
         self.started = Some(now);
         self.last_change = Some(now);
         self.next_sample = Some(now);
+        if self.sampler.is_none() {
+            self.sampler = Some(Sampler::start(Duration::from_secs(1)));
+        }
     }
 
     pub fn fail(&mut self, reason: String) {
@@ -227,7 +333,9 @@ impl Run {
             self.last_change = Some(now);
             return;
         }
-        if let Some(previous) = self.last_change {
+        if let Some(previous) = self.last_change
+            && self.gaps_ms.len() < MAX_GAPS
+        {
             self.gaps_ms
                 .push(now.duration_since(previous).as_secs_f64() * 1_000.0);
         }
@@ -240,7 +348,11 @@ impl Run {
     }
 
     pub fn sample(&mut self, now: Instant, counters: (u64, u64, u64)) {
-        let (cpu, rss_kb) = sample_process(std::process::id()).unwrap_or((0.0, 0));
+        let (cpu, rss_kb) = self
+            .sampler
+            .as_ref()
+            .and_then(Sampler::latest)
+            .unwrap_or((0.0, 0));
         let at = self
             .started
             .map(|started| now.duration_since(started).as_secs_f64())
@@ -358,15 +470,34 @@ impl Run {
             "rss_max_kb",
             rss.iter().copied().max().unwrap_or(0).to_string(),
         );
-        push("presented_frames", "unavailable".to_string());
-        push(
-            "presented_note",
-            "the window is hidden, so iced gives this process no surface present callback"
-                .to_string(),
-        );
+        let drawn_fps = self.drawn_frames as f64 / window;
+        push("drawn_fps", format!("{drawn_fps:.3}"));
+        push("drawn_total", self.drawn_frames.to_string());
+        if self.visible && self.drawn_frames > 0 {
+            push("presented_fps", format!("{drawn_fps:.3}"));
+            push("presented_frames", self.drawn_frames.to_string());
+            push(
+                "presented_note",
+                "the window is visible, so every redraw the compositor asked for was drawn and presented"
+                    .to_string(),
+            );
+        } else {
+            push("presented_fps", "unavailable".to_string());
+            push("presented_frames", "unavailable".to_string());
+            push(
+                "presented_note",
+                if self.visible {
+                    "the window was visible but the compositor asked for no redraw, so nothing was displayed"
+                        .to_string()
+                } else {
+                    "the window is hidden, so the compositor asked for no redraw and nothing was displayed; count uploaded frames instead"
+                        .to_string()
+                },
+            );
+        }
         push(
             "gpu_note",
-            "uploaded counts queue.write_texture calls observed by video_surface::prepare"
+            "uploaded counts queue.write_texture calls observed by video_surface::prepare; drawn counts RedrawRequested events from iced::window::frames"
                 .to_string(),
         );
         push(
@@ -638,9 +769,61 @@ mod tests {
         let summary = run_with(Vec::new(), Vec::new()).summary_rows(Instant::now());
         assert!(!summary.contains("presented_frames,0"), "{summary}");
         assert!(
-            summary.contains("no surface present callback"),
+            summary.contains("presented_frames,unavailable"),
+            "a hidden window must not claim a displayed frame: {summary}"
+        );
+        assert!(
+            summary.contains("no redraw and nothing was displayed"),
             "the report must say why presented frames are unknown: {summary}"
         );
+    }
+
+    #[test]
+    fn a_visible_window_reports_the_frames_it_presented() {
+        let mut run = run_with(Vec::new(), Vec::new());
+        run.note_window(true);
+        let start = run.started.expect("the run is under way");
+        run.note_drawn(100, start);
+        run.note_drawn(124, start + Duration::from_secs(1));
+        let summary = run.summary_rows(Instant::now());
+        assert!(summary.contains("presented_frames,24"), "{summary}");
+        assert!(
+            !summary.contains("presented_fps,unavailable"),
+            "a visible window reports a rate instead of refusing to: {summary}"
+        );
+        assert!(
+            (value(&summary, "presented_fps") - 2.4).abs() < 0.05,
+            "{summary}"
+        );
+        assert!(summary.contains("drawn_total,24"), "{summary}");
+    }
+
+    #[test]
+    fn a_visible_window_that_was_never_redrawn_still_reports_nothing_displayed() {
+        let mut run = run_with(Vec::new(), Vec::new());
+        run.note_window(true);
+        let summary = run.summary_rows(Instant::now());
+        assert!(
+            summary.contains("presented_frames,unavailable"),
+            "{summary}"
+        );
+        assert!(summary.contains("drawn_fps,0.000"), "{summary}");
+    }
+
+    #[test]
+    fn draws_before_the_run_began_are_baselined_and_a_flat_total_adds_nothing() {
+        let mut run = run_with(Vec::new(), Vec::new());
+        run.note_window(true);
+        let start = run.started.expect("the run is under way");
+        run.note_drawn(7, start);
+        assert_eq!(run.drawn_frames, 0, "the run starts from its own baseline");
+        run.note_drawn(7, start + Duration::from_secs(1));
+        assert_eq!(
+            run.drawn_frames, 0,
+            "a draw that did not happen counts as none"
+        );
+        run.note_drawn(10, start + Duration::from_secs(2));
+        assert_eq!(run.drawn_frames, 3);
     }
 
     #[test]

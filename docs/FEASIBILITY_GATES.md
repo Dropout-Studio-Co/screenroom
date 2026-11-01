@@ -47,13 +47,22 @@ Supporting checks in the same tier, all windowless and all runnable on demand:
 `scripts/check-quit-routing.sh`, `scripts/verify-bundle.sh`,
 `cargo run --example library_bench` and `cargo run --example render_bench`. The
 offscreen frame budget they produce is a **ceiling**, not an on-screen frame rate.
-The application's own path is now measured with a hidden window through
-`SCREENROOM_PLAY_CHECK`: **21.8–22.0 fps delivered and 21.7–21.9 fps uploaded at
-3840×2160** on four 4K fixtures, against 24.00 fps from the same player headless and
-a 48 Hz application loop — so the cost is in the frame-copy, upload and redraw path,
-not in decode. Uploads are observed, displayed frames are not: a hidden window gives
-no present callback, so gate G2's on-screen half remains open and needs an
-owner-approved visible session.
+The application's own path is measured through `SCREENROOM_PLAY_CHECK`, and displayed
+frames are counted rather than declared: `drawn_fps` counts the video surface's own
+draws and `presented_fps` publishes that number only when the window was visible, so a
+hidden run still writes `presented_frames,unavailable`. A visible 4K run on
+2026-11-01 reported **51.467 fps over 383 presented frames** — the application's
+present cadence for a 24 fps source, not 51 distinct pictures.
+
+Delivery on this MacBook, 4K H.264 in a release build: **18.7–19.2 fps delivered and
+18.7–18.9 uploaded at 3840×2160**, with `uploaded_fps` equal to `delivered_fps`, one
+texture write per frame. An interleaved A/B against the previous commit, same machine
+and same load, put both builds inside each other's noise, so the earlier attribution
+of a ~2 fps gap to the upload path is not supported: there is no spare frame there.
+The 21.8–22.0 fps recorded earlier stands as a measurement taken under a quieter
+machine, not as a target. A faster 4K path needs the GPU (zero-copy) render bridge, a
+design change rather than a tuning fix. G3's presentation is now measured on macOS;
+G4's quality pass on the owner's own 4K files is still open.
 
 ### Local installation (supporting check, not a gate)
 
