@@ -29,6 +29,7 @@ use crate::design::{self, Level};
 use crate::playback::PlaybackTracker;
 use crate::preview::{PREVIEW_DELAY, Preview, may_preview};
 use crate::probe::{DurationPass, spawn_duration_pass};
+use crate::ui::route::{FocusPos, Nav};
 use crate::video_surface::{Frame, VideoSurface};
 
 const PLAYER_TICK: Duration = Duration::from_millis(16);
@@ -426,6 +427,8 @@ pub struct App {
     screen: Screen,
 
     focus: usize,
+
+    nav: Nav,
 
     settings_focus: usize,
 
@@ -990,6 +993,7 @@ impl App {
             play_check: crate::play_check::Run::from_environment(),
             screen: Screen::Home,
             focus: 0,
+            nav: Nav::new(Screen::Home),
             home: Vec::new(),
             suggestions: Vec::new(),
             browse: Browse::new(),
@@ -1096,8 +1100,8 @@ impl App {
             return;
         };
         match requested.as_str() {
-            "browse" => self.screen = Screen::Browse,
-            "settings" => self.screen = Screen::Settings,
+            "browse" => self.navigate(Screen::Browse),
+            "settings" => self.navigate(Screen::Settings),
             "detail" => {
                 if let Some(file_id) = self.browse.items.first().map(|item| item.id.clone()) {
                     self.open_detail(&file_id);
@@ -1443,9 +1447,33 @@ impl App {
         handled
     }
 
+    fn sync_navigation(&mut self) {
+        self.screen = self.nav.screen();
+        self.focus = self.nav.focus().column;
+    }
+
+    fn navigate(&mut self, screen: Screen) {
+        self.nav.set(screen);
+        self.sync_navigation();
+    }
+
+    fn open_screen(&mut self, screen: Screen) {
+        if self.nav.screen() == screen {
+            self.nav.set(screen);
+        } else {
+            self.nav.push(screen);
+        }
+        self.sync_navigation();
+    }
+
+    fn focus_card(&mut self, column: usize) {
+        self.nav.set_focus(FocusPos { rail: 0, column });
+        self.sync_navigation();
+    }
+
     fn clamp_focus(&mut self) {
         let len = self.visible_len();
-        self.focus = if len == 0 { 0 } else { self.focus.min(len - 1) };
+        self.focus_card(if len == 0 { 0 } else { self.focus.min(len - 1) });
     }
 
     fn home_item(&self, index: usize) -> Option<&LibraryItem> {
@@ -1538,7 +1566,7 @@ impl App {
             _ => (self.screen, self.focus),
         };
 
-        self.focus = episodes
+        let focus = episodes
             .iter()
             .position(|episode| episode.id == item.id)
             .unwrap_or(0);
@@ -1548,7 +1576,8 @@ impl App {
             seasons,
             origin,
         });
-        self.screen = Screen::Detail;
+        self.open_screen(Screen::Detail);
+        self.focus_card(focus);
         self.ensure_artwork();
     }
 
@@ -1645,7 +1674,7 @@ impl App {
         self.mark_pending = None;
         self.auto_skipped = None;
         self.mini = false;
-        self.screen = Screen::Player;
+        self.open_screen(Screen::Player);
     }
 
     fn media_path(&self, item: &LibraryItem) -> Option<PathBuf> {
@@ -2136,7 +2165,7 @@ impl App {
             .map(|active| active.origin)
             .unwrap_or(Screen::Browse);
         self.mini = true;
-        self.screen = origin;
+        self.navigate(origin);
         self.reload();
         self.refresh_detail();
         self.status = Some(
@@ -2152,7 +2181,7 @@ impl App {
         }
         self.mini = false;
         if self.active.is_some() {
-            self.screen = Screen::Player;
+            self.open_screen(Screen::Player);
         }
     }
 
@@ -2175,7 +2204,7 @@ impl App {
             .unwrap_or(Screen::Browse);
 
         self.stop_playback();
-        self.screen = origin;
+        self.navigate(origin);
         self.reload();
         self.refresh_detail();
     }
@@ -2247,7 +2276,7 @@ impl App {
             };
             player.load_at(run.config().media(), None);
             self.player = Some(player);
-            self.screen = Screen::Player;
+            self.open_screen(Screen::Player);
             run.begin(now);
             return false;
         }
@@ -2646,7 +2675,7 @@ impl App {
             return;
         }
         self.profile_id = profile_id.clone();
-        self.focus = 0;
+        self.focus_card(0);
         self.detail = None;
 
         let preferences = Preferences {
@@ -3724,15 +3753,15 @@ impl App {
         match message {
             Message::GoHome => {
                 let leave = self.end_viewing();
-                self.screen = Screen::Home;
-                self.focus = 0;
+                self.navigate(Screen::Home);
+                self.focus_card(0);
                 self.reload_home();
                 return leave;
             }
             Message::GoBrowse => {
                 let leave = self.end_viewing();
-                self.screen = Screen::Browse;
-                self.focus = 0;
+                self.navigate(Screen::Browse);
+                self.focus_card(0);
                 self.reload_browse();
                 return leave;
             }
@@ -3785,14 +3814,14 @@ impl App {
             Message::NextPage => {
                 if self.browse.page + 1 < self.browse.page_count() {
                     self.browse.page += 1;
-                    self.focus = 0;
+                    self.focus_card(0);
                     self.reload_browse();
                 }
             }
             Message::PreviousPage => {
                 if self.browse.page > 0 {
                     self.browse.page -= 1;
-                    self.focus = 0;
+                    self.focus_card(0);
                     self.reload_browse();
                 }
             }
@@ -3852,8 +3881,8 @@ impl App {
 
             Message::GoSettings => {
                 let leave = self.end_viewing();
-                self.screen = Screen::Settings;
-                self.focus = 0;
+                self.navigate(Screen::Settings);
+                self.focus_card(0);
                 self.armed_remove = None;
                 self.armed_restore = None;
                 self.armed_profile = None;
@@ -3893,7 +3922,7 @@ impl App {
                     && let Some(index) =
                         self.browse.items.iter().position(|item| item.id == file_id)
                 {
-                    self.focus = index;
+                    self.focus_card(index);
                 }
             }
             Message::SkipSegment => self.skip_segment(),
@@ -4045,7 +4074,7 @@ impl App {
     fn move_focus(&mut self, direction: Focus) {
         let len = self.visible_len();
         if len == 0 {
-            self.focus = 0;
+            self.focus_card(0);
             return;
         }
         let current = self.focus.min(len - 1);
@@ -4063,7 +4092,7 @@ impl App {
                 (candidate < len).then_some(candidate)
             }
         };
-        self.focus = next.unwrap_or(current);
+        self.focus_card(next.unwrap_or(current));
     }
 
     fn activate(&mut self) {
@@ -4100,20 +4129,23 @@ impl App {
         match self.screen {
             Screen::Player => self.leave_player(),
             Screen::Detail => {
-                let (screen, focus) = self
+                let (screen, column) = self
                     .detail
                     .take()
                     .map(|detail| detail.origin)
                     .unwrap_or((Screen::Browse, 0));
-                self.screen = if screen == Screen::Home {
-                    Screen::Home
-                } else {
-                    Screen::Browse
-                };
-                self.focus = focus;
+                if self.nav.pop().is_none() {
+                    self.navigate(if screen == Screen::Home {
+                        Screen::Home
+                    } else {
+                        Screen::Browse
+                    });
+                    self.focus_card(column);
+                }
+                self.sync_navigation();
                 self.reload();
             }
-            Screen::Browse | Screen::Settings => self.screen = Screen::Home,
+            Screen::Browse | Screen::Settings => self.navigate(Screen::Home),
             Screen::Home => {}
         }
     }
@@ -4143,7 +4175,7 @@ impl App {
                 self.update(Message::ToggleAvailableOnly(wanted))
             }
             Action::Open(index) => {
-                self.focus = index;
+                self.focus_card(index);
                 self.clamp_focus();
                 self.update(Message::Activate)
             }
@@ -6787,7 +6819,7 @@ mod tests {
         let columns = app.columns();
         assert!(columns > DEFAULT_COLUMNS, "this test needs a wider grid");
 
-        app.focus = 0;
+        app.focus_card(0);
         app.move_focus(Focus::Down);
         assert_eq!(app.focus, columns, "Down must move exactly one row");
         app.move_focus(Focus::Up);
@@ -6908,7 +6940,7 @@ mod tests {
             "the flag follows the mode that was asked for"
         );
 
-        app.screen = Screen::Player;
+        app.navigate(Screen::Player);
         let _ = app.handle_key(press(Key::Named(Named::Escape)));
         assert!(
             !app.fullscreen,
@@ -6930,7 +6962,7 @@ mod tests {
         use iced::keyboard::{Event, Key, Modifiers};
 
         let (mut app, _directory) = app_with(2);
-        app.screen = Screen::Player;
+        app.navigate(Screen::Player);
         let press = |key: Key| Event::KeyPressed {
             key,
             modified_key: Key::Unidentified,
@@ -6957,7 +6989,7 @@ mod tests {
     #[test]
     fn a_second_fullscreen_request_while_one_is_in_flight_is_ignored() {
         let (mut app, _directory) = app_with(2);
-        app.screen = Screen::Player;
+        app.navigate(Screen::Player);
 
         let _ = app.update(Message::ToggleFullscreen);
         assert!(
@@ -6989,7 +7021,7 @@ mod tests {
         use iced::keyboard::{Event, Key, Modifiers};
 
         let (mut app, _directory) = app_with(2);
-        app.screen = Screen::Player;
+        app.navigate(Screen::Player);
         let press = |key: Key| Event::KeyPressed {
             key,
             modified_key: Key::Unidentified,
@@ -7022,7 +7054,7 @@ mod tests {
         let report = directory.path().join("terminate.txt");
         app.terminate_check = Some(report.clone());
         app.terminate_routing = crate::quit::TerminateRouting::Routed;
-        app.screen = Screen::Player;
+        app.navigate(Screen::Player);
 
         let _ = app.update(Message::Close);
 
@@ -7165,7 +7197,7 @@ mod tests {
     fn app_with(count: usize) -> (App, tempfile::TempDir) {
         let (library, directory) = library_with(count);
         let mut app = App::with_library(library, None, "test".into());
-        app.screen = Screen::Browse;
+        app.navigate(Screen::Browse);
         app.reload_browse();
         (app, directory)
     }
@@ -7197,7 +7229,7 @@ mod tests {
             .expect("artwork");
 
         let mut app = App::with_library(library, None, "test".into());
-        app.screen = Screen::Browse;
+        app.navigate(Screen::Browse);
         app.reload_browse();
         assert!(
             app.artwork.contains_key(&item.work_id),
@@ -7208,7 +7240,7 @@ mod tests {
     #[test]
     fn a_test_built_app_never_starts_an_extraction() {
         let (mut app, _directory) = app_with(4);
-        app.screen = Screen::Browse;
+        app.navigate(Screen::Browse);
         app.reload_browse();
         assert!(app.extractor.is_none());
         assert!(app.artwork_queued.is_empty());
@@ -7308,8 +7340,8 @@ mod tests {
             reason: "Recently added".to_string(),
         }];
         app.home = vec![all[1].clone()];
-        app.screen = Screen::Home;
-        app.focus = 0;
+        app.navigate(Screen::Home);
+        app.focus_card(0);
 
         assert_eq!(app.visible_len(), 2, "both cards are reachable");
         assert_eq!(
@@ -7407,8 +7439,8 @@ mod tests {
             seasons: Vec::new(),
             origin: (Screen::Browse, 0),
         });
-        app.screen = Screen::Detail;
-        app.focus = 0;
+        app.navigate(Screen::Detail);
+        app.focus_card(0);
         assert!(
             app.columns() > 1,
             "this test only means something when the grid is wider than the list"
@@ -7423,8 +7455,8 @@ mod tests {
         app.move_focus(Focus::Up);
         assert_eq!(app.focus, 1, "and comes back one");
 
-        app.screen = Screen::Browse;
-        app.focus = 0;
+        app.navigate(Screen::Browse);
+        app.focus_card(0);
         app.move_focus(Focus::Down);
         assert_eq!(
             app.focus,
@@ -7436,7 +7468,7 @@ mod tests {
     #[test]
     fn focus_is_clamped_when_a_page_shrinks() {
         let (mut app, _directory) = app_with(10);
-        app.focus = 9;
+        app.focus_card(9);
         app.browse.text = "Title.000".to_string();
         app.reload_browse();
         assert_eq!(app.visible_len(), 1);
@@ -7586,7 +7618,7 @@ mod tests {
     #[test]
     fn detail_starts_on_the_opened_episode_and_back_returns_to_its_card() {
         let (mut app, ids, _directory) = series_app();
-        app.screen = Screen::Browse;
+        app.navigate(Screen::Browse);
         app.reload_browse();
         assert_eq!(
             app.browse.items.len(),
@@ -7597,7 +7629,7 @@ mod tests {
             app.browse.items[0].id, ids[0],
             "represented by its first episode"
         );
-        app.focus = 0;
+        app.focus_card(0);
         app.activate();
         assert_eq!(app.screen, Screen::Detail);
         let detail = app.detail.as_ref().expect("detail");
@@ -7620,7 +7652,7 @@ mod tests {
     #[test]
     fn back_from_detail_returns_to_the_card_and_the_watch_filter_narrows() {
         let (mut app, _directory) = app_with(4);
-        app.focus = 2;
+        app.focus_card(2);
         let opened = app.browse.items[2].id.clone();
         app.activate();
         assert_eq!(app.detail.as_ref().map(|d| d.item.id.clone()), Some(opened));
@@ -7657,7 +7689,7 @@ mod tests {
             load_id: 0,
             seek_serial: 0,
         });
-        app.screen = Screen::Player;
+        app.navigate(Screen::Player);
 
         app.advance_to_next_episode();
         let up = app.up_next.as_ref().expect("the next episode is offered");
@@ -7694,7 +7726,7 @@ mod tests {
             load_id: 0,
             seek_serial: 0,
         });
-        app.screen = Screen::Player;
+        app.navigate(Screen::Player);
         app.advance_to_next_episode();
         assert!(app.up_next.is_some());
         app.replay();
@@ -8199,7 +8231,7 @@ mod tests {
                 load_id: 0,
                 seek_serial: 0,
             });
-            app.screen = Screen::Player;
+            app.navigate(Screen::Player);
             app.snapshot = App::playing_snapshot(30.0, 100.0);
 
             let _ = app.update(go);
