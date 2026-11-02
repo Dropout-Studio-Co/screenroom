@@ -1116,6 +1116,7 @@ mod tests {
         let scanner =
             LibraryScanner::new(&library).with_limits(10_000, 32, Duration::from_secs(15));
 
+        let _observer = crate::library::commit_observer::test_guard();
         let seen = Arc::new(AtomicUsize::new(0));
         let committed = Arc::clone(&seen);
         crate::library::commit_observer::install(Arc::new(move || {
@@ -1149,6 +1150,7 @@ mod tests {
         let scanner =
             LibraryScanner::new(&library).with_limits(10_000, 32, Duration::from_secs(15));
 
+        let _observer = crate::library::commit_observer::test_guard();
         let commits = Arc::new(AtomicUsize::new(0));
         let thread = std::thread::current().id();
         let counted = Arc::clone(&commits);
