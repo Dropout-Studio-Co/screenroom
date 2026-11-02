@@ -2,6 +2,7 @@ use std::ffi::{c_char, c_int, c_void};
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use crate::display::DisplayTarget;
 use crate::frame::{OutputDescription, PixelFormat};
@@ -12,6 +13,10 @@ pub const UPDATE_FRAME: u64 = 1;
 
 const SURFACE_POOL_SIZE: usize = 3;
 const MAX_SURFACE_POOL_SIZE: usize = 16;
+
+const FENCE_TIMEOUT: Duration = Duration::from_secs(1);
+
+const READER_GRACE: Duration = Duration::from_millis(250);
 
 const PARAM_API_TYPE: c_int = 1;
 const PARAM_OPENGL_INIT_PARAMS: c_int = 2;
@@ -35,6 +40,14 @@ const GL_HALF_FLOAT: u32 = 0x140b;
 const GL_FRAMEBUFFER: u32 = 0x8d40;
 const GL_COLOR_ATTACHMENT0: u32 = 0x8ce0;
 const GL_FRAMEBUFFER_COMPLETE: u32 = 0x8cd5;
+
+const GL_SYNC_GPU_COMMANDS_COMPLETE: u32 = 0x9117;
+
+const GL_SYNC_FLUSH_COMMANDS_BIT: u32 = 0x0001;
+const GL_ALREADY_SIGNALED: u32 = 0x911a;
+const GL_TIMEOUT_EXPIRED: u32 = 0x911b;
+const GL_CONDITION_SATISFIED: u32 = 0x911c;
+const GL_WAIT_FAILED: u32 = 0x911d;
 
 const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
 
@@ -79,7 +92,9 @@ unsafe extern "C" {
         level: i32,
     );
     fn glCheckFramebufferStatus(target: u32) -> u32;
-    fn glFinish();
+    fn glFenceSync(condition: u32, flags: u32) -> *mut c_void;
+    fn glClientWaitSync(sync: *mut c_void, flags: u32, timeout: u64) -> u32;
+    fn glDeleteSync(sync: *mut c_void);
 }
 
 unsafe extern "C" {
@@ -204,6 +219,80 @@ fn gl_formats(format: PixelFormat) -> (u32, u32, u32) {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FenceOutcome {
+    Signalled,
+    Waiting,
+    Failed,
+}
+
+struct GlFence {
+    handle: NonNull<c_void>,
+}
+
+impl GlFence {
+    fn record() -> Option<Self> {
+        NonNull::new(unsafe { glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0) })
+            .map(|handle| Self { handle })
+    }
+
+    fn probe(&self) -> FenceOutcome {
+        FenceOutcome::from_code(unsafe {
+            glClientWaitSync(self.handle.as_ptr(), GL_SYNC_FLUSH_COMMANDS_BIT, 0)
+        })
+    }
+
+    fn wait(&self, timeout: Duration) -> FenceOutcome {
+        FenceOutcome::from_code(unsafe {
+            glClientWaitSync(
+                self.handle.as_ptr(),
+                GL_SYNC_FLUSH_COMMANDS_BIT,
+                timeout.as_nanos().min(u64::MAX as u128) as u64,
+            )
+        })
+    }
+}
+
+impl FenceOutcome {
+    fn from_code(code: u32) -> Self {
+        match code {
+            GL_ALREADY_SIGNALED | GL_CONDITION_SATISFIED => Self::Signalled,
+            GL_TIMEOUT_EXPIRED => Self::Waiting,
+            GL_WAIT_FAILED => Self::Failed,
+            _ => Self::Failed,
+        }
+    }
+}
+
+impl Drop for GlFence {
+    fn drop(&mut self) {
+        unsafe { glDeleteSync(self.handle.as_ptr()) };
+    }
+}
+
+impl std::fmt::Debug for GlFence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GlFence").finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct SlotWrite {
+    generation: u64,
+    pending: bool,
+}
+
+impl SlotWrite {
+    fn begin(&mut self, generation: u64) {
+        self.generation = generation;
+        self.pending = true;
+    }
+
+    fn settle(&mut self) {
+        self.pending = false;
+    }
+}
+
 pub fn target_internal_format(format: PixelFormat) -> u32 {
     gl_formats(format).0
 }
@@ -212,6 +301,9 @@ struct Slot {
     surface: Arc<SurfaceFrame>,
     texture: u32,
     framebuffer: u32,
+    write: SlotWrite,
+    fence: Option<GlFence>,
+    published_at: Option<Instant>,
 }
 
 impl Slot {
@@ -282,7 +374,26 @@ impl Slot {
             surface,
             texture,
             framebuffer,
+            write: SlotWrite::default(),
+            fence: None,
+            published_at: None,
         })
+    }
+
+    fn writable_at(&self, now: Instant) -> bool {
+        Arc::strong_count(&self.surface) == 1 && !self.write.pending && self.reads_settled(now)
+    }
+
+    fn reads_reported(&self) -> bool {
+        !self.surface.reads().outstanding()
+    }
+
+    fn reads_settled(&self, now: Instant) -> bool {
+        if self.reads_reported() {
+            return true;
+        }
+        self.published_at
+            .is_some_and(|published| now.saturating_duration_since(published) >= READER_GRACE)
     }
 
     fn destroy(&self) {
@@ -299,6 +410,7 @@ impl std::fmt::Debug for Slot {
             .field("size", &(self.surface.width(), self.surface.height()))
             .field("texture", &self.texture)
             .field("framebuffer", &self.framebuffer)
+            .field("write", &self.write)
             .finish_non_exhaustive()
     }
 }
@@ -314,7 +426,8 @@ pub struct GlRenderer {
     height: u32,
     generation: u64,
     skipped: u64,
-    previous_surface: Option<Arc<SurfaceFrame>>,
+    fence_timeouts: u64,
+    reclaimed_while_reading: u64,
     output: OutputDescription,
     target_failure: Option<String>,
 }
@@ -326,6 +439,8 @@ impl std::fmt::Debug for GlRenderer {
             .field("slots", &self.slots)
             .field("generation", &self.generation)
             .field("skipped", &self.skipped)
+            .field("fence_timeouts", &self.fence_timeouts)
+            .field("reclaimed_while_reading", &self.reclaimed_while_reading)
             .finish_non_exhaustive()
     }
 }
@@ -371,8 +486,8 @@ pub fn reset_extended_range(core: &Mpv) -> Result<(), PlayerError> {
     Ok(())
 }
 
-fn free_slot<T>(slots: &[T], shared: impl Fn(&T) -> usize) -> Option<usize> {
-    slots.iter().position(|slot| shared(slot) == 1)
+fn writable_slot(slots: &[Slot], now: Instant) -> Option<usize> {
+    slots.iter().position(|slot| slot.writable_at(now))
 }
 
 impl GlRenderer {
@@ -442,7 +557,8 @@ impl GlRenderer {
             height: 0,
             generation: 0,
             skipped: 0,
-            previous_surface: None,
+            fence_timeouts: 0,
+            reclaimed_while_reading: 0,
             output: OutputDescription::sdr_bgra8(),
             target_failure: None,
         })
@@ -506,6 +622,14 @@ impl GlRenderer {
         self.skipped
     }
 
+    pub fn fence_timeouts(&self) -> u64 {
+        self.fence_timeouts
+    }
+
+    pub fn reclaimed_while_reading(&self) -> u64 {
+        self.reclaimed_while_reading
+    }
+
     pub fn render(&mut self) -> Result<Option<Frame>, PlayerError> {
         if self.width == 0 || self.height == 0 {
             return Ok(None);
@@ -516,8 +640,9 @@ impl GlRenderer {
             )));
         }
         self.cgl.make_current()?;
+        self.settle_fences();
         self.reap_surplus_slots();
-        let index = match free_slot(&self.slots, |slot| Arc::strong_count(&slot.surface)) {
+        let index = match writable_slot(&self.slots, Instant::now()) {
             Some(index) => index,
             None if self.slots.len() < MAX_SURFACE_POOL_SIZE => {
                 match Slot::create(&self.cgl, self.width, self.height, self.output.format) {
@@ -537,6 +662,9 @@ impl GlRenderer {
             }
         };
         let framebuffer = self.slots[index].framebuffer;
+        if !self.slots[index].reads_reported() {
+            self.reclaimed_while_reading += 1;
+        }
         let (internal_format, _, _) = gl_formats(self.output.format);
         let mut fbo = OpenGlFbo {
             fbo: framebuffer as c_int,
@@ -570,11 +698,11 @@ impl GlRenderer {
         ];
 
         self.generation += 1;
+        let generation = self.generation;
         unsafe { glBindFramebuffer(GL_FRAMEBUFFER, framebuffer) };
-        let began = std::time::Instant::now();
+        let began = Instant::now();
         let code =
             unsafe { (self.symbols.render)(self.context.as_ptr(), params.as_mut_ptr().cast()) };
-        unsafe { glFinish() };
         let drawn = began.elapsed();
         if code < 0 {
             return Err(PlayerError::Mpv {
@@ -583,34 +711,70 @@ impl GlRenderer {
                 code,
             });
         }
-        if std::env::var_os("SCREENROOM_PLAYER_TRACE").is_some() {
-            eprintln!(
-                "[gl_render] {}x{} slot {} — libmpv {:?}, glFinish included",
-                self.width, self.height, index, drawn
-            );
-        }
-        let surface = Arc::clone(&self.slots[index].surface);
-        self.previous_surface = Some(Arc::clone(&surface));
+        self.slots[index].write.begin(generation);
+        let Some(fence) = GlFence::record() else {
+            return Err(PlayerError::Unavailable(
+                "the OpenGL driver refused a fence sync object".to_string(),
+            ));
+        };
+        let outcome = match fence.probe() {
+            FenceOutcome::Signalled => FenceOutcome::Signalled,
+            FenceOutcome::Waiting => fence.wait(FENCE_TIMEOUT),
+            FenceOutcome::Failed => FenceOutcome::Failed,
+        };
         if let Some(report_swap) = self.symbols.report_swap {
             unsafe { report_swap(self.context.as_ptr()) };
         }
+        match outcome {
+            FenceOutcome::Signalled => {}
+            FenceOutcome::Waiting => {
+                self.fence_timeouts += 1;
+                self.skipped += 1;
+                self.slots[index].fence = Some(fence);
+                return Ok(None);
+            }
+            FenceOutcome::Failed => {
+                return Err(PlayerError::Unavailable(
+                    "the OpenGL fence for this frame could not be waited on".to_string(),
+                ));
+            }
+        }
+        self.slots[index].write.settle();
+        self.slots[index].published_at = Some(Instant::now());
+        if std::env::var_os("SCREENROOM_PLAYER_TRACE").is_some() {
+            eprintln!(
+                "[gl_render] {}x{} slot {} generation {generation} — libmpv {drawn:?}, fence waited",
+                self.width, self.height, index
+            );
+        }
+        let surface = Arc::clone(&self.slots[index].surface);
         Ok(Some(Frame::gpu(
             self.width,
             self.height,
             surface,
-            self.generation,
+            generation,
         )))
+    }
+
+    fn settle_fences(&mut self) {
+        for slot in &mut self.slots {
+            let Some(fence) = slot.fence.as_ref() else {
+                continue;
+            };
+            if fence.probe() == FenceOutcome::Signalled {
+                slot.fence = None;
+                slot.write.settle();
+            }
+        }
     }
 
     fn reap_surplus_slots(&mut self) {
         if self.slots.len() <= SURFACE_POOL_SIZE {
             return;
         }
-        if self
-            .slots
-            .iter()
-            .any(|slot| Arc::strong_count(&slot.surface) != 1)
-        {
+        if self.slots.iter().any(|slot| {
+            Arc::strong_count(&slot.surface) != 1 || slot.write.pending || slot.fence.is_some()
+        }) {
             return;
         }
         while self.slots.len() > SURFACE_POOL_SIZE {
@@ -649,32 +813,176 @@ mod tests {
     use super::*;
     use crate::frame::TargetPrimaries;
 
+    fn bare_slot() -> Slot {
+        Slot {
+            surface: Arc::new(SurfaceFrame::new(4, 4).expect("a surface exists")),
+            texture: 0,
+            framebuffer: 0,
+            write: SlotWrite::default(),
+            fence: None,
+            published_at: None,
+        }
+    }
+
+    fn pool(count: usize) -> Vec<Slot> {
+        (0..count).map(|_| bare_slot()).collect()
+    }
+
+    fn published(slot: &mut Slot, generation: u64) {
+        slot.write.begin(generation);
+        slot.write.settle();
+        slot.published_at = Some(Instant::now());
+    }
+
+    fn sampled(slot: &Slot, generation: u64) {
+        slot.surface.reads().note_reading(generation);
+    }
+
+    fn release(slot: &Slot, generation: u64) {
+        slot.surface.reads().note_released(generation);
+    }
+
     #[test]
     fn a_free_slot_is_the_first_surface_nobody_holds() {
-        let slots: Vec<Arc<u32>> = (0..SURFACE_POOL_SIZE as u32).map(Arc::new).collect();
-        let shared = |slot: &Arc<u32>| Arc::strong_count(slot);
-        assert_eq!(free_slot(&slots, shared), Some(0));
+        let slots = pool(SURFACE_POOL_SIZE);
+        let now = Instant::now();
+        assert_eq!(writable_slot(&slots, now), Some(0));
 
-        let held = Arc::clone(&slots[0]);
-        assert_eq!(free_slot(&slots, shared), Some(1));
+        let held = Arc::clone(&slots[0].surface);
+        assert_eq!(writable_slot(&slots, now), Some(1));
         drop(held);
-        assert_eq!(free_slot(&slots, shared), Some(0));
+        assert_eq!(writable_slot(&slots, now), Some(0));
     }
 
     #[test]
     fn a_pool_whose_surfaces_are_all_held_offers_nothing() {
-        let slots: Vec<Arc<u32>> = (0..SURFACE_POOL_SIZE as u32).map(Arc::new).collect();
-        let shared = |slot: &Arc<u32>| Arc::strong_count(slot);
-        let held: Vec<Arc<u32>> = slots.iter().map(Arc::clone).collect();
-        assert_eq!(free_slot(&slots, shared), None);
+        let slots = pool(SURFACE_POOL_SIZE);
+        let now = Instant::now();
+        let held: Vec<Arc<SurfaceFrame>> =
+            slots.iter().map(|slot| Arc::clone(&slot.surface)).collect();
+        assert_eq!(writable_slot(&slots, now), None);
         drop(held);
-        assert_eq!(free_slot(&slots, shared), Some(0));
+        assert_eq!(writable_slot(&slots, now), Some(0));
     }
 
     #[test]
     fn an_empty_pool_offers_nothing() {
-        let slots: Vec<Arc<u32>> = Vec::new();
-        assert_eq!(free_slot(&slots, Arc::strong_count), None);
+        let slots: Vec<Slot> = Vec::new();
+        assert_eq!(writable_slot(&slots, Instant::now()), None);
+    }
+
+    #[test]
+    fn a_surface_is_not_handed_out_again_until_its_fence_has_signalled() {
+        let mut slots = pool(1);
+        let now = Instant::now();
+        slots[0].write.begin(7);
+        assert_eq!(
+            writable_slot(&slots, now),
+            None,
+            "the GPU may still be drawing generation 7 into this surface"
+        );
+        slots[0].write.settle();
+        assert_eq!(
+            writable_slot(&slots, now),
+            Some(0),
+            "a signalled fence alone makes the slot usable again when nobody is reading it"
+        );
+    }
+
+    #[test]
+    fn a_surface_is_not_handed_out_again_until_the_consumer_says_it_is_done_with_it() {
+        let mut slots = pool(1);
+        let now = Instant::now();
+        published(&mut slots[0], 9);
+        sampled(&slots[0], 9);
+        assert!(
+            !slots[0].reads_reported(),
+            "the consumer has not confirmed that generation 9 was read"
+        );
+        assert_eq!(
+            writable_slot(&slots, now),
+            None,
+            "the picture on screen may still be sampled from this surface"
+        );
+        release(&slots[0], 9);
+        assert!(slots[0].reads_reported());
+        assert_eq!(writable_slot(&slots, now), Some(0));
+    }
+
+    #[test]
+    fn a_surface_nobody_sampled_is_reusable_at_once() {
+        let mut slots = pool(1);
+        let now = Instant::now();
+        published(&mut slots[0], 4);
+        assert_eq!(
+            writable_slot(&slots, now),
+            Some(0),
+            "a frame that was published but never imported has no reader to wait for, so a \
+             hidden window cannot throttle the player"
+        );
+    }
+
+    #[test]
+    fn a_reader_that_never_reports_is_reclaimed_after_the_grace_period() {
+        let mut slots = pool(1);
+        let before = Instant::now();
+        published(&mut slots[0], 3);
+        sampled(&slots[0], 3);
+        slots[0].published_at = Some(before);
+        assert_eq!(writable_slot(&slots, before), None);
+        assert_eq!(
+            writable_slot(&slots, before + READER_GRACE - Duration::from_millis(1)),
+            None,
+            "the grace period must not be ridden through on its last millisecond"
+        );
+        assert_eq!(
+            writable_slot(&slots, before + READER_GRACE),
+            Some(0),
+            "a lost completion report must not wedge the pool forever"
+        );
+        assert!(!slots[0].reads_reported());
+    }
+
+    #[test]
+    fn a_pool_active_frames_still_being_read_skips_a_frame_instead_of_overwriting_one() {
+        let mut slots = pool(SURFACE_POOL_SIZE);
+        let now = Instant::now();
+        for (index, slot) in slots.iter_mut().enumerate() {
+            published(slot, index as u64 + 1);
+            slot.surface.reads().note_reading(index as u64 + 1);
+        }
+        assert_eq!(
+            writable_slot(&slots, now),
+            None,
+            "every surface is showing a frame, so the next frame is dropped rather than torn"
+        );
+        slots[1].surface.reads().note_released(2);
+        assert_eq!(writable_slot(&slots, now), Some(1));
+    }
+
+    #[test]
+    fn a_long_reuse_run_draws_every_generation_once_and_only_into_acknowledged_surfaces() {
+        let mut slots = pool(SURFACE_POOL_SIZE);
+        let now = Instant::now();
+        let mut drawn = std::collections::BTreeSet::new();
+        for generation in 1..=12_u64 {
+            let index = writable_slot(&slots, now).expect("the consumer keeps releasing surfaces");
+            assert!(
+                slots[index].reads_reported(),
+                "slot {index} was handed out while generation {} was still being read",
+                slots[index].write.generation
+            );
+            assert!(
+                drawn.insert(generation),
+                "generation {generation} was drawn twice"
+            );
+            slots[index].write.begin(generation);
+            slots[index].write.settle();
+            slots[index].published_at = Some(now);
+            sampled(&slots[index], generation);
+            release(&slots[index], generation);
+        }
+        assert_eq!(drawn.len(), 12);
     }
 
     #[test]

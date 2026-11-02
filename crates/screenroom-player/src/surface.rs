@@ -1,4 +1,6 @@
 use std::ptr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use objc2_core_foundation::{CFDictionary, CFNumber, CFRetained, CFString};
 use objc2_io_surface::{
@@ -23,6 +25,27 @@ fn pixel_format_number(format: PixelFormat) -> Result<u32, PlayerError> {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct SurfaceReads {
+    begun: AtomicU64,
+
+    finished: AtomicU64,
+}
+
+impl SurfaceReads {
+    pub fn note_reading(&self, generation: u64) {
+        self.begun.fetch_max(generation, Ordering::AcqRel);
+    }
+
+    pub fn note_released(&self, generation: u64) {
+        self.finished.fetch_max(generation, Ordering::AcqRel);
+    }
+
+    pub fn outstanding(&self) -> bool {
+        self.begun.load(Ordering::Acquire) > self.finished.load(Ordering::Acquire)
+    }
+}
+
 pub struct SurfaceFrame {
     surface: CFRetained<IOSurfaceRef>,
 
@@ -33,6 +56,8 @@ pub struct SurfaceFrame {
     bytes_per_row: u32,
 
     format: PixelFormat,
+
+    reads: Arc<SurfaceReads>,
 }
 
 unsafe impl Send for SurfaceFrame {}
@@ -119,7 +144,12 @@ impl SurfaceFrame {
             height: created_height,
             bytes_per_row: created_row as u32,
             format,
+            reads: Arc::new(SurfaceReads::default()),
         })
+    }
+
+    pub fn reads(&self) -> &Arc<SurfaceReads> {
+        &self.reads
     }
 
     pub fn width(&self) -> u32 {

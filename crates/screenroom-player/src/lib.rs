@@ -32,7 +32,7 @@ pub use frame::{
 pub use gl_render::GlRenderer;
 
 #[cfg(target_os = "macos")]
-pub use surface::SurfaceFrame;
+pub use surface::{SurfaceFrame, SurfaceReads};
 
 pub use worker::{
     HdrMode, HwdecMode, MediaTrack, NO_TRACK, Player, PlayerCommand, PlayerFailure, PlayerSnapshot,
