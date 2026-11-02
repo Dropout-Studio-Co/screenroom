@@ -294,8 +294,7 @@ impl std::fmt::Display for SortChoice {
 }
 
 impl SortChoice {
-    #[cfg(test)]
-    const ALL: [Self; 4] = [Self::Title, Self::Added, Self::Year, Self::Progress];
+    pub const ALL: [Self; 4] = [Self::Title, Self::Added, Self::Year, Self::Progress];
 
     fn label(self) -> &'static str {
         match self {
@@ -1250,11 +1249,18 @@ impl App {
             return;
         };
         match requested.as_str() {
-            "browse" => self.navigate(Screen::Browse),
+            "home" => self.navigate(Screen::Home),
+            "browse" | "library" => self.navigate(Screen::Browse),
             "settings" => self.navigate(Screen::Settings),
             "detail" => {
                 if let Some(file_id) = self.browse.items.first().map(|item| item.id.clone()) {
                     self.open_detail(&file_id);
+                }
+            }
+            "player" => {
+                if let Some(file_id) = self.browse.items.first().map(|item| item.id.clone()) {
+                    self.open_detail(&file_id);
+                    self.open_player(&file_id, true);
                 }
             }
             _ => {}
@@ -4705,11 +4711,33 @@ impl App {
             Action::GoLibrary => self.update(Message::GoBrowse),
             Action::GoSettings => self.update(Message::GoSettings),
             Action::Refresh => self.update(Message::Refresh),
-            Action::Close => self.update(Message::Close),
+            Action::Search => self.update(Message::GoBrowse),
             Action::ChooseFolder => self.update(Message::ChooseFolder),
             Action::AddFolder => self.update(Message::AddFolder),
             Action::PreviousPage => self.update(Message::PreviousPage),
             Action::NextPage => self.update(Message::NextPage),
+            Action::FilterAll => self.update(Message::KindChanged(KindFilter::All)),
+            Action::FilterFilms => self.update(Message::KindChanged(KindFilter::Movies)),
+            Action::FilterSeries => self.update(Message::KindChanged(KindFilter::Series)),
+            Action::ToggleUnwatched => {
+                let wanted = if self.browse.watch == WatchFilter::Unwatched {
+                    WatchFilter::Any
+                } else {
+                    WatchFilter::Unwatched
+                };
+                self.update(Message::WatchChanged(wanted))
+            }
+            Action::Sort(index) => match SortChoice::ALL.get(index) {
+                Some(choice) => self.update(Message::SortChanged(*choice)),
+                None => Task::none(),
+            },
+            Action::Genre(index) => match index {
+                0 => self.update(Message::GenreChanged(None)),
+                wanted => match self.browse.genres.get(wanted - 1) {
+                    Some(genre) => self.update(Message::GenreChanged(Some(genre.clone()))),
+                    None => Task::none(),
+                },
+            },
             Action::ToggleWatchlistOnly => {
                 let wanted = !self.browse.watchlist_only;
                 self.update(Message::ToggleWatchlistOnly(wanted))
@@ -4734,6 +4762,20 @@ impl App {
                 }
                 self.update(Message::Activate)
             }
+            Action::PlayHero => {
+                let wanted = self.home_hero().map(|item| item.id.clone());
+                match wanted {
+                    Some(file_id) => self.update(Message::Play(file_id)),
+                    None => Task::none(),
+                }
+            }
+            Action::OpenHero => {
+                let wanted = self.home_hero().map(|item| item.id.clone());
+                match wanted {
+                    Some(file_id) => self.update(Message::OpenDetail(file_id)),
+                    None => Task::none(),
+                }
+            }
             Action::PlayDetail | Action::RestartDetail => {
                 let Some(file_id) = self.detail.as_ref().map(|detail| detail.item.id.clone())
                 else {
@@ -4742,6 +4784,32 @@ impl App {
                 self.open_player(&file_id, action == Action::RestartDetail);
                 Task::none()
             }
+            Action::BackFromDetail => self.update(Message::Back),
+            Action::Season(index) => {
+                let wanted = self
+                    .detail
+                    .as_ref()
+                    .and_then(|detail| detail.seasons.get(index).copied());
+                match wanted {
+                    Some(season) => self.update(Message::SeasonChosen(season)),
+                    None => Task::none(),
+                }
+            }
+            Action::SettingsSection(index) => {
+                match ui::screens::settings::Section::ALL.get(index) {
+                    Some(section) => self.update(Message::SettingsSection(*section)),
+                    None => Task::none(),
+                }
+            }
+            Action::Settings(index) => {
+                self.settings_focus = index;
+                self.run_settings_action()
+            }
+            Action::SettingsStep(index, increase) => self.step_settings_slider(index, increase),
+            Action::Extra(index) => match self.accessible_extras().messages.get(index).cloned() {
+                Some(message) => self.update(message),
+                None => Task::none(),
+            },
             Action::ToggleFavourite => {
                 self.toggle_focused_flag(Flag::Favorite);
                 Task::none()
@@ -4764,10 +4832,6 @@ impl App {
                 };
                 self.update(Message::HideFromContinue(edition_id))
             }
-            Action::Settings(index) => {
-                self.settings_focus = index;
-                self.run_settings_action()
-            }
             Action::TogglePlay => self.update(Message::TogglePlay),
             Action::SeekBack => self.update(Message::SeekStep(-SEEK_STEP)),
             Action::SeekForward => self.update(Message::SeekStep(SEEK_STEP)),
@@ -4783,6 +4847,7 @@ impl App {
                 self.update(Message::VolumeCommit)
             }
             Action::ToggleFullscreen => self.update(Message::ToggleFullscreen),
+            Action::CancelScan => self.update(Message::CancelScan),
             Action::BackFromPlayer => self.update(Message::BackFromPlayer),
             Action::PlayNext => self.update(Message::PlayNextNow),
             Action::CancelNext => self.update(Message::CancelNext),
@@ -5032,7 +5097,7 @@ impl App {
     }
 
     fn accessible_screen(&self) -> crate::accessibility::ScreenFacts<'_> {
-        use crate::accessibility::{Filters, Flags, Page, Player, ScreenFacts, Surface};
+        use crate::accessibility::{ScreenFacts, Surface};
         let surface = match self.screen {
             Screen::Home => Surface::Home,
             Screen::Browse => Surface::Browse,
@@ -5044,101 +5109,668 @@ impl App {
         facts.status = self.status.clone();
         facts.error = self.error.clone();
         match self.screen {
-            Screen::Home => {
-                let sections = self.home_sections();
-                facts.items = sections
-                    .iter()
-                    .flat_map(|(_, items)| items.iter().copied())
-                    .collect();
-                facts.focus = self.home_flat_index();
-            }
-            Screen::Browse => {
-                facts.items = self.browse.items.iter().collect();
-                facts.focus = Some(self.focus);
-                facts.page = Some(Page {
-                    index: self.browse.page,
-                    count: self.browse.page_count(),
-                });
-                facts.filters = Some(Filters {
-                    watchlist: self.browse.watchlist_only,
-                    favourites: self.browse.favorites_only,
-                    available: self.browse.available_only,
-                });
-            }
-            Screen::Detail => {
-                if let Some(detail) = &self.detail {
-                    facts.subject = Some(&detail.item);
-                    facts.items = if detail.episodes.is_empty() {
-                        vec![&detail.item]
-                    } else {
-                        detail.season_episodes().iter().collect()
-                    };
-                    facts.flags = Some(Flags {
-                        favourite: detail.item.favorite,
-                        watchlist: detail.item.watchlisted,
-                        watched: detail.item.watched,
-                    });
+            Screen::Home => self.home_accessibility(&mut facts),
+            Screen::Browse => self.browse_accessibility(&mut facts),
+            Screen::Detail => self.detail_accessibility(&mut facts),
+            Screen::Settings => self.settings_accessibility(&mut facts),
+            Screen::Player => self.player_accessibility(&mut facts),
+        }
+        facts.extras = self.accessible_extras().controls;
+        facts.scan = self.scan_accessibility();
+        facts
+    }
+
+    fn scan_accessibility(&self) -> Option<String> {
+        self.scan_token.as_ref()?;
+        if self.scan_quiet {
+            return None;
+        }
+        let elapsed = self
+            .scan_started_ms
+            .map(|started| (now_ms() - started).max(0) / 1_000)
+            .unwrap_or(0);
+        Some(format!(
+            "{} entries · {} imported · {elapsed}s",
+            self.scan_visited, self.scan_imported
+        ))
+    }
+
+    fn home_hero(&self) -> Option<&LibraryItem> {
+        let suggested: Vec<&LibraryItem> = self
+            .suggestions
+            .iter()
+            .map(|suggestion| &suggestion.item)
+            .collect();
+        let resume = self
+            .home
+            .first()
+            .or_else(|| self.suggestions.first().map(|suggestion| &suggestion.item));
+        ui::screens::home::hero_item(resume, &self.home, &suggested)
+    }
+
+    fn home_accessibility<'a>(&'a self, facts: &mut crate::accessibility::ScreenFacts<'a>) {
+        use crate::accessibility::{Hero, Listing};
+        let sections = self.home_sections();
+        let hero = self.home_hero();
+        let suggested: Vec<&LibraryItem> = self
+            .suggestions
+            .iter()
+            .map(|suggestion| &suggestion.item)
+            .collect();
+        let empty = self.home.is_empty() && suggested.is_empty();
+        facts.heading = match hero {
+            Some(item) => crate::accessibility::item_label(item),
+            None if empty => "Bring your own films".to_string(),
+            None => "Home".to_string(),
+        };
+        facts.hero = hero.map(|item| {
+            let watching = ui::screens::home::in_progress(item);
+            Hero {
+                title: crate::accessibility::item_label(item),
+                eyebrow: if watching {
+                    "CONTINUE WATCHING"
+                } else {
+                    "RECENTLY ADDED"
                 }
-                facts.focus = Some(self.focus);
+                .to_string(),
+                detail: hero_detail(item),
+                primary: if watching { "Resume" } else { "Play" }.to_string(),
+                secondary: "Details".to_string(),
+                playable: item.available,
             }
-            Screen::Settings => {
-                facts.settings = self
-                    .settings_labels()
-                    .into_iter()
-                    .zip(self.settings_activations())
-                    .map(|(label, activation)| (label, activation.is_some()))
-                    .collect();
-                facts.settings_focus = self.settings_focus;
+        });
+        facts.listing = Listing::Sectioned(
+            sections
+                .into_iter()
+                .map(|(label, items)| (label.to_string(), items))
+                .collect(),
+        );
+        facts.focus = self.home_flat_index();
+    }
+
+    fn browse_accessibility<'a>(&'a self, facts: &mut crate::accessibility::ScreenFacts<'a>) {
+        use crate::accessibility::{Filters, LibraryFacts, Listing, Page};
+        let total = self.browse.total.max(0) as usize;
+        facts.heading = "Library".to_string();
+        facts.listing = Listing::Flat(self.browse.items.iter().collect());
+        facts.focus = Some(self.focus);
+        facts.page = Some(Page {
+            index: self.browse.page,
+            count: self.browse.page_count(),
+        });
+        facts.filters = Some(Filters {
+            kind: match self.browse.kind {
+                KindFilter::All => 0,
+                KindFilter::Movies => 1,
+                KindFilter::Series => 2,
+            },
+            unwatched: self.browse.watch == WatchFilter::Unwatched,
+            watchlist: self.browse.watchlist_only,
+            favourites: self.browse.favorites_only,
+            available: self.browse.available_only,
+        });
+        facts.library = Some(LibraryFacts {
+            total_line: ui::screens::library::count_line(total),
+            query: self.browse.text.clone(),
+            sorts: sort_labels(),
+            sort: sort_index(self.browse.sort),
+            genres: self.browse.genres.clone(),
+            genre: self
+                .browse
+                .genre
+                .as_ref()
+                .and_then(|chosen| self.browse.genres.iter().position(|genre| genre == chosen)),
+            source_line: ui::screens::library::source_line(
+                self.sources.len(),
+                total,
+                self.last_scan_phrase().as_deref(),
+            ),
+            empty: self.browse.items.is_empty().then(|| {
+                let narrowed = !self.browse.text.trim().is_empty()
+                    || self.filter_chips().narrowed()
+                    || self.browse.genre.is_some();
+                let (headline, detail) = ui::screens::library::empty_copy(narrowed);
+                (headline.to_string(), detail.to_string())
+            }),
+        });
+    }
+
+    fn detail_accessibility<'a>(&'a self, facts: &mut crate::accessibility::ScreenFacts<'a>) {
+        use crate::accessibility::{DetailFacts, Flags, Listing};
+        let Some(detail) = &self.detail else {
+            facts.heading = "Details".to_string();
+            return;
+        };
+        let item = &detail.item;
+        let episodes = detail.season_episodes();
+        let shows_episodes = ui::screens::detail::shows_episodes(item, episodes);
+        facts.heading = crate::accessibility::item_label(item);
+        facts.subject = Some(item);
+        facts.focus = Some(self.focus);
+        facts.flags = Some(Flags {
+            favourite: item.favorite,
+            watchlist: item.watchlisted,
+            watched: item.watched,
+        });
+        facts.listing = if shows_episodes {
+            Listing::Flat(episodes.iter().collect())
+        } else {
+            Listing::None
+        };
+        facts.detail = Some(DetailFacts {
+            kind: ui::screens::detail::eyebrow(item.kind).to_string(),
+            metadata: ui::screens::detail::metadata_line(item, &detail.seasons, episodes),
+            synopsis: if item.overview.trim().is_empty() {
+                "No synopsis stored for this title yet.".to_string()
+            } else {
+                item.overview.clone()
+            },
+            facts: ui::screens::detail::fact_lines(&self.detail_facts(item)),
+            available: item.available,
+            seasons: detail.seasons.clone(),
+            season: detail.season,
+            episode_line: match episodes.len() {
+                1 => "1 episode".to_string(),
+                count => format!("{count} episodes"),
+            },
+            shows_episodes,
+        });
+    }
+
+    fn settings_accessibility<'a>(&'a self, facts: &mut crate::accessibility::ScreenFacts<'a>) {
+        use crate::accessibility::{Action, Adjust, SettingRow, SettingRowKind, SettingsFacts};
+        use ui::screens::settings::{Row, Section};
+        facts.heading = "Settings".to_string();
+        let rows = self.settings_rows();
+        facts.settings = Some(SettingsFacts {
+            sections: Section::ALL
+                .iter()
+                .map(|section| section.label().to_string())
+                .collect(),
+            current: Section::ALL
+                .iter()
+                .position(|section| *section == self.settings_section)
+                .unwrap_or(0),
+            focus: self.settings_focus,
+            rows: rows
+                .iter()
+                .enumerate()
+                .map(|(index, row)| match row {
+                    Row::Toggle {
+                        label, hint, on, ..
+                    } => SettingRow {
+                        label: label.to_string(),
+                        hint: hint.map(str::to_string),
+                        kind: SettingRowKind::Toggle(*on),
+                        action: Some(Action::Settings(index)),
+                    },
+                    Row::Value { label, value } => SettingRow {
+                        label: label.to_string(),
+                        hint: None,
+                        kind: SettingRowKind::Value(value.clone()),
+                        action: None,
+                    },
+                    Row::Slider {
+                        label,
+                        hint,
+                        value,
+                        range,
+                        ..
+                    } => SettingRow {
+                        label: label.to_string(),
+                        hint: hint.map(str::to_string),
+                        kind: SettingRowKind::Slider {
+                            value: ui::screens::settings::slider_value_label(
+                                ui::screens::settings::clamped(*value, range),
+                            ),
+                            adjust: Some(Adjust {
+                                increase: Action::SettingsStep(index, true),
+                                decrease: Action::SettingsStep(index, false),
+                            }),
+                        },
+                        action: None,
+                    },
+                    Row::Action {
+                        label,
+                        hint,
+                        on_press,
+                        ..
+                    } => SettingRow {
+                        label: label.to_string(),
+                        hint: hint.map(str::to_string),
+                        kind: SettingRowKind::Action(on_press.is_some()),
+                        action: on_press.as_ref().map(|_| Action::Settings(index)),
+                    },
+                })
+                .collect(),
+        });
+    }
+
+    fn player_accessibility<'a>(&'a self, facts: &mut crate::accessibility::ScreenFacts<'a>) {
+        use crate::accessibility::Player;
+        let title = self
+            .active
+            .as_ref()
+            .map(|active| active.title.clone())
+            .unwrap_or_else(|| "Player".to_string());
+        facts.heading = title.clone();
+        let (audio, audio_selected) = self.track_chooser(TrackKind::Audio);
+        let (subtitles, subtitle_selected) = self.track_chooser(TrackKind::Subtitle);
+        let audio_selected = audio_selected.map(|choice| choice.id);
+        let subtitle_selected = subtitle_selected.map(|choice| choice.id);
+        let marker = self.active_marker();
+        facts.player = Some(Player {
+            title,
+            play: play_action(self.snapshot.state).label().to_string(),
+            position: self.scrub.unwrap_or(self.snapshot.position),
+            duration: self.snapshot.duration.max(0.0),
+            muted: self.snapshot.muted.unwrap_or(false),
+            volume: round_percent(self.volume_percent(), 0, 100).min(100) as u8,
+            fullscreen: self.fullscreen,
+            chrome: self.player_chrome,
+            preparing: self.snapshot.failure.is_none() && self.snapshot.frame.is_none(),
+            width: f64::from(self.window_width),
+            episode: self.active.as_ref().and_then(|active| {
+                match (active.season, active.episode) {
+                    (Some(season), Some(episode)) => Some(format!("S{season:02}E{episode:02}")),
+                    _ => None,
+                }
+            }),
+            output: Some(self.snapshot.output.label()),
+            failure: self
+                .snapshot
+                .failure
+                .as_ref()
+                .map(|failure| format!("Playback failed — {}", failure.message)),
+            up_next: self.up_next.as_ref().map(|up| up.title.clone()),
+            skip: marker.as_ref().map(|marker| {
+                if marker.kind == "intro" {
+                    "Skip intro".to_string()
+                } else {
+                    "Skip credits".to_string()
+                }
+            }),
+            skip_note: marker.as_ref().map(|marker| {
+                if marker.kind == "intro" {
+                    "A segment you marked starts here.".to_string()
+                } else {
+                    "A credits segment you marked starts here.".to_string()
+                }
+            }),
+            resume_note: self
+                .active
+                .as_ref()
+                .filter(|active| active.resume_from_ms > 0 && !self.snapshot.ended)
+                .map(|active| {
+                    format!(
+                        "resumed from {}",
+                        clock(active.resume_from_ms as f64 / 1_000.0)
+                    )
+                }),
+            audio: audio
+                .into_iter()
+                .map(|choice| {
+                    let selected = Some(choice.id) == audio_selected;
+                    (choice.label, selected)
+                })
+                .collect(),
+            subtitles: subtitles
+                .into_iter()
+                .map(|choice| {
+                    let selected = Some(choice.id) == subtitle_selected;
+                    (choice.label, selected)
+                })
+                .collect(),
+        });
+    }
+
+    fn accessible_extras(&self) -> Extras {
+        match self.screen {
+            Screen::Detail => self.detail_extras(),
+            Screen::Settings => self.settings_extras(),
+            _ => Extras::default(),
+        }
+    }
+
+    fn detail_extras(&self) -> Extras {
+        let mut extras = Extras::default();
+        let Some(detail) = &self.detail else {
+            return extras;
+        };
+        let item = &detail.item;
+        extras.press(
+            "detail:restart",
+            "Start over",
+            item.available.then(|| Message::Restart(item.id.clone())),
+        );
+        extras.state(
+            "detail:favourite",
+            "Favourite",
+            item.favorite,
+            Message::ToggleFavorite(item.work_id.clone()),
+        );
+        extras.press(
+            "detail:hide-continue",
+            "Hide from Continue",
+            Some(Message::HideFromContinue(item.edition_id.clone())),
+        );
+        extras.text("detail:convert", "Convert a copy");
+        let job = self.conversions.iter().find(|job| job.file_id == item.id);
+        let running = job.is_some_and(ConversionJob::is_active);
+        for (index, profile) in ConversionProfile::ALL.iter().enumerate() {
+            extras.press(
+                &format!("detail:convert:{index}"),
+                format!("Convert · {}", profile.label()),
+                (item.available && !running)
+                    .then(|| Message::StartConversion(item.id.clone(), *profile)),
+            );
+        }
+        if running {
+            extras.press(
+                "detail:convert:stop",
+                "Stop converting",
+                Some(Message::CancelConversion),
+            );
+        }
+        if let Some(job) = job {
+            extras.text("detail:convert:summary", job.summary());
+            extras.text("detail:convert:output", job.output_path.clone());
+        }
+        extras
+    }
+
+    fn settings_extras(&self) -> Extras {
+        use ui::screens::settings::Section;
+        let mut extras = Extras::default();
+        match self.settings_section {
+            Section::Playback => {
+                extras.text("settings:picture", "Picture");
+                extras.text(
+                    "settings:picture-facts",
+                    "16 bits per channel · pq / bt.709 · tone mapping bt.2390 · peak reported by the display",
+                );
+                extras.text(
+                    "settings:picture-note",
+                    "The target peak follows the display's own report, and stays at the 203-nit reference when it reports none.",
+                );
+                extras.field(
+                    "settings:subtitle-language",
+                    "Subtitle language",
+                    &self.subtitle_input,
+                );
+                extras.press(
+                    "settings:apply-subtitle-language",
+                    "Apply subtitle language",
+                    Some(Message::ApplySubtitleLanguage),
+                );
+                extras.field(
+                    "settings:audio-language",
+                    "Audio language",
+                    &self.audio_input,
+                );
+                extras.press(
+                    "settings:apply-audio-language",
+                    "Apply audio language",
+                    Some(Message::ApplyAudioLanguage),
+                );
+                extras.text(
+                    "settings:language-note",
+                    "Press Enter to apply. Leave a field empty and press Enter to let the player choose.",
+                );
             }
-            Screen::Player => {
-                let state = match (&self.snapshot.failure, self.snapshot.state) {
-                    (Some(failure), _) => format!("{}: {}", failure.code, failure.message),
-                    (None, state) => format!("{state:?}"),
-                };
-                let skip = self.active_marker().map(|marker| {
-                    if marker.kind == "intro" {
-                        "Skip intro".to_string()
+            Section::Casting => {
+                extras.text("settings:casting", crate::casting::CAPABILITY_TEXT);
+                extras.text(
+                    "settings:casting-note",
+                    "Receivers are looked for on this network only when you press the button. A \
+                     cast session starts only when you choose one and a film is playing: this \
+                     machine then serves that one file from a temporary endpoint that closes \
+                     itself, and sends AVTransport controls to the receiver.",
+                );
+            }
+            Section::Profiles => {
+                extras.field(
+                    "settings:profile-name",
+                    "New profile name",
+                    &self.new_profile,
+                );
+                extras.press(
+                    "settings:add-profile",
+                    "Add profile",
+                    Some(Message::AddProfile),
+                );
+                extras.text(
+                    "settings:profile-note",
+                    "Each profile keeps its own progress, favourites and watchlist.",
+                );
+            }
+            Section::Folders => {
+                let first_run = self.sources.is_empty();
+                extras.text(
+                    "settings:folders-title",
+                    if first_run {
+                        "Choose a folder of your own media"
                     } else {
-                        "Skip credits".to_string()
+                        "Add another folder"
+                    },
+                );
+                extras.press(
+                    "settings:choose-folder",
+                    "Choose a folder…",
+                    Some(Message::ChooseFolder),
+                );
+                extras.field("settings:folder-path", "Folder path", &self.new_root);
+                extras.press(
+                    "settings:add-folder",
+                    "Add and scan",
+                    Some(Message::AddFolder),
+                );
+                extras.text(
+                    "settings:folder-note",
+                    if first_run {
+                        "Movies and episodes stay where they are. Screenroom reads them in \
+                         place, keeps posters and positions in its own library, and needs no \
+                         network."
+                    } else {
+                        "Files are read in place and never moved, renamed or deleted."
+                    },
+                );
+                if let Some(failures) = (self.artwork_failures > 0).then_some(self.artwork_failures)
+                {
+                    extras.text(
+                        "settings:artwork-failures",
+                        format!(
+                            "{failures} title(s) had no readable frame, so they keep a title-only card."
+                        ),
+                    );
+                }
+                if !first_run {
+                    extras.text("settings:relink-title", "Relink a folder");
+                    for (index, source) in self.sources.iter().enumerate() {
+                        extras.choice(
+                            &format!("settings:relink:{index}"),
+                            source.label.clone(),
+                            self.relink_target.as_deref() == Some(source.id.as_str()),
+                            Message::RelinkTargetChosen(source.id.clone()),
+                        );
                     }
-                });
-                let (audio, audio_selected) = self.track_chooser(TrackKind::Audio);
-                let (subtitles, subtitle_selected) = self.track_chooser(TrackKind::Subtitle);
-                let audio_selected = audio_selected.map(|choice| choice.id);
-                let subtitle_selected = subtitle_selected.map(|choice| choice.id);
-                facts.player = Some(Player {
-                    title: self
-                        .active
-                        .as_ref()
-                        .map(|active| active.title.clone())
-                        .unwrap_or_else(|| "Player".to_string()),
-                    state,
-                    play: play_action(self.snapshot.state).label().to_string(),
-                    position: self.scrub.unwrap_or(self.snapshot.position),
-                    duration: self.snapshot.duration.max(0.0),
-                    muted: self.snapshot.muted.unwrap_or(false),
-                    volume: round_percent(self.volume_percent(), 0, 100).min(100) as u8,
-                    fullscreen: self.fullscreen,
-                    up_next: self.up_next.as_ref().map(|up| up.title.clone()),
-                    skip,
-                    audio: audio
-                        .into_iter()
-                        .map(|choice| {
-                            let selected = Some(choice.id) == audio_selected;
-                            (choice.label, selected)
-                        })
-                        .collect(),
-                    subtitles: subtitles
-                        .into_iter()
-                        .map(|choice| {
-                            let selected = Some(choice.id) == subtitle_selected;
-                            (choice.label, selected)
-                        })
-                        .collect(),
-                });
+                    extras.press(
+                        "settings:choose-relink",
+                        "Choose…",
+                        Some(Message::ChooseRelinkFolder),
+                    );
+                    extras.field("settings:relink-path", "New location", &self.relink_path);
+                    extras.press(
+                        "settings:relink",
+                        "Relink and rescan",
+                        Some(Message::RelinkSource),
+                    );
+                    extras.text(
+                        "settings:relink-note",
+                        "Use this when a removable drive mounts somewhere new. Nothing on disk is changed.",
+                    );
+                }
+            }
+            Section::Online => {
+                extras.text("settings:metadata", self.metadata_capability.detail.clone());
+                extras.text(
+                    "settings:online-note",
+                    "A manual match is never overwritten, and a value from a local NFO beats a \
+                     provider unless you ask for the provider's version. Nothing is fetched while \
+                     no key is configured.",
+                );
+            }
+            Section::Subtitles => {
+                extras.field(
+                    "settings:subtitle-query",
+                    "Title to search for",
+                    &self.subtitle_query,
+                );
+                extras.press(
+                    "settings:subtitle-search",
+                    "Search",
+                    Some(Message::SubtitleSearchNow),
+                );
+                extras.text(
+                    "settings:subtitle-note",
+                    "Searching a provider online needs an authorised account of your own, for \
+                     example OpenSubtitles with your API key. A kept subtitle is copied into the \
+                     library; the file on disk is never modified or moved.",
+                );
+            }
+            Section::Accessibility => extras.text(
+                "settings:reduce-motion-note",
+                "Reduce motion also stops browse previews, so no preview decoder is opened.",
+            ),
+            Section::Data => {
+                extras.press(
+                    "settings:choose-backup",
+                    "Choose backup file…",
+                    Some(Message::ChooseBackupPath),
+                );
+                extras.field(
+                    "settings:backup-path",
+                    "Backup file path",
+                    &self.backup_path,
+                );
+                extras.press(
+                    "settings:backup-now",
+                    "Back up now",
+                    Some(Message::BackupNow),
+                );
+                extras.press(
+                    "settings:choose-restore",
+                    "Choose backup to restore…",
+                    Some(Message::ChooseRestoreFile),
+                );
+                extras.field(
+                    "settings:restore-path",
+                    "Backup file to restore from",
+                    &self.restore_path,
+                );
+                extras.press(
+                    "settings:check-restore",
+                    "Check file",
+                    Some(Message::InspectRestore),
+                );
+                extras.text(
+                    "settings:restore-note",
+                    "Restoring replaces profiles, progress and lists with the backup's. Your \
+                     current library is copied to a .before-restore file first.",
+                );
+                extras.text("settings:saved-sources", "Saved sources");
+                extras.field("settings:source-name", "Source name", &self.bookmark_label);
+                extras.field(
+                    "settings:source-address",
+                    "Source address",
+                    &self.bookmark_address,
+                );
+                extras.field(
+                    "settings:source-access",
+                    "Access note",
+                    &self.bookmark_access,
+                );
+                extras.press(
+                    "settings:save-source",
+                    "Save source",
+                    Some(Message::AddBookmark),
+                );
+                if self.bookmarks.is_empty() {
+                    extras.text("settings:no-source", "No source saved yet.");
+                }
+                for (index, bookmark) in self.bookmarks.iter().enumerate() {
+                    extras.text(&format!("settings:source:{index}"), bookmark.label.clone());
+                    extras.text(
+                        &format!("settings:source:{index}:address"),
+                        format!("{} · {}", bookmark.protocol, bookmark.address),
+                    );
+                    extras.press(
+                        &format!("settings:source:{index}:open"),
+                        format!("Open {}", bookmark.label),
+                        Some(Message::OpenBookmark(bookmark.id.clone())),
+                    );
+                    extras.press(
+                        &format!("settings:source:{index}:remove"),
+                        format!("Remove {}", bookmark.label),
+                        Some(Message::RemoveBookmark(bookmark.id.clone())),
+                    );
+                }
+                extras.press(
+                    "settings:choose-conversion-folder",
+                    "Choose conversion folder…",
+                    Some(Message::ChooseConversionFolder),
+                );
+                extras.field(
+                    "settings:conversion-folder",
+                    "Folder for converted copies",
+                    &self.conversion_folder,
+                );
+                extras.text(
+                    "settings:conversion-note",
+                    "A conversion writes one new file into this folder. The original is never \
+                     written to, renamed or deleted, and a read-only drive is refused.",
+                );
+                if self.conversion_runner.is_some() {
+                    extras.text(
+                        "settings:conversion-progress",
+                        format!("Working · {}%", self.conversion_progress),
+                    );
+                    extras.press(
+                        "settings:stop-conversion",
+                        "Stop",
+                        Some(Message::CancelConversion),
+                    );
+                }
+                if self.conversions.is_empty() {
+                    extras.text(
+                        "settings:no-conversion",
+                        "Nothing has been converted yet. Open a film and press Convert a copy.",
+                    );
+                }
+                for (index, job) in self.conversions.iter().take(5).enumerate() {
+                    extras.text(&format!("settings:conversion:{index}"), job.summary());
+                    extras.text(
+                        &format!("settings:conversion:{index}:output"),
+                        job.output_path.clone(),
+                    );
+                }
+                extras.text(
+                    "settings:data-note",
+                    "Folders are read in place. Nothing here needs a network, an account or a server.",
+                );
+            }
+            Section::About => {
+                extras.text(
+                    "settings:provenance",
+                    format!("Design tokens: {}", design::provenance()),
+                );
+                extras.text(
+                    "settings:about-note",
+                    "Folders are read in place. Nothing here needs a network, an account or a server.",
+                );
             }
         }
-        facts
+        extras
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -6248,6 +6880,31 @@ impl App {
         self.update(message)
     }
 
+    fn step_settings_slider(&mut self, index: usize, increase: bool) -> Task<Message> {
+        use ui::screens::settings::Row;
+        let step = if increase { 5.0 } else { -5.0 };
+        let asked = {
+            let rows = self.settings_rows();
+            match rows.get(index) {
+                Some(Row::Slider {
+                    value,
+                    range,
+                    message,
+                    ..
+                }) => Some((*message)(ui::screens::settings::clamped(
+                    *value + step,
+                    range,
+                ))),
+                _ => None,
+            }
+        };
+        match asked {
+            Some(message) => self.update(message),
+            None => Task::none(),
+        }
+    }
+
+    #[cfg(test)]
     fn settings_labels(&self) -> Vec<String> {
         use ui::screens::settings::Row;
         self.settings_rows()
@@ -6434,6 +7091,93 @@ pub fn clock(seconds: f64) -> String {
         format!("{hours}:{minutes:02}:{seconds:02}")
     } else {
         format!("{minutes}:{seconds:02}")
+    }
+}
+
+fn hero_detail(item: &LibraryItem) -> String {
+    let mut parts = vec![ui::screens::home::metadata(item)];
+    if let Some(left) = ui::screens::home::left_label(item) {
+        parts.push(left);
+    }
+    parts.retain(|part| !part.trim().is_empty());
+    parts.join(" · ")
+}
+
+const SORT_ORDER: [SortChoice; 4] = [
+    SortChoice::Title,
+    SortChoice::Added,
+    SortChoice::Year,
+    SortChoice::Progress,
+];
+
+fn sort_labels() -> Vec<String> {
+    SORT_ORDER
+        .iter()
+        .map(|choice| choice.label().to_string())
+        .collect()
+}
+
+fn sort_index(choice: SortChoice) -> usize {
+    SORT_ORDER
+        .iter()
+        .position(|candidate| *candidate == choice)
+        .unwrap_or(0)
+}
+
+#[derive(Default)]
+struct Extras {
+    controls: Vec<crate::accessibility::Control>,
+    messages: Vec<Message>,
+}
+
+impl Extras {
+    fn press(&mut self, key: &str, label: impl Into<String>, message: Option<Message>) {
+        let action = message.map(|message| {
+            self.messages.push(message);
+            crate::accessibility::Action::Extra(self.messages.len() - 1)
+        });
+        let enabled = action.is_some();
+        self.controls.push(crate::accessibility::Control::press(
+            key, label, action, enabled,
+        ));
+    }
+
+    fn state(&mut self, key: &str, label: impl Into<String>, on: bool, message: Message) {
+        self.messages.push(message);
+        let action = crate::accessibility::Action::Extra(self.messages.len() - 1);
+        self.controls.push(crate::accessibility::Control::state(
+            key,
+            label,
+            on,
+            Some(action),
+        ));
+    }
+
+    fn choice(&mut self, key: &str, label: impl Into<String>, chosen: bool, message: Message) {
+        self.messages.push(message);
+        let action = crate::accessibility::Action::Extra(self.messages.len() - 1);
+        self.controls.push(crate::accessibility::Control::choice(
+            key,
+            label,
+            chosen,
+            Some(action),
+            true,
+        ));
+    }
+
+    fn field(&mut self, key: &str, label: &str, value: &str) {
+        let shown = if value.trim().is_empty() {
+            "empty".to_string()
+        } else {
+            value.to_string()
+        };
+        self.controls
+            .push(crate::accessibility::Control::note(key, label, Some(shown)));
+    }
+
+    fn text(&mut self, key: &str, label: impl Into<String>) {
+        self.controls
+            .push(crate::accessibility::Control::note(key, label, None));
     }
 }
 
@@ -8758,6 +9502,188 @@ mod tests {
                 Row::Action { label, action: "Use", on_press: Some(_), .. } if *label == "Guest"
             )),
             "another profile can be chosen"
+        );
+    }
+
+    #[test]
+    fn every_settings_section_publishes_the_actions_it_draws() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let media = directory.path().join("media");
+        write_settled(
+            &media.join("Northern.Lights.2019.mkv"),
+            b"not really a video",
+        );
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+        add_folder(&mut app, &media);
+        app.navigate(Screen::Settings);
+        app.settings_section = ui::screens::settings::Section::Playback;
+
+        for section in ui::screens::settings::Section::ALL {
+            app.settings_section = *section;
+            let snapshot = crate::accessibility::snapshot(&app.accessible_screen());
+            let drawn = app.accessible_extras();
+            let label = section.label();
+
+            assert!(
+                snapshot.controls.iter().any(
+                    |control| control.key == "settings:section-title" && control.label == label
+                ),
+                "{label} does not announce its own heading"
+            );
+            for control in &snapshot.controls {
+                if let Some(crate::accessibility::Action::Extra(index)) = control.action {
+                    assert!(
+                        index < drawn.messages.len(),
+                        "{label} announced {:?} with no action behind it",
+                        control.key
+                    );
+                }
+            }
+        }
+
+        app.settings_section = ui::screens::settings::Section::Data;
+        let snapshot = crate::accessibility::snapshot(&app.accessible_screen());
+        for key in [
+            "settings:backup-now",
+            "settings:choose-backup",
+            "settings:check-restore",
+            "settings:save-source",
+            "settings:choose-conversion-folder",
+        ] {
+            assert!(
+                snapshot.controls.iter().any(|control| control.key == key),
+                "the data screen draws {key} and must announce it"
+            );
+        }
+        assert!(
+            snapshot
+                .controls
+                .iter()
+                .any(|control| control.key == "settings:backup-path" && control.value.is_some()),
+            "a field is stated with the value it holds"
+        );
+
+        app.settings_section = ui::screens::settings::Section::Playback;
+        let snapshot = crate::accessibility::snapshot(&app.accessible_screen());
+        assert!(
+            snapshot
+                .controls
+                .iter()
+                .any(|control| control.key == "settings:picture")
+        );
+        assert!(
+            snapshot
+                .controls
+                .iter()
+                .any(|control| control.key == "settings:subtitle-language")
+        );
+    }
+
+    #[test]
+    fn a_library_press_moves_the_filter_the_way_the_chip_draws_it() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let media = directory.path().join("media");
+        write_settled(
+            &media.join("Northern.Lights.2019.mkv"),
+            b"not really a video",
+        );
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+        add_folder(&mut app, &media);
+        app.navigate(Screen::Browse);
+
+        let _ = app.apply_accessibility(crate::accessibility::Action::FilterFilms);
+        assert_eq!(app.browse.kind, KindFilter::Movies);
+
+        let _ = app.apply_accessibility(crate::accessibility::Action::Sort(2));
+        assert_eq!(app.browse.sort, SortChoice::Year);
+
+        let _ = app.apply_accessibility(crate::accessibility::Action::ToggleUnwatched);
+        assert_eq!(app.browse.watch, WatchFilter::Unwatched);
+        let _ = app.apply_accessibility(crate::accessibility::Action::ToggleUnwatched);
+        assert_eq!(app.browse.watch, WatchFilter::Any);
+
+        let _ = app.apply_accessibility(crate::accessibility::Action::Genre(0));
+        assert_eq!(app.browse.genre, None);
+    }
+
+    #[test]
+    fn the_home_hero_opens_the_title_it_names() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let media = directory.path().join("media");
+        write_settled(
+            &media.join("Northern.Lights.2019.mkv"),
+            b"not really a video",
+        );
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+        add_folder(&mut app, &media);
+        app.navigate(Screen::Home);
+
+        let snapshot = crate::accessibility::snapshot(&app.accessible_screen());
+        let named = snapshot
+            .controls
+            .iter()
+            .find(|control| control.key == "home:hero:title")
+            .expect("the hero names itself")
+            .label
+            .clone();
+
+        let _ = app.apply_accessibility(crate::accessibility::Action::OpenHero);
+        assert_eq!(app.screen, Screen::Detail);
+        assert_eq!(
+            app.detail.as_ref().map(|detail| detail.item.title.clone()),
+            Some(named)
+        );
+    }
+
+    #[test]
+    fn a_filter_change_keeps_the_tree_focus_on_the_card_the_grid_focuses() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let media = directory.path().join("media");
+        write_settled(
+            &media.join("Northern.Lights.2019.mkv"),
+            b"not really a video",
+        );
+        write_settled(&media.join("Caprice.2021.mkv"), b"not really a video");
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+        add_folder(&mut app, &media);
+        app.navigate(Screen::Browse);
+        assert_eq!(app.browse.items.len(), 2, "two films to focus");
+
+        app.focus_card(1);
+        assert_eq!(app.focus, 1);
+        let snapshot = crate::accessibility::snapshot(&app.accessible_screen());
+        let focused: Vec<&crate::accessibility::Control> = snapshot
+            .controls
+            .iter()
+            .filter(|control| control.focused)
+            .collect();
+        assert_eq!(focused.len(), 1);
+        assert_eq!(focused[0].key, "item:1");
+
+        let second = app.browse.items[1].id.clone();
+        let _ = app.apply_accessibility(crate::accessibility::Action::Open(1));
+        assert_eq!(
+            app.detail.as_ref().map(|detail| detail.item.id.clone()),
+            Some(second),
+            "an announced card must open the card it names"
+        );
+
+        app.navigate(Screen::Browse);
+        let _ = app.apply_accessibility(crate::accessibility::Action::FilterSeries);
+        assert!(app.browse.items.is_empty(), "no series were added");
+        let snapshot = crate::accessibility::snapshot(&app.accessible_screen());
+        assert_eq!(
+            snapshot
+                .controls
+                .iter()
+                .filter(|control| control.focused)
+                .count(),
+            0,
+            "an empty grid draws nothing focused, so the tree must not claim one"
         );
     }
 }

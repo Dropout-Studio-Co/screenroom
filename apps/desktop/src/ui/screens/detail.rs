@@ -658,7 +658,7 @@ fn two_lines(text: &str, max_chars: usize) -> Vec<String> {
     lines
 }
 
-fn eyebrow(kind: MediaKind) -> &'static str {
+pub fn eyebrow(kind: MediaKind) -> &'static str {
     match kind {
         MediaKind::Movie => "FILM",
         MediaKind::Series => "SERIES",

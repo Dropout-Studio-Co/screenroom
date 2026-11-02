@@ -500,18 +500,7 @@ impl<'a> Library<'a> {
         let tokens = design::tokens();
         let narrowed =
             !self.query.trim().is_empty() || self.filters.narrowed() || self.genre.is_some();
-
-        let (headline, detail) = if narrowed {
-            (
-                "Nothing matches these filters.",
-                "Clear the search and switch the other filters off to see the whole library.",
-            )
-        } else {
-            (
-                "No films or episodes yet.",
-                "Add a folder in Settings and Screenroom reads it in place.",
-            )
-        };
+        let (headline, detail) = empty_copy(narrowed);
 
         column![
             text(headline)
@@ -656,6 +645,20 @@ pub fn source_placement(width: f32) -> SourcePlacement {
     match Breakpoint::at(capped_window(width)) {
         Breakpoint::Narrow | Breakpoint::Compact => SourcePlacement::BeneathChips,
         _ => SourcePlacement::BesideChips,
+    }
+}
+
+pub fn empty_copy(narrowed: bool) -> (&'static str, &'static str) {
+    if narrowed {
+        (
+            "Nothing matches these filters.",
+            "Clear the search and switch the other filters off to see the whole library.",
+        )
+    } else {
+        (
+            "No films or episodes yet.",
+            "Add a folder in Settings and Screenroom reads it in place.",
+        )
     }
 }
 

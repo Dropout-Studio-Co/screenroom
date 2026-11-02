@@ -193,7 +193,7 @@ player's chrome receding has not been watched in a window. That is P2-06 below.
 | Q04 | Portability: one monorepo, isolated platform adapters | COMPLETE | layout, `cfg` boundaries | — |
 | Q05 | Security and privacy | COMPLETE | argument vectors (no shell), root canonicalisation, `contained_media_path` tests, no credentials anywhere | — |
 | Q06 | Durability: migrations, transactions, no silent resets | COMPLETE | migration tests, integrity check after migrate, backup/restore | — |
-| Q07 | Accessibility and design quality | **COMPLETE (bridge) / PENDING (VoiceOver pass)** | keyboard journey, Settings action strip, contrast tokens, and a real `NSAccessibility` tree — verified headlessly at 0 controls before and 13 after, with labels and focus matching the app and `AXPress` reaching the message loop | the owner's VoiceOver pass; per-widget frames need layout geometry iced does not expose (ADR-017) |
+| Q07 | Accessibility and design quality | **COMPLETE (bridge) / PENDING (VoiceOver pass)** | keyboard journey, Settings action strip, contrast tokens, and a real `NSAccessibility` tree — verified headlessly on all five surfaces (19/23/30/33/15 controls) with labels, values, enabled state, `AXPress`, slider adjustments and focus matching the app, and no control the screen does not draw | the owner's ten-minute pass in [`VOICEOVER_PASS.md`](VOICEOVER_PASS.md); per-widget frames need layout geometry iced does not expose (ADR-017) |
 | Q08 | Honest reporting | COMPLETE | this document set; `preferred_bridge()` corrected this session | — |
 
 ### 4.3 macOS acceptance steps (1–15)
@@ -483,19 +483,34 @@ than reclassified.
   onto a bounded queue that the app drains into the same `Message` the pointer and
   keyboard produce, so an accessibility press can never do something a click cannot.
 - **Verified, headlessly, window never shown, on a populated library**
-  (`SCREENROOM_AX_CHECK`): **0 controls before the bridge attaches, 13 after**, with
-  `labels_match true` (every element's label compared against the app's own
-  snapshot), `focus_match true` (`focused_label "Northern Lights"` is the card the
-  app's cursor is on), `pressed true / queued 1`, and an empty tree after shutdown.
-  Home, Library, Detail and Settings were each checked.
+  (`SCREENROOM_AX_CHECK`): the tree read back from AppKit matches the application's
+  own snapshot control by control — `labels_match`, `values_match`,
+  `enabled_match`, `press_actions_match`, `adjust_actions_match` and `focus_match`
+  all `true`, with one focused element on Home, Library, Detail and Settings and
+  none on the Player. **0 controls before the bridge attaches**; 19 on Home, 23 on
+  Library, 30 on Detail, 33 on Settings (Playback) and 16 on the Player after; 8
+  and 22 on an empty library's Home and Library; an empty tree after shutdown.
+- **What the tree now carries** (it used to carry far less): the Home hero and one
+  heading per rail; the Library's count, search value, sort and genre options and
+  every filter chip as a radio button or checkbox with its state; the Detail's back
+  affordance, eyebrow, title, metadata, synopsis, each reported fact, season
+  selector and the convert controls; the Settings section rail, section heading,
+  toggle states, slider values and 5%-per-step adjustments, and each section's own
+  action strip; the Player's position and volume as sliders with
+  `AXIncrement`/`AXDecrement`, and no shell controls it does not draw. Phantom
+  controls were removed: a Close button the shell never draws, volume up/down
+  buttons the player never draws, a pager on a one-page library, the film itself in
+  a movie's episode list, and the whole navigation on the player screen.
 - **What is not covered, stated rather than faked:** elements carry the window's
   frame, not per-widget geometry, because iced gives the application no layout
   geometry — so the VoiceOver cursor highlights the window rather than one card.
-  The kind/sort/watch/genre pick-lists are not bridged (an iced `pick_list` exposes
-  no per-option identity to press); text entry is not editable through AX, though
-  the Settings actions move real keyboard focus into the field.
-- **Owner step (about three minutes):** open the app, ⌘F5 for VoiceOver, VO+Right
-  through the header, heading and cards, and VO+Space on a card.
+  A picker is bridged as the options it opens onto, and a text field as text
+  carrying its value: typing and the drop-down itself stay with the pointer and
+  keyboard. Settings rows carry no drawn focus ring although the tree publishes the
+  row the keyboard is on.
+- **Owner step (ten minutes, scripted):** follow
+  [`VOICEOVER_PASS.md`](VOICEOVER_PASS.md) — ⌘F5, then the five surfaces in order,
+  ending with whether the status line is announced on its own when it changes.
 
 #### P1-10 · Prove Unicode and Bengali subtitles render — **CLOSED 2026-11-01**
 

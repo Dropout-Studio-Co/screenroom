@@ -22,6 +22,8 @@ pub enum Surface {
 pub enum Role {
     Button,
     CheckBox,
+    RadioButton,
+    Slider,
     StaticText,
     Heading,
 }
@@ -31,9 +33,19 @@ impl Role {
         match self {
             Self::Button => "AXButton",
             Self::CheckBox => "AXCheckBox",
+            Self::RadioButton => "AXRadioButton",
+            Self::Slider => "AXSlider",
             Self::StaticText => "AXStaticText",
             Self::Heading => "AXHeading",
         }
+    }
+
+    pub fn presses(self) -> bool {
+        matches!(self, Self::Button | Self::CheckBox | Self::RadioButton)
+    }
+
+    pub fn adjusts(self) -> bool {
+        self == Self::Slider
     }
 }
 
@@ -43,22 +55,35 @@ pub enum Action {
     GoLibrary,
     GoSettings,
     Refresh,
-    Close,
+    Search,
     ChooseFolder,
     AddFolder,
     PreviousPage,
     NextPage,
+    FilterAll,
+    FilterFilms,
+    FilterSeries,
+    ToggleUnwatched,
     ToggleWatchlistOnly,
     ToggleFavoritesOnly,
     ToggleAvailableOnly,
+    Sort(usize),
+    Genre(usize),
     Open(usize),
+    PlayHero,
+    OpenHero,
     PlayDetail,
     RestartDetail,
+    BackFromDetail,
     ToggleFavourite,
     ToggleWatchlist,
     ToggleWatched,
     HideFromContinue,
+    Season(usize),
+    SettingsSection(usize),
     Settings(usize),
+    SettingsStep(usize, bool),
+    Extra(usize),
     TogglePlay,
     SeekBack,
     SeekForward,
@@ -66,6 +91,7 @@ pub enum Action {
     VolumeDown,
     VolumeUp,
     ToggleFullscreen,
+    CancelScan,
     BackFromPlayer,
     PlayNext,
     CancelNext,
@@ -82,6 +108,12 @@ pub struct Frame {
     pub height: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Adjust {
+    pub increase: Action,
+    pub decrease: Action,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Control {
     pub key: String,
@@ -91,7 +123,134 @@ pub struct Control {
     pub enabled: bool,
     pub focused: bool,
     pub action: Option<Action>,
+    pub adjust: Option<Adjust>,
     pub frame: Option<Frame>,
+}
+
+impl Control {
+    pub fn press(
+        key: impl Into<String>,
+        label: impl Into<String>,
+        action: Option<Action>,
+        enabled: bool,
+    ) -> Self {
+        Self {
+            key: key.into(),
+            role: Role::Button,
+            label: label.into(),
+            value: None,
+            enabled,
+            focused: false,
+            action,
+            adjust: None,
+            frame: None,
+        }
+    }
+
+    pub fn state(
+        key: impl Into<String>,
+        label: impl Into<String>,
+        on: bool,
+        action: Option<Action>,
+    ) -> Self {
+        Self {
+            key: key.into(),
+            role: Role::CheckBox,
+            label: label.into(),
+            value: Some(mark(on)),
+            enabled: true,
+            focused: false,
+            action,
+            adjust: None,
+            frame: None,
+        }
+    }
+
+    pub fn choice(
+        key: impl Into<String>,
+        label: impl Into<String>,
+        chosen: bool,
+        action: Option<Action>,
+        enabled: bool,
+    ) -> Self {
+        Self {
+            key: key.into(),
+            role: Role::RadioButton,
+            label: label.into(),
+            value: Some(mark(chosen)),
+            enabled,
+            focused: false,
+            action,
+            adjust: None,
+            frame: None,
+        }
+    }
+
+    pub fn measure(
+        key: impl Into<String>,
+        label: impl Into<String>,
+        value: impl Into<String>,
+        adjust: Option<Adjust>,
+    ) -> Self {
+        Self {
+            key: key.into(),
+            role: Role::Slider,
+            label: label.into(),
+            value: Some(value.into()),
+            enabled: adjust.is_some(),
+            focused: false,
+            action: None,
+            adjust,
+            frame: None,
+        }
+    }
+
+    pub fn note(key: impl Into<String>, label: impl Into<String>, value: Option<String>) -> Self {
+        Self {
+            key: key.into(),
+            role: Role::StaticText,
+            label: label.into(),
+            value,
+            enabled: true,
+            focused: false,
+            action: None,
+            adjust: None,
+            frame: None,
+        }
+    }
+
+    pub fn heading(key: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            role: Role::Heading,
+            label: label.into(),
+            value: None,
+            enabled: true,
+            focused: false,
+            action: None,
+            adjust: None,
+            frame: None,
+        }
+    }
+
+    fn with_value(mut self, value: impl Into<String>) -> Self {
+        self.value = Some(value.into());
+        self
+    }
+
+    fn focused(mut self, focused: bool) -> Self {
+        self.focused = focused;
+        self
+    }
+
+    fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+}
+
+fn mark(on: bool) -> String {
+    if on { "on" } else { "off" }.to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -108,6 +267,8 @@ pub struct Page {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Filters {
+    pub kind: usize,
+    pub unwatched: bool,
     pub watchlist: bool,
     pub favourites: bool,
     pub available: bool,
@@ -121,17 +282,103 @@ pub struct Flags {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum Listing<'a> {
+    None,
+    Flat(Vec<&'a LibraryItem>),
+    Sectioned(Vec<(String, Vec<&'a LibraryItem>)>),
+}
+
+impl Listing<'_> {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::None => true,
+            Self::Flat(items) => items.is_empty(),
+            Self::Sectioned(sections) => sections.iter().all(|(_, items)| items.is_empty()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hero {
+    pub title: String,
+    pub eyebrow: String,
+    pub detail: String,
+    pub primary: String,
+    pub secondary: String,
+    pub playable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryFacts {
+    pub total_line: String,
+    pub query: String,
+    pub sorts: Vec<String>,
+    pub sort: usize,
+    pub genres: Vec<String>,
+    pub genre: Option<usize>,
+    pub source_line: String,
+    pub empty: Option<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetailFacts {
+    pub kind: String,
+    pub metadata: String,
+    pub synopsis: String,
+    pub facts: Vec<String>,
+    pub available: bool,
+    pub seasons: Vec<i64>,
+    pub season: i64,
+    pub episode_line: String,
+    pub shows_episodes: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SettingRowKind {
+    Toggle(bool),
+    Slider {
+        value: String,
+        adjust: Option<Adjust>,
+    },
+    Value(String),
+    Action(bool),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SettingRow {
+    pub label: String,
+    pub hint: Option<String>,
+    pub kind: SettingRowKind,
+    pub action: Option<Action>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SettingsFacts {
+    pub sections: Vec<String>,
+    pub current: usize,
+    pub rows: Vec<SettingRow>,
+    pub focus: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Player {
     pub title: String,
-    pub state: String,
     pub play: String,
     pub position: f64,
     pub duration: f64,
     pub muted: bool,
     pub volume: u8,
     pub fullscreen: bool,
+    pub chrome: bool,
+    pub preparing: bool,
+    pub width: f64,
+    pub episode: Option<String>,
+    pub output: Option<String>,
+    pub failure: Option<String>,
     pub up_next: Option<String>,
     pub skip: Option<String>,
+    pub skip_note: Option<String>,
+    pub resume_note: Option<String>,
     pub audio: Vec<(String, bool)>,
     pub subtitles: Vec<(String, bool)>,
 }
@@ -140,36 +387,46 @@ pub struct Player {
 pub struct ScreenFacts<'a> {
     pub surface: Surface,
     pub title: String,
-    pub items: Vec<&'a LibraryItem>,
+    pub heading: String,
+    pub hero: Option<Hero>,
+    pub listing: Listing<'a>,
     pub subject: Option<&'a LibraryItem>,
     pub focus: Option<usize>,
     pub page: Option<Page>,
     pub filters: Option<Filters>,
+    pub library: Option<LibraryFacts>,
+    pub detail: Option<DetailFacts>,
     pub flags: Option<Flags>,
-    pub settings: Vec<(String, bool)>,
-
-    pub settings_focus: usize,
+    pub settings: Option<SettingsFacts>,
     pub player: Option<Player>,
+    pub scan: Option<String>,
     pub status: Option<String>,
     pub error: Option<String>,
+    pub extras: Vec<Control>,
 }
 
 impl<'a> ScreenFacts<'a> {
     pub fn new(surface: Surface, title: impl Into<String>) -> Self {
+        let title = title.into();
         Self {
             surface,
-            title: title.into(),
-            items: Vec::new(),
+            heading: title.clone(),
+            title,
+            hero: None,
+            listing: Listing::None,
             subject: None,
             focus: None,
             page: None,
             filters: None,
+            library: None,
+            detail: None,
             flags: None,
-            settings: Vec::new(),
-            settings_focus: 0,
+            settings: None,
             player: None,
+            scan: None,
             status: None,
             error: None,
+            extras: Vec::new(),
         }
     }
 }
@@ -272,46 +529,7 @@ fn store(snapshot: &Arc<Snapshot>) {
     *guard = Some(Arc::clone(snapshot));
 }
 
-fn button(key: &str, label: impl Into<String>, action: Action) -> Control {
-    Control {
-        key: key.to_string(),
-        role: Role::Button,
-        label: label.into(),
-        value: None,
-        enabled: true,
-        focused: false,
-        action: Some(action),
-        frame: None,
-    }
-}
-
-fn toggle(key: &str, label: impl Into<String>, on: bool, action: Action) -> Control {
-    Control {
-        key: key.to_string(),
-        role: Role::CheckBox,
-        label: label.into(),
-        value: Some(if on { "on" } else { "off" }.to_string()),
-        enabled: true,
-        focused: false,
-        action: Some(action),
-        frame: None,
-    }
-}
-
-fn text(key: &str, role: Role, label: impl Into<String>, value: Option<String>) -> Control {
-    Control {
-        key: key.to_string(),
-        role,
-        label: label.into(),
-        value,
-        enabled: true,
-        focused: false,
-        action: None,
-        frame: None,
-    }
-}
-
-fn item_label(item: &LibraryItem) -> String {
+pub fn item_label(item: &LibraryItem) -> String {
     if item.title.trim().is_empty() {
         item.filename.clone()
     } else {
@@ -349,307 +567,649 @@ fn item_value(item: &LibraryItem) -> String {
     parts.join(" · ")
 }
 
-fn item_controls(facts: &ScreenFacts<'_>, controls: &mut Vec<Control>) {
-    for (index, item) in facts.items.iter().enumerate() {
-        let mut control = button(
-            &format!("item:{index}"),
-            item_label(item),
-            Action::Open(index),
-        );
-        control.value = Some(item_value(item));
-        control.enabled = item.available;
-        control.focused = facts.focus == Some(index);
-        controls.push(control);
+fn item_control(index: usize, item: &LibraryItem, focused: bool) -> Control {
+    Control::press(
+        format!("item:{index}"),
+        item_label(item),
+        Some(Action::Open(index)),
+        true,
+    )
+    .with_value(item_value(item))
+    .enabled(item.available)
+    .focused(focused)
+}
+
+fn listing_controls<'a>(
+    listing: &'a Listing<'a>,
+    focus: Option<usize>,
+    controls: &mut Vec<Control>,
+) {
+    match listing {
+        Listing::None => {}
+        Listing::Flat(items) => {
+            for (index, item) in items.iter().enumerate() {
+                controls.push(item_control(index, item, focus == Some(index)));
+            }
+        }
+        Listing::Sectioned(sections) => {
+            let mut offset = 0;
+            for (rail, (label, items)) in sections.iter().enumerate() {
+                controls.push(
+                    Control::heading(format!("rail:{rail}"), label.clone())
+                        .with_value(items.len().to_string()),
+                );
+                for (column, item) in items.iter().enumerate() {
+                    let position = offset + column;
+                    controls.push(item_control(position, item, focus == Some(position)));
+                }
+                offset += items.len();
+            }
+        }
     }
 }
 
-fn detail_controls(facts: &ScreenFacts<'_>, controls: &mut Vec<Control>) {
-    let Some(item) = facts.subject else {
-        return;
-    };
-    let (label, _) = crate::ui::screens::detail::primary_action(item);
-    let mut play = button("detail:play", label, Action::PlayDetail);
-    play.enabled = item.available;
-    controls.push(play);
-    let mut restart = button("detail:restart", "Start over", Action::RestartDetail);
-    restart.enabled = item.available;
-    controls.push(restart);
-    if let Some(flags) = facts.flags {
-        controls.push(toggle(
-            "detail:favourite",
-            if flags.favourite {
-                "Favourited"
-            } else {
-                "Favourite"
-            },
-            flags.favourite,
-            Action::ToggleFavourite,
+fn home_controls(facts: &ScreenFacts<'_>, controls: &mut Vec<Control>) {
+    match &facts.hero {
+        Some(hero) => {
+            controls.push(Control::heading("home:hero:title", hero.title.clone()));
+            if !hero.eyebrow.trim().is_empty() {
+                controls.push(Control::note(
+                    "home:hero:reason",
+                    hero.eyebrow.clone(),
+                    None,
+                ));
+            }
+            if !hero.detail.trim().is_empty() {
+                controls.push(Control::note("home:hero:detail", hero.detail.clone(), None));
+            }
+            controls.push(Control::press(
+                "home:hero:play",
+                hero.primary.clone(),
+                Some(Action::PlayHero),
+                hero.playable,
+            ));
+            controls.push(Control::press(
+                "home:hero:details",
+                hero.secondary.clone(),
+                Some(Action::OpenHero),
+                true,
+            ));
+        }
+        None => controls.push(Control::heading("home:title", facts.heading.clone())),
+    }
+
+    listing_controls(&facts.listing, facts.focus, controls);
+
+    if facts.hero.is_none() && facts.listing.is_empty() {
+        controls.push(Control::press(
+            "home:choose-folder",
+            "Choose a folder…",
+            Some(Action::ChooseFolder),
+            true,
         ));
-        controls.push(toggle(
-            "detail:watchlist",
-            if flags.watchlist {
-                "On watchlist"
-            } else {
-                "Watchlist"
-            },
-            flags.watchlist,
-            Action::ToggleWatchlist,
-        ));
-        controls.push(toggle(
-            "detail:watched",
-            if flags.watched {
-                "Watched"
-            } else {
-                "Mark watched"
-            },
-            flags.watched,
-            Action::ToggleWatched,
+        controls.push(Control::press(
+            "home:refresh",
+            "Refresh",
+            Some(Action::Refresh),
+            true,
         ));
     }
-    controls.push(button(
-        "detail:hide-continue",
-        "Hide from Continue",
-        Action::HideFromContinue,
-    ));
 }
 
-fn browse_controls(facts: &ScreenFacts<'_>, controls: &mut Vec<Control>) {
-    if let Some(page) = facts.page {
-        let mut previous = button("browse:previous", "Previous", Action::PreviousPage);
-        previous.enabled = page.index > 0;
-        previous.value = Some(format!("page {} of {}", page.index + 1, page.count.max(1)));
-        controls.push(previous);
-        let mut next = button("browse:next", "Next", Action::NextPage);
-        next.enabled = page.index + 1 < page.count.max(1);
-        controls.push(next);
+fn library_controls(facts: &ScreenFacts<'_>, controls: &mut Vec<Control>) {
+    controls.push(Control::heading("library:title", facts.heading.clone()));
+
+    if let Some(library) = &facts.library {
+        controls.push(Control::note(
+            "library:count",
+            library.total_line.clone(),
+            None,
+        ));
+        controls.push(Control::note(
+            "library:search",
+            "Search",
+            Some(if library.query.trim().is_empty() {
+                "empty".to_string()
+            } else {
+                library.query.clone()
+            }),
+        ));
+        for (index, sort) in library.sorts.iter().enumerate() {
+            controls.push(Control::choice(
+                format!("library:sort:{index}"),
+                format!("Sort by {}", sort.to_lowercase()),
+                index == library.sort,
+                Some(Action::Sort(index)),
+                true,
+            ));
+        }
     }
-    if let Some(filters) = facts.filters {
-        controls.push(toggle(
-            "browse:watchlist",
+
+    if let Some(filters) = &facts.filters {
+        for (index, label) in ["All", "Films", "Series"].iter().enumerate() {
+            controls.push(Control::choice(
+                format!("library:kind:{index}"),
+                *label,
+                filters.kind == index,
+                Some(match index {
+                    0 => Action::FilterAll,
+                    1 => Action::FilterFilms,
+                    _ => Action::FilterSeries,
+                }),
+                true,
+            ));
+        }
+        controls.push(Control::state(
+            "library:unwatched",
+            "Unwatched",
+            filters.unwatched,
+            Some(Action::ToggleUnwatched),
+        ));
+        controls.push(Control::state(
+            "library:available",
+            "Available offline",
+            filters.available,
+            Some(Action::ToggleAvailableOnly),
+        ));
+        controls.push(Control::state(
+            "library:watchlist",
             "Watchlist",
             filters.watchlist,
-            Action::ToggleWatchlistOnly,
+            Some(Action::ToggleWatchlistOnly),
         ));
-        controls.push(toggle(
-            "browse:favourites",
+        controls.push(Control::state(
+            "library:favourites",
             "Favourites",
             filters.favourites,
-            Action::ToggleFavoritesOnly,
+            Some(Action::ToggleFavoritesOnly),
         ));
-        controls.push(toggle(
-            "browse:available",
-            "Available only",
-            filters.available,
-            Action::ToggleAvailableOnly,
+    }
+
+    if let Some(library) = &facts.library
+        && !library.genres.is_empty()
+    {
+        controls.push(Control::choice(
+            "library:genre:0",
+            GENRE_ANY,
+            library.genre.is_none(),
+            Some(Action::Genre(0)),
+            true,
         ));
+        for (index, genre) in library.genres.iter().enumerate() {
+            controls.push(Control::choice(
+                format!("library:genre:{}", index + 1),
+                genre.clone(),
+                library.genre == Some(index),
+                Some(Action::Genre(index + 1)),
+                true,
+            ));
+        }
+    }
+
+    if let Some(library) = &facts.library {
+        controls.push(Control::note(
+            "library:source",
+            library.source_line.clone(),
+            None,
+        ));
+    }
+
+    listing_controls(&facts.listing, facts.focus, controls);
+
+    if let Some((headline, detail)) = facts
+        .library
+        .as_ref()
+        .and_then(|library| library.empty.as_ref())
+    {
+        controls.push(Control::note("library:empty", headline.clone(), None));
+        controls.push(Control::note("library:empty-detail", detail.clone(), None));
+    }
+
+    if let Some(page) = facts.page
+        && page.count > 1
+    {
+        let shown = format!("page {} of {}", page.index + 1, page.count);
+        controls.push(
+            Control::press(
+                "library:previous",
+                "Previous",
+                Some(Action::PreviousPage),
+                page.index > 0,
+            )
+            .with_value(shown.clone()),
+        );
+        controls.push(
+            Control::press(
+                "library:next",
+                "Next",
+                Some(Action::NextPage),
+                page.index + 1 < page.count,
+            )
+            .with_value(shown),
+        );
+    }
+}
+
+const GENRE_ANY: &str = "Any genre";
+
+fn detail_controls(facts: &ScreenFacts<'_>, controls: &mut Vec<Control>) {
+    controls.push(Control::press(
+        "detail:back",
+        "Back to library",
+        Some(Action::BackFromDetail),
+        true,
+    ));
+
+    if let Some(detail) = &facts.detail {
+        controls.push(Control::note("detail:kind", detail.kind.clone(), None));
+    }
+
+    controls.push(Control::heading("detail:title", facts.heading.clone()));
+
+    if let Some(detail) = &facts.detail
+        && !detail.metadata.trim().is_empty()
+    {
+        controls.push(Control::note(
+            "detail:metadata",
+            detail.metadata.clone(),
+            None,
+        ));
+    }
+
+    if let Some(item) = facts.subject {
+        let (label, _) = crate::ui::screens::detail::primary_action(item);
+        controls.push(Control::press(
+            "detail:play",
+            label,
+            Some(Action::PlayDetail),
+            item.available,
+        ));
+    }
+
+    if let Some(flags) = facts.flags {
+        controls.push(Control::state(
+            "detail:watchlist",
+            "Watchlist",
+            flags.watchlist,
+            Some(Action::ToggleWatchlist),
+        ));
+        controls.push(Control::state(
+            "detail:watched",
+            "Watched",
+            flags.watched,
+            Some(Action::ToggleWatched),
+        ));
+    }
+
+    if let Some(detail) = &facts.detail {
+        if !detail.synopsis.trim().is_empty() {
+            controls.push(Control::note(
+                "detail:synopsis",
+                detail.synopsis.clone(),
+                None,
+            ));
+        }
+        for (index, fact) in detail.facts.iter().enumerate() {
+            controls.push(Control::note(
+                format!("detail:fact:{index}"),
+                fact.clone(),
+                None,
+            ));
+        }
+        if !detail.available {
+            controls.push(Control::note("detail:unavailable", UNREADABLE, None));
+        }
+        if detail.shows_episodes {
+            controls.push(Control::heading(
+                "detail:season",
+                format!("Season {}", detail.season),
+            ));
+            controls.push(Control::note(
+                "detail:episode-count",
+                detail.episode_line.clone(),
+                None,
+            ));
+            if detail.seasons.len() > 1 {
+                for (index, season) in detail.seasons.iter().enumerate() {
+                    let current = *season == detail.season;
+                    controls.push(Control::choice(
+                        format!("detail:season:{index}"),
+                        format!("Season {season}"),
+                        current,
+                        (!current).then_some(Action::Season(index)),
+                        !current,
+                    ));
+                }
+            }
+        }
+    }
+
+    listing_controls(&facts.listing, facts.focus, controls);
+}
+
+const UNREADABLE: &str = "This file is not readable right now. Relink its source and rescan.";
+
+fn settings_controls(facts: &ScreenFacts<'_>, controls: &mut Vec<Control>) {
+    controls.push(Control::heading("settings:title", facts.heading.clone()));
+
+    let Some(settings) = &facts.settings else {
+        return;
+    };
+
+    for (index, label) in settings.sections.iter().enumerate() {
+        let current = index == settings.current;
+        let mut section = Control::press(
+            format!("settings:section:{index}"),
+            label.clone(),
+            (!current).then_some(Action::SettingsSection(index)),
+            !current,
+        );
+        if current {
+            section = section.with_value("current");
+        }
+        controls.push(section);
+    }
+
+    if let Some(label) = settings.sections.get(settings.current) {
+        controls.push(Control::heading("settings:section-title", label.clone()));
+    }
+
+    for (index, row) in settings.rows.iter().enumerate() {
+        let focused = index == settings.focus;
+        let key = format!("settings:{index}");
+        let control = match &row.kind {
+            SettingRowKind::Toggle(on) => Control::state(key, row.label.clone(), *on, row.action),
+            SettingRowKind::Slider { value, adjust } => {
+                Control::measure(key, row.label.clone(), value.clone(), *adjust)
+            }
+            SettingRowKind::Value(value) => {
+                Control::note(key, row.label.clone(), Some(value.clone()))
+            }
+            SettingRowKind::Action(enabled) => {
+                Control::press(key, row.label.clone(), row.action, *enabled)
+            }
+        };
+        controls.push(control.focused(focused));
+        if let Some(hint) = &row.hint
+            && !hint.trim().is_empty()
+        {
+            controls.push(Control::note(
+                format!("settings:{index}:hint"),
+                hint.clone(),
+                None,
+            ));
+        }
     }
 }
 
 fn player_controls(facts: &ScreenFacts<'_>, controls: &mut Vec<Control>) {
     let Some(player) = &facts.player else {
+        controls.push(Control::heading("player:title", facts.heading.clone()));
         return;
     };
-    controls.push(button(
+
+    controls.push(Control::press(
+        "player:back",
+        "Back",
+        Some(Action::BackFromPlayer),
+        true,
+    ));
+    controls.push(Control::heading("player:title", player.title.clone()));
+
+    if !player.chrome {
+        return;
+    }
+
+    if let Some(episode) = &player.episode {
+        controls.push(Control::note("player:episode", episode.clone(), None));
+    }
+    if let Some(output) = &player.output {
+        controls.push(Control::note("player:output", output.clone(), None));
+    }
+    if let Some(failure) = &player.failure {
+        controls.push(Control::note("player:failure", failure.clone(), None));
+    } else if player.preparing {
+        controls.push(Control::note(
+            "player:preparing",
+            "Preparing streams…",
+            None,
+        ));
+    }
+
+    controls.push(Control::measure(
+        "player:position",
+        "Position",
+        format!(
+            "{} of {}",
+            crate::app::clock(player.position),
+            crate::app::clock(player.duration)
+        ),
+        Some(Adjust {
+            increase: Action::SeekForward,
+            decrease: Action::SeekBack,
+        }),
+    ));
+    controls.push(Control::press(
         "player:play",
         player.play.clone(),
-        Action::TogglePlay,
+        Some(Action::TogglePlay),
+        true,
     ));
-    let position = format!(
-        "{} of {}",
-        crate::app::clock(player.position),
-        crate::app::clock(player.duration)
-    );
-    let mut seek_back = button("player:seek-back", "Back 10 seconds", Action::SeekBack);
-    seek_back.value = Some(position.clone());
-    controls.push(seek_back);
-    controls.push(button(
+    controls.push(Control::press(
+        "player:seek-back",
+        "Back 10 seconds",
+        Some(Action::SeekBack),
+        true,
+    ));
+    controls.push(Control::press(
         "player:seek-forward",
         "Forward 10 seconds",
-        Action::SeekForward,
+        Some(Action::SeekForward),
+        true,
     ));
-    controls.push(button(
-        "player:mute",
-        if player.muted { "Unmute" } else { "Mute" },
-        Action::ToggleMute,
-    ));
-    let mut quieter = button("player:volume-down", "Volume down", Action::VolumeDown);
-    quieter.value = Some(format!("{}%", player.volume));
-    controls.push(quieter);
-    let mut louder = button("player:volume-up", "Volume up", Action::VolumeUp);
-    louder.value = Some(format!("{}%", player.volume));
-    controls.push(louder);
-    controls.push(button(
+
+    if crate::ui::screens::player::control_visible(
+        player.width as f32,
+        crate::ui::screens::player::Control::Volume,
+    ) {
+        controls.push(Control::press(
+            "player:mute",
+            if player.muted { "Unmute" } else { "Mute" },
+            Some(Action::ToggleMute),
+            true,
+        ));
+        controls.push(Control::measure(
+            "player:volume",
+            "Volume",
+            format!("{}%", player.volume),
+            Some(Adjust {
+                increase: Action::VolumeUp,
+                decrease: Action::VolumeDown,
+            }),
+        ));
+    }
+
+    if crate::ui::screens::player::control_visible(
+        player.width as f32,
+        crate::ui::screens::player::Control::Subtitles,
+    ) {
+        if player.subtitles.is_empty() {
+            controls.push(Control::note("player:subtitles", "Subtitles · none", None));
+        } else {
+            for (index, (label, selected)) in player.subtitles.iter().enumerate() {
+                controls.push(Control::choice(
+                    format!("player:subtitles:{index}"),
+                    format!("Subtitles: {label}"),
+                    *selected,
+                    (!*selected).then_some(Action::SelectSubtitle(index)),
+                    !*selected,
+                ));
+            }
+        }
+    }
+
+    if crate::ui::screens::player::control_visible(
+        player.width as f32,
+        crate::ui::screens::player::Control::Audio,
+    ) {
+        if player.audio.is_empty() {
+            controls.push(Control::note("player:audio", "Audio · none", None));
+        } else {
+            for (index, (label, selected)) in player.audio.iter().enumerate() {
+                controls.push(Control::choice(
+                    format!("player:audio:{index}"),
+                    format!("Audio: {label}"),
+                    *selected,
+                    (!*selected).then_some(Action::SelectAudio(index)),
+                    !*selected,
+                ));
+            }
+        }
+    }
+
+    controls.push(Control::press(
         "player:fullscreen",
         if player.fullscreen {
             "Windowed"
         } else {
             "Fullscreen"
         },
-        Action::ToggleFullscreen,
+        Some(Action::ToggleFullscreen),
+        true,
     ));
-    if !player.fullscreen {
-        controls.push(button("player:back", "Back", Action::BackFromPlayer));
-    }
-    if let Some(title) = &player.up_next {
-        let mut now = button("player:next", "Play now", Action::PlayNext);
-        now.value = Some(title.clone());
-        controls.push(now);
-        controls.push(button("player:cancel-next", "Cancel", Action::CancelNext));
-    }
-    if let Some(skip) = &player.skip {
-        controls.push(button("player:skip", skip.clone(), Action::SkipSegment));
-    }
-    for (index, (label, selected)) in player.audio.iter().enumerate() {
-        let mut track = button(
-            &format!("player:audio:{index}"),
-            format!("Audio: {label}"),
-            Action::SelectAudio(index),
-        );
-        track.value = Some(
-            if *selected {
-                "selected"
-            } else {
-                "not selected"
-            }
-            .to_string(),
-        );
-        controls.push(track);
-    }
-    for (index, (label, selected)) in player.subtitles.iter().enumerate() {
-        let mut track = button(
-            &format!("player:subtitles:{index}"),
-            format!("Subtitles: {label}"),
-            Action::SelectSubtitle(index),
-        );
-        track.value = Some(
-            if *selected {
-                "selected"
-            } else {
-                "not selected"
-            }
-            .to_string(),
-        );
-        controls.push(track);
-    }
-    controls.push(text(
+    controls.push(Control::note(
         "player:mark-hint",
-        Role::StaticText,
         crate::ui::screens::player::MARK_HINT,
         None,
     ));
+
+    if let Some(up) = &player.up_next {
+        controls.push(Control::note(
+            "player:up-next",
+            format!("Up next: {up}"),
+            None,
+        ));
+        controls.push(Control::press(
+            "player:next",
+            "Play now",
+            Some(Action::PlayNext),
+            true,
+        ));
+        controls.push(Control::press(
+            "player:cancel-next",
+            "Cancel",
+            Some(Action::CancelNext),
+            true,
+        ));
+    }
+
+    if let Some(skip) = &player.skip {
+        controls.push(Control::press(
+            "player:skip",
+            skip.clone(),
+            Some(Action::SkipSegment),
+            true,
+        ));
+        if let Some(note) = &player.skip_note {
+            controls.push(Control::note("player:skip-note", note.clone(), None));
+        }
+    }
+
+    if let Some(note) = &player.resume_note {
+        controls.push(Control::note("player:resumed", note.clone(), None));
+    }
 }
+
+fn announcement(snapshot: &Snapshot) -> Option<&str> {
+    snapshot
+        .controls
+        .iter()
+        .find(|control| control.key == "status" || control.key == "status:error")
+        .map(|control| control.label.as_str())
+        .filter(|label| !label.trim().is_empty())
+        .filter(|label| !label.starts_with(SCAN_PROGRESS))
+}
+
+const SCAN_PROGRESS: &str = "Scanning\u{2026}";
 
 fn build(facts: &ScreenFacts<'_>) -> Snapshot {
     let mut controls: Vec<Control> = Vec::new();
-    let fullscreen_player =
-        facts.surface == Surface::Player && facts.player.as_ref().is_some_and(|p| p.fullscreen);
 
-    if !fullscreen_player {
-        controls.push(button("nav:home", "Home", Action::GoHome));
-        controls.push(button("nav:library", "Library", Action::GoLibrary));
-        controls.push(button("nav:settings", "Settings", Action::GoSettings));
-        controls.push(button("nav:refresh", "Refresh", Action::Refresh));
-        controls.push(button("nav:close", "Close", Action::Close));
+    if facts.surface != Surface::Player {
+        for (key, label, action, screen) in [
+            ("nav:home", "Home", Action::GoHome, Surface::Home),
+            ("nav:library", "Library", Action::GoLibrary, Surface::Browse),
+            (
+                "nav:settings",
+                "Settings",
+                Action::GoSettings,
+                Surface::Settings,
+            ),
+        ] {
+            let mut destination = Control::press(key, label, Some(action), true);
+            if facts.surface == screen {
+                destination = destination.with_value("current");
+            }
+            controls.push(destination);
+        }
+        controls.push(Control::press(
+            "nav:refresh",
+            "Refresh",
+            Some(Action::Refresh),
+            true,
+        ));
+        controls.push(Control::press(
+            "nav:search",
+            "Search",
+            Some(Action::Search),
+            true,
+        ));
     }
 
-    controls.push(text(
-        "screen:heading",
-        Role::Heading,
-        facts.title.clone(),
-        None,
-    ));
+    if let Some(progress) = &facts.scan {
+        controls.push(Control::note(
+            "scan:progress",
+            "Scanning",
+            Some(progress.clone()),
+        ));
+        controls.push(Control::press(
+            "scan:cancel",
+            "Cancel scan",
+            Some(Action::CancelScan),
+            true,
+        ));
+    }
 
     match facts.surface {
-        Surface::Home => {
-            item_controls(facts, &mut controls);
-            if facts.items.is_empty() {
-                controls.push(button(
-                    "home:choose-folder",
-                    "Choose a folder…",
-                    Action::ChooseFolder,
-                ));
-            }
-        }
-        Surface::Browse => {
-            browse_controls(facts, &mut controls);
-            item_controls(facts, &mut controls);
-        }
-        Surface::Detail => {
-            detail_controls(facts, &mut controls);
-            item_controls(facts, &mut controls);
-        }
-        Surface::Settings => {
-            for (index, (label, actionable)) in facts.settings.iter().enumerate() {
-                if *actionable {
-                    let mut action =
-                        button(&format!("settings:{index}"), label, Action::Settings(index));
-                    action.focused = index == facts.settings_focus;
-                    controls.push(action);
-                } else {
-                    let mut value = text(
-                        &format!("settings:{index}"),
-                        Role::StaticText,
-                        label.clone(),
-                        None,
-                    );
-                    value.focused = index == facts.settings_focus;
-                    controls.push(value);
-                }
-            }
-        }
-        Surface::Player => {
-            if let Some(player) = &facts.player {
-                controls.push(text(
-                    "player:title",
-                    Role::Heading,
-                    player.title.clone(),
-                    Some(player.state.clone()),
-                ));
-                controls.push(text(
-                    "player:position",
-                    Role::StaticText,
-                    "Position",
-                    Some(format!(
-                        "{} of {}",
-                        crate::app::clock(player.position),
-                        crate::app::clock(player.duration)
-                    )),
-                ));
-            }
-            player_controls(facts, &mut controls);
-        }
+        Surface::Home => home_controls(facts, &mut controls),
+        Surface::Browse => library_controls(facts, &mut controls),
+        Surface::Detail => detail_controls(facts, &mut controls),
+        Surface::Settings => settings_controls(facts, &mut controls),
+        Surface::Player => player_controls(facts, &mut controls),
     }
 
+    controls.extend(facts.extras.iter().cloned());
+
     if let Some(error) = &facts.error {
-        controls.push(text("status:error", Role::StaticText, error.clone(), None));
+        controls.push(Control::note("status:error", error.clone(), None));
     } else if let Some(status) = &facts.status {
-        controls.push(text("status", Role::StaticText, status.clone(), None));
+        controls.push(Control::note("status", status.clone(), None));
     }
 
     let mut snapshot = Snapshot {
         title: facts.title.clone(),
         controls,
     };
-    if facts.surface == Surface::Home
-        || facts.surface == Surface::Browse
-        || facts.surface == Surface::Detail
-    {
-        let mut seen = false;
-        for control in snapshot
-            .controls
-            .iter_mut()
-            .filter(|c| c.key.starts_with("item:"))
-        {
-            if control.focused && !seen {
-                seen = true;
-            } else {
-                control.focused = false;
-            }
+    let mut claimed = false;
+    for control in snapshot.controls.iter_mut() {
+        if control.focused && claimed {
+            control.focused = false;
+        } else if control.focused {
+            claimed = true;
         }
     }
     snapshot
 }
-
 #[cfg(target_os = "macos")]
 mod appkit {
     use std::ffi::{CStr, c_char, c_void};
@@ -663,6 +1223,18 @@ mod appkit {
     use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
 
     use super::{CHECK_ENV, Control, Snapshot, enqueue, pending};
+
+    #[link(name = "AppKit", kind = "framework")]
+    unsafe extern "C" {
+        static NSAccessibilityAnnouncementRequestedNotification: *mut AnyObject;
+        fn NSAccessibilityPostNotificationWithUserInfo(
+            element: *mut AnyObject,
+            notification: *mut AnyObject,
+            user_info: *mut AnyObject,
+        );
+    }
+
+    static ANNOUNCED: Mutex<String> = Mutex::new(String::new());
 
     #[repr(C)]
     #[derive(Clone, Copy, Default, Debug)]
@@ -773,19 +1345,56 @@ mod appkit {
     }
 
     unsafe extern "C-unwind" fn action_names(element: *mut AnyObject, _: Sel) -> *mut AnyObject {
-        let Some(array_class) = class(c"NSArray") else {
+        let Some(array_class) = class(c"NSMutableArray") else {
             return ptr::null_mut();
         };
-        let actionable =
-            unsafe { control_of(element) }.is_some_and(|control| control.action.is_some());
-        if !actionable {
-            let empty: *mut AnyObject = unsafe { msg_send![array_class, array] };
-            return empty;
+        let array: *mut AnyObject = unsafe { msg_send![array_class, array] };
+        if array.is_null() {
+            return array;
         }
-        let press = unsafe { string("AXPress") };
-        unsafe {
-            let array: *mut AnyObject = msg_send![array_class, arrayWithObject: press];
-            array
+        let Some(control) = (unsafe { control_of(element) }) else {
+            return array;
+        };
+        if control.action.is_some() {
+            let press = unsafe { string("AXPress") };
+            if !press.is_null() {
+                unsafe {
+                    let _: () = msg_send![array, addObject: &*press];
+                }
+            }
+        }
+        if control.adjust.is_some() {
+            for name in ["AXIncrement", "AXDecrement"] {
+                let action = unsafe { string(name) };
+                if !action.is_null() {
+                    unsafe {
+                        let _: () = msg_send![array, addObject: &*action];
+                    }
+                }
+            }
+        }
+        array
+    }
+
+    unsafe extern "C-unwind" fn increment(element: *mut AnyObject, _: Sel) -> Bool {
+        match unsafe { control_of(element) }.and_then(|control| control.adjust.map(|a| a.increase))
+        {
+            Some(action) => {
+                enqueue(action);
+                Bool::YES
+            }
+            None => Bool::NO,
+        }
+    }
+
+    unsafe extern "C-unwind" fn decrement(element: *mut AnyObject, _: Sel) -> Bool {
+        match unsafe { control_of(element) }.and_then(|control| control.adjust.map(|a| a.decrease))
+        {
+            Some(action) => {
+                enqueue(action);
+                Bool::YES
+            }
+            None => Bool::NO,
         }
     }
 
@@ -823,6 +1432,14 @@ mod appkit {
                 builder.add_method::<AnyObject, _>(
                     Sel::register(c"accessibilityPerformPress"),
                     perform_press as unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> Bool,
+                );
+                builder.add_method::<AnyObject, _>(
+                    Sel::register(c"accessibilityIncrement"),
+                    increment as unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> Bool,
+                );
+                builder.add_method::<AnyObject, _>(
+                    Sel::register(c"accessibilityDecrement"),
+                    decrement as unsafe extern "C-unwind" fn(*mut AnyObject, Sel) -> Bool,
                 );
             }
             Some(builder.register())
@@ -963,6 +1580,44 @@ mod appkit {
         }
     }
 
+    fn announce(snapshot: &Snapshot, view: *mut AnyObject) {
+        let Some(text) = super::announcement(snapshot) else {
+            return;
+        };
+        let mut last = match ANNOUNCED.lock() {
+            Ok(last) => last,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if *last == text {
+            return;
+        }
+        last.clear();
+        last.push_str(text);
+        drop(last);
+        unsafe { post_announcement(text, view) };
+    }
+
+    unsafe fn post_announcement(text: &str, view: *mut AnyObject) {
+        let Some(dictionary_class) = class(c"NSDictionary") else {
+            return;
+        };
+        let message = unsafe { string(text) };
+        let key = unsafe { string("AXAnnouncement") };
+        if message.is_null() || key.is_null() {
+            return;
+        }
+        let dictionary: *mut AnyObject =
+            unsafe { msg_send![dictionary_class, dictionaryWithObject: &*message, forKey: &*key] };
+        if dictionary.is_null() {
+            return;
+        }
+        let notification = unsafe { NSAccessibilityAnnouncementRequestedNotification };
+        if notification.is_null() {
+            return;
+        }
+        unsafe { NSAccessibilityPostNotificationWithUserInfo(view, notification, dictionary) };
+    }
+
     pub(crate) fn attach(snapshot: &Snapshot) {
         let Some(superclass) = element_class() else {
             return;
@@ -1007,6 +1662,7 @@ mod appkit {
                 }
             }
         }
+        announce(snapshot, view);
         let mut live = match LIVE.lock() {
             Ok(live) => live,
             Err(poisoned) => poisoned.into_inner(),
@@ -1235,6 +1891,32 @@ mod appkit {
             .iter()
             .zip(snapshot.controls.iter())
             .all(|(reading, control)| reading.focused == control.focused);
+        let values_match = readings.len() == snapshot.controls.len()
+            && readings
+                .iter()
+                .zip(snapshot.controls.iter())
+                .all(|(reading, control)| reading.value == control.value);
+        let enabled_match = readings
+            .iter()
+            .zip(snapshot.controls.iter())
+            .all(|(reading, control)| reading.enabled == control.enabled);
+        let press_match =
+            readings
+                .iter()
+                .zip(snapshot.controls.iter())
+                .all(|(reading, control)| {
+                    reading.actions.iter().any(|name| name == "AXPress") == control.action.is_some()
+                });
+        let adjust_match =
+            readings
+                .iter()
+                .zip(snapshot.controls.iter())
+                .all(|(reading, control)| {
+                    let increment = reading.actions.iter().any(|name| name == "AXIncrement");
+                    let decrement = reading.actions.iter().any(|name| name == "AXDecrement");
+                    increment == control.adjust.is_some() && decrement == control.adjust.is_some()
+                });
+        let focused_count = readings.iter().filter(|reading| reading.focused).count();
         let focused_label = readings
             .iter()
             .find(|reading| reading.focused)
@@ -1259,7 +1941,12 @@ mod appkit {
             format!("expected {}", snapshot.controls.len()),
             format!("all_labels_non_empty {all_labels}"),
             format!("labels_match {labels_match}"),
+            format!("values_match {values_match}"),
+            format!("enabled_match {enabled_match}"),
+            format!("press_actions_match {press_match}"),
+            format!("adjust_actions_match {adjust_match}"),
             format!("focus_match {focus_match}"),
+            format!("focused_count {focused_count}"),
             format!("focused_key {focused_key}"),
             format!("focused_label {focused_label}"),
             format!("pressed {pressed}"),
@@ -1291,7 +1978,6 @@ mod appkit {
         lines
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1327,11 +2013,188 @@ mod tests {
         }
     }
 
+    fn keys(snapshot: &Snapshot) -> Vec<&str> {
+        snapshot
+            .controls
+            .iter()
+            .map(|control| control.key.as_str())
+            .collect()
+    }
+
+    fn find<'a>(snapshot: &'a Snapshot, key: &str) -> &'a Control {
+        snapshot
+            .controls
+            .iter()
+            .find(|control| control.key == key)
+            .unwrap_or_else(|| panic!("{key} was not announced"))
+    }
+
+    fn position(snapshot: &Snapshot, key: &str) -> usize {
+        snapshot
+            .controls
+            .iter()
+            .position(|control| control.key == key)
+            .unwrap_or_else(|| panic!("{key} was not announced"))
+    }
+
     fn home() -> Snapshot {
         let items = [item(1, "First"), item(2, "Second"), item(3, "Third")];
         let mut facts = ScreenFacts::new(Surface::Home, "Home");
-        facts.items = items.iter().collect();
+        facts.heading = "First".to_string();
+        facts.hero = Some(Hero {
+            title: "First".to_string(),
+            eyebrow: "CONTINUE WATCHING".to_string(),
+            detail: "2000 · Film".to_string(),
+            primary: "Resume".to_string(),
+            secondary: "Details".to_string(),
+            playable: true,
+        });
+        facts.listing = Listing::Sectioned(vec![
+            ("Continue watching".to_string(), vec![&items[0]]),
+            ("Films".to_string(), vec![&items[1], &items[2]]),
+        ]);
         facts.focus = Some(1);
+        build(&facts)
+    }
+
+    fn library() -> Snapshot {
+        let items = [item(1, "First"), item(2, "Second")];
+        let mut facts = ScreenFacts::new(Surface::Browse, "Library");
+        facts.heading = "Library".to_string();
+        facts.listing = Listing::Flat(items.iter().collect());
+        facts.focus = Some(0);
+        facts.page = Some(Page { index: 0, count: 1 });
+        facts.filters = Some(Filters {
+            kind: 1,
+            unwatched: true,
+            watchlist: false,
+            favourites: false,
+            available: false,
+        });
+        facts.library = Some(LibraryFacts {
+            empty: None,
+            total_line: "2 titles".to_string(),
+            query: "the".to_string(),
+            sorts: vec!["Title".to_string(), "Recently added".to_string()],
+            sort: 1,
+            genres: vec!["Drama".to_string()],
+            genre: Some(0),
+            source_line: "1 folder · 2 files · never scanned".to_string(),
+        });
+        build(&facts)
+    }
+
+    fn detail() -> Snapshot {
+        let mut subject = item(9, "Aardvark");
+        subject.kind = MediaKind::Series;
+        subject.season = Some(1);
+        subject.episode = Some(1);
+        let episodes = [item(1, "Aardvark"), item(2, "Aardvark")];
+        let mut facts = ScreenFacts::new(Surface::Detail, "Details");
+        facts.heading = "Aardvark".to_string();
+        facts.subject = Some(&subject);
+        facts.listing = Listing::Flat(episodes.iter().collect());
+        facts.focus = Some(1);
+        facts.flags = Some(Flags {
+            favourite: false,
+            watchlist: true,
+            watched: false,
+        });
+        facts.detail = Some(DetailFacts {
+            kind: "SERIES".to_string(),
+            metadata: "2000 · 1 season · 2 episodes".to_string(),
+            synopsis: "A synopsis.".to_string(),
+            facts: vec!["series".to_string(), "S01E01".to_string()],
+            available: true,
+            seasons: vec![1, 2],
+            season: 1,
+            episode_line: "2 episodes".to_string(),
+            shows_episodes: true,
+        });
+        facts.extras = vec![
+            Control::press(
+                "detail:restart",
+                "Start over",
+                Some(Action::RestartDetail),
+                true,
+            ),
+            Control::state(
+                "detail:favourite",
+                "Favourite",
+                false,
+                Some(Action::ToggleFavourite),
+            ),
+            Control::press(
+                "detail:hide-continue",
+                "Hide from Continue",
+                Some(Action::HideFromContinue),
+                true,
+            ),
+        ];
+        build(&facts)
+    }
+
+    fn settings() -> Snapshot {
+        let mut facts = ScreenFacts::new(Surface::Settings, "Settings");
+        facts.heading = "Settings".to_string();
+        facts.settings = Some(SettingsFacts {
+            sections: vec!["Playback".to_string(), "Data and backups".to_string()],
+            current: 0,
+            focus: 1,
+            rows: vec![
+                SettingRow {
+                    label: "Play the next episode automatically".to_string(),
+                    hint: Some("A gap in a season stops the chain.".to_string()),
+                    kind: SettingRowKind::Toggle(true),
+                    action: Some(Action::Settings(0)),
+                },
+                SettingRow {
+                    label: "Subtitle size".to_string(),
+                    hint: None,
+                    kind: SettingRowKind::Slider {
+                        value: "125%".to_string(),
+                        adjust: Some(Adjust {
+                            increase: Action::Settings(1),
+                            decrease: Action::Settings(1),
+                        }),
+                    },
+                    action: None,
+                },
+                SettingRow {
+                    label: "Library".to_string(),
+                    hint: None,
+                    kind: SettingRowKind::Value("5 files".to_string()),
+                    action: None,
+                },
+            ],
+        });
+        build(&facts)
+    }
+
+    fn player(width: f64) -> Snapshot {
+        let mut facts = ScreenFacts::new(Surface::Player, "Player");
+        facts.heading = "Film".to_string();
+        facts.player = Some(Player {
+            title: "Film".to_string(),
+            play: "Pause".to_string(),
+            position: 12.0,
+            duration: 60.0,
+            muted: false,
+            volume: 50,
+            fullscreen: false,
+            chrome: true,
+            preparing: false,
+            width,
+            episode: Some("S01E01".to_string()),
+            output: Some("1080p".to_string()),
+            failure: None,
+            up_next: Some("Next film".to_string()),
+            skip: Some("Skip intro".to_string()),
+            skip_note: Some("A segment you marked starts here.".to_string()),
+            resume_note: Some("resumed from 0:12".to_string()),
+            audio: vec![("English".to_string(), true), ("French".to_string(), false)],
+            subtitles: vec![("Off".to_string(), true)],
+        });
         build(&facts)
     }
 
@@ -1343,40 +2206,8 @@ mod tests {
     }
 
     #[test]
-    fn every_published_control_carries_a_label() {
-        let mut browse = ScreenFacts::new(Surface::Browse, "Library");
-        let items = [item(1, "First")];
-        browse.items = items.iter().collect();
-        browse.page = Some(Page { index: 0, count: 3 });
-        browse.filters = Some(Filters {
-            watchlist: true,
-            favourites: false,
-            available: true,
-        });
-
-        let mut settings = ScreenFacts::new(Surface::Settings, "Settings");
-        settings.settings = vec![
-            ("Back up now".to_string(), true),
-            ("Grant a folder".to_string(), true),
-        ];
-
-        let mut player = ScreenFacts::new(Surface::Player, "Player");
-        player.player = Some(Player {
-            title: "Film".to_string(),
-            state: "Playing".to_string(),
-            play: "Pause".to_string(),
-            position: 12.0,
-            duration: 60.0,
-            muted: false,
-            volume: 50,
-            fullscreen: false,
-            up_next: Some("Next film".to_string()),
-            skip: Some("Skip intro".to_string()),
-            audio: vec![("English".to_string(), true)],
-            subtitles: vec![("None".to_string(), true)],
-        });
-
-        for snapshot in [home(), build(&browse), build(&settings), build(&player)] {
+    fn every_published_control_carries_a_label_and_a_unique_key() {
+        for snapshot in [home(), library(), detail(), settings(), player(1440.0)] {
             assert!(
                 !snapshot.controls.is_empty(),
                 "{} published nothing",
@@ -1390,82 +2221,446 @@ mod tests {
                 );
                 assert!(!control.key.trim().is_empty());
             }
+            let mut seen: Vec<&str> = keys(&snapshot);
+            seen.sort_unstable();
+            let unique = seen.len();
+            seen.dedup();
+            assert_eq!(
+                unique,
+                seen.len(),
+                "{} announced a key twice",
+                snapshot.title
+            );
         }
     }
 
     #[test]
-    fn the_published_items_are_the_ones_the_screen_shows() {
-        let snapshot = home();
-        let items: Vec<&Control> = snapshot
-            .controls
-            .iter()
-            .filter(|control| control.key.starts_with("item:"))
-            .collect();
-        assert_eq!(items.len(), 3);
-        assert_eq!(items[0].label, "First");
-        assert_eq!(items[2].label, "Third");
-        assert_eq!(items[0].action, Some(Action::Open(0)));
-        assert_eq!(items[2].action, Some(Action::Open(2)));
+    fn a_role_that_presses_carries_a_press_and_a_slider_carries_none() {
+        for snapshot in [home(), library(), detail(), settings(), player(1440.0)] {
+            for control in &snapshot.controls {
+                if control.action.is_some() {
+                    assert!(
+                        control.role.presses(),
+                        "{} gave {} an action its role cannot perform",
+                        snapshot.title,
+                        control.key
+                    );
+                }
+                if control.adjust.is_some() {
+                    assert!(
+                        control.role.adjusts(),
+                        "{} gave {} an adjustment its role cannot perform",
+                        snapshot.title,
+                        control.key
+                    );
+                }
+                if matches!(control.role, Role::StaticText | Role::Heading) {
+                    assert_eq!(
+                        control.action, None,
+                        "{} is a control but is not drawn as one",
+                        control.key
+                    );
+                    assert_eq!(control.adjust, None);
+                }
+            }
+        }
     }
 
     #[test]
-    fn the_focused_item_is_the_one_the_application_marks() {
+    fn the_navigation_is_announced_once_and_carries_no_close_it_does_not_draw() {
+        for snapshot in [home(), library(), detail(), settings()] {
+            for key in [
+                "nav:home",
+                "nav:library",
+                "nav:settings",
+                "nav:refresh",
+                "nav:search",
+            ] {
+                let matching = snapshot.controls.iter().filter(|c| c.key == key).count();
+                assert_eq!(matching, 1, "{key} was not announced exactly once");
+            }
+            assert!(
+                snapshot.controls.iter().all(|c| c.key != "nav:close"),
+                "{} announced a Close button the shell never draws",
+                snapshot.title
+            );
+        }
+
+        let snapshot = library();
+        let current = find(&snapshot, "nav:library");
+        assert_eq!(current.value.as_deref(), Some("current"));
+        assert_eq!(find(&snapshot, "nav:home").value, None);
+    }
+
+    #[test]
+    fn the_player_announces_no_shell_because_it_draws_none() {
+        let snapshot = player(1440.0);
+        assert!(snapshot.controls.iter().all(|c| !c.key.starts_with("nav:")));
+        assert!(snapshot.controls.iter().any(|c| c.key == "player:play"));
+    }
+
+    #[test]
+    fn home_announces_the_hero_action_the_rails_and_their_titles_in_order() {
+        let snapshot = home();
+        let hero = position(&snapshot, "home:hero:play");
+        let first_rail = position(&snapshot, "rail:0");
+        let first_card = position(&snapshot, "item:0");
+        let second_rail = position(&snapshot, "rail:1");
+
+        assert!(hero < first_rail, "the hero is drawn above the rails");
+        assert!(
+            first_rail < first_card,
+            "a rail names itself before its cards"
+        );
+        assert!(first_card < second_rail);
+
+        assert_eq!(find(&snapshot, "home:hero:play").role, Role::Button);
+        assert_eq!(find(&snapshot, "home:hero:play").label, "Resume");
+        assert_eq!(
+            find(&snapshot, "home:hero:details").action,
+            Some(Action::OpenHero)
+        );
+        assert_eq!(find(&snapshot, "rail:0").label, "Continue watching");
+        assert_eq!(find(&snapshot, "rail:1").value.as_deref(), Some("2"));
+        assert_eq!(find(&snapshot, "item:2").label, "Third");
+        assert_eq!(find(&snapshot, "item:2").action, Some(Action::Open(2)));
+    }
+
+    #[test]
+    fn an_empty_home_still_offers_the_two_things_it_draws() {
+        let facts = ScreenFacts::new(Surface::Home, "Home");
+        let snapshot = build(&facts);
+        assert_eq!(
+            find(&snapshot, "home:choose-folder").action,
+            Some(Action::ChooseFolder)
+        );
+        assert_eq!(
+            find(&snapshot, "home:refresh").action,
+            Some(Action::Refresh)
+        );
+    }
+
+    #[test]
+    fn the_library_announces_the_chips_it_draws_and_the_pager_it_does_not() {
+        let snapshot = library();
+        assert_eq!(
+            find(&snapshot, "library:kind:1").value.as_deref(),
+            Some("on")
+        );
+        assert_eq!(
+            find(&snapshot, "library:kind:0").value.as_deref(),
+            Some("off")
+        );
+        assert_eq!(
+            find(&snapshot, "library:unwatched").value.as_deref(),
+            Some("on")
+        );
+        assert_eq!(
+            find(&snapshot, "library:sort:1").value.as_deref(),
+            Some("on")
+        );
+        assert_eq!(
+            find(&snapshot, "library:sort:0").value.as_deref(),
+            Some("off")
+        );
+        assert_eq!(
+            find(&snapshot, "library:search").value.as_deref(),
+            Some("the")
+        );
+        assert_eq!(
+            find(&snapshot, "library:source").label,
+            "1 folder · 2 files · never scanned"
+        );
+        assert!(
+            snapshot
+                .controls
+                .iter()
+                .all(|c| !c.key.starts_with("library:previous")),
+            "a one-page library draws no pager"
+        );
+
+        let chips = position(&snapshot, "library:kind:0");
+        let grid = position(&snapshot, "item:0");
+        assert!(chips < grid, "the chips sit above the grid");
+    }
+
+    #[test]
+    fn a_paged_library_announces_the_pager_after_the_grid() {
+        let items = [item(1, "First")];
+        let mut facts = ScreenFacts::new(Surface::Browse, "Library");
+        facts.listing = Listing::Flat(items.iter().collect());
+        facts.page = Some(Page { index: 1, count: 4 });
+        let snapshot = build(&facts);
+        assert!(position(&snapshot, "item:0") < position(&snapshot, "library:next"));
+        assert!(find(&snapshot, "library:previous").enabled);
+        assert!(find(&snapshot, "library:next").enabled);
+    }
+
+    #[test]
+    fn the_detail_announces_the_back_affordance_and_the_title_before_the_actions() {
+        let snapshot = detail();
+        assert!(position(&snapshot, "detail:back") < position(&snapshot, "detail:title"));
+        assert!(position(&snapshot, "detail:title") < position(&snapshot, "detail:play"));
+        assert!(position(&snapshot, "detail:play") < position(&snapshot, "detail:synopsis"));
+        assert!(position(&snapshot, "detail:season") < position(&snapshot, "item:0"));
+        assert!(
+            position(&snapshot, "item:1") < position(&snapshot, "detail:restart"),
+            "the extra actions are drawn below the episode list"
+        );
+        assert_eq!(
+            find(&snapshot, "detail:back").action,
+            Some(Action::BackFromDetail)
+        );
+        assert_eq!(find(&snapshot, "detail:title").role, Role::Heading);
+        assert_eq!(
+            find(&snapshot, "detail:watchlist").value.as_deref(),
+            Some("on")
+        );
+        assert_eq!(
+            find(&snapshot, "detail:favourite").value.as_deref(),
+            Some("off")
+        );
+        assert_eq!(
+            find(&snapshot, "detail:season:1").action,
+            Some(Action::Season(1))
+        );
+        assert!(!find(&snapshot, "detail:season:0").enabled);
+    }
+
+    #[test]
+    fn a_film_detail_announces_no_episode_it_does_not_list() {
+        let subject = item(1, "Zulu");
+        let mut facts = ScreenFacts::new(Surface::Detail, "Details");
+        facts.subject = Some(&subject);
+        facts.listing = Listing::None;
+        facts.detail = Some(DetailFacts {
+            kind: "FILM".to_string(),
+            metadata: "2000 · 100 min".to_string(),
+            synopsis: String::new(),
+            facts: Vec::new(),
+            available: true,
+            seasons: Vec::new(),
+            season: 0,
+            episode_line: String::new(),
+            shows_episodes: false,
+        });
+        let snapshot = build(&facts);
+        assert!(
+            snapshot
+                .controls
+                .iter()
+                .all(|c| !c.key.starts_with("item:")),
+            "a film has no episode list to announce"
+        );
+        assert!(snapshot.controls.iter().all(|c| c.key != "detail:season"));
+    }
+
+    #[test]
+    fn settings_announces_the_rail_the_rows_and_what_each_control_is() {
+        let snapshot = settings();
+        assert!(position(&snapshot, "settings:section:0") < position(&snapshot, "settings:0"));
+        assert_eq!(
+            find(&snapshot, "settings:section:0").value.as_deref(),
+            Some("current")
+        );
+        assert!(!find(&snapshot, "settings:section:0").enabled);
+        assert!(find(&snapshot, "settings:section:1").enabled);
+        assert_eq!(find(&snapshot, "settings:0").role, Role::CheckBox);
+        assert_eq!(find(&snapshot, "settings:0").value.as_deref(), Some("on"));
+        assert_eq!(
+            find(&snapshot, "settings:0:hint").label,
+            "A gap in a season stops the chain."
+        );
+        assert_eq!(find(&snapshot, "settings:1").role, Role::Slider);
+        assert_eq!(find(&snapshot, "settings:1").value.as_deref(), Some("125%"));
+        assert_eq!(find(&snapshot, "settings:2").role, Role::StaticText);
+        assert_eq!(
+            find(&snapshot, "settings:2").action,
+            None,
+            "a value is not a button"
+        );
+        assert_eq!(
+            find(&snapshot, "settings:2").value.as_deref(),
+            Some("5 files")
+        );
+        assert!(find(&snapshot, "settings:1").focused);
+    }
+
+    #[test]
+    fn the_player_announces_its_two_sliders_and_no_step_button_it_does_not_draw() {
+        let snapshot = player(1440.0);
+        assert_eq!(find(&snapshot, "player:position").role, Role::Slider);
+        assert_eq!(
+            find(&snapshot, "player:position").value.as_deref(),
+            Some("0:12 of 1:00")
+        );
+        assert_eq!(find(&snapshot, "player:volume").role, Role::Slider);
+        assert_eq!(
+            find(&snapshot, "player:volume").value.as_deref(),
+            Some("50%")
+        );
+        for phantom in ["player:volume-up", "player:volume-down"] {
+            assert!(
+                snapshot.controls.iter().all(|c| c.key != phantom),
+                "{phantom} is announced but never drawn"
+            );
+        }
+        assert_eq!(
+            find(&snapshot, "player:audio:0").value.as_deref(),
+            Some("on")
+        );
+        assert_eq!(find(&snapshot, "player:audio:1").role, Role::RadioButton);
+        assert!(find(&snapshot, "player:audio:1").enabled);
+        assert_eq!(find(&snapshot, "player:audio:0").action, None);
+        assert_eq!(find(&snapshot, "player:skip").label, "Skip intro");
+    }
+
+    #[test]
+    fn the_player_drops_exactly_the_controls_the_window_drops() {
+        let wide = player(1440.0);
+        let standard = player(1000.0);
+        let narrow = player(800.0);
+
+        assert!(wide.controls.iter().any(|c| c.key == "player:subtitles:0"));
+        assert!(
+            standard
+                .controls
+                .iter()
+                .all(|c| c.key != "player:subtitles:0")
+        );
+        assert!(standard.controls.iter().any(|c| c.key == "player:audio:0"));
+        assert!(narrow.controls.iter().all(|c| c.key != "player:audio:0"));
+        assert!(narrow.controls.iter().all(|c| c.key != "player:volume"));
+        assert!(narrow.controls.iter().any(|c| c.key == "player:position"));
+    }
+
+    #[test]
+    fn a_receded_chrome_announces_the_film_and_no_control_it_hides() {
+        let mut facts = ScreenFacts::new(Surface::Player, "Player");
+        facts.player = Some(Player {
+            title: "Film".to_string(),
+            play: "Pause".to_string(),
+            position: 0.0,
+            duration: 60.0,
+            muted: false,
+            volume: 50,
+            fullscreen: false,
+            chrome: false,
+            preparing: false,
+            width: 1440.0,
+            episode: None,
+            output: None,
+            failure: None,
+            up_next: None,
+            skip: None,
+            skip_note: None,
+            resume_note: None,
+            audio: Vec::new(),
+            subtitles: Vec::new(),
+        });
+        let snapshot = build(&facts);
+        assert_eq!(
+            snapshot.controls.len(),
+            2,
+            "back and the title, nothing else"
+        );
+        assert_eq!(keys(&snapshot), vec!["player:back", "player:title"]);
+    }
+
+    #[test]
+    fn the_focused_control_is_the_one_the_application_marks() {
         let snapshot = home();
         let focused: Vec<&Control> = snapshot.controls.iter().filter(|c| c.focused).collect();
         assert_eq!(focused.len(), 1);
+        assert_eq!(focused[0].key, "item:1");
         assert_eq!(focused[0].label, "Second");
-        assert_eq!(focused[0].action, Some(Action::Open(1)));
     }
 
     #[test]
     fn a_focus_index_past_the_end_marks_nothing() {
         let items = [item(1, "First")];
         let mut facts = ScreenFacts::new(Surface::Browse, "Library");
-        facts.items = items.iter().collect();
+        facts.listing = Listing::Flat(items.iter().collect());
         facts.focus = Some(9);
         let snapshot = build(&facts);
         assert!(snapshot.controls.iter().all(|control| !control.focused));
     }
 
     #[test]
-    fn settings_follow_the_actions_the_screen_offers() {
-        let rows = vec![
-            ("Back up now".to_string(), true),
-            ("Backup file".to_string(), false),
+    fn a_second_focus_cannot_be_published() {
+        let items = [item(1, "First")];
+        let mut facts = ScreenFacts::new(Surface::Detail, "Details");
+        facts.subject = Some(&items[0]);
+        facts.listing = Listing::Flat(items.iter().collect());
+        facts.focus = Some(0);
+        facts.extras = vec![
+            Control::press(
+                "detail:restart",
+                "Start over",
+                Some(Action::RestartDetail),
+                true,
+            )
+            .focused(true),
         ];
-        let mut facts = ScreenFacts::new(Surface::Settings, "Settings");
-        facts.settings = rows.clone();
-        facts.settings_focus = 1;
         let snapshot = build(&facts);
-        let published: Vec<&Control> = snapshot
-            .controls
-            .iter()
-            .filter(|control| control.key.starts_with("settings:"))
-            .collect();
-        assert_eq!(published.len(), rows.len());
-        assert_eq!(published[0].label, rows[0].0);
-        assert_eq!(published[0].action, Some(Action::Settings(0)));
-        assert!(published[1].focused);
-        assert!(!published[0].focused);
+        assert_eq!(snapshot.controls.iter().filter(|c| c.focused).count(), 1);
+    }
+
+    #[test]
+    fn the_status_line_is_published_last_and_only_when_it_has_something_to_say() {
+        let mut facts = ScreenFacts::new(Surface::Browse, "Library");
+        assert!(facts.status.is_none());
+        facts.status = Some("Scanned 2 folders".to_string());
+        let snapshot = build(&facts);
         assert_eq!(
-            published[1].action, None,
-            "a row that only shows a value must not be announced as a button"
+            snapshot.controls.last().map(|c| c.key.as_str()),
+            Some("status")
+        );
+
+        facts.status = None;
+        facts.error = Some("scan_failed: no permission".to_string());
+        let snapshot = build(&facts);
+        assert_eq!(
+            snapshot.controls.last().map(|c| c.key.as_str()),
+            Some("status:error")
         );
     }
 
     #[test]
-    fn the_navigation_is_announced_once_per_screen() {
-        let snapshot = home();
-        for key in [
-            "nav:home",
-            "nav:library",
-            "nav:settings",
-            "nav:refresh",
-            "nav:close",
-        ] {
-            let matching = snapshot.controls.iter().filter(|c| c.key == key).count();
-            assert_eq!(matching, 1, "{key} was not announced exactly once");
-        }
+    fn the_status_line_is_the_one_thing_worth_announcing() {
+        let mut facts = ScreenFacts::new(Surface::Browse, "Library");
+        assert_eq!(announcement(&build(&facts)), None);
+
+        facts.status = Some("Scanned 2 folders".to_string());
+        assert_eq!(announcement(&build(&facts)), Some("Scanned 2 folders"));
+
+        facts.error = Some("backup_failed: disk full".to_string());
+        assert_eq!(
+            announcement(&build(&facts)),
+            Some("backup_failed: disk full"),
+            "an error is announced instead of the status it replaced"
+        );
+
+        facts.error = Some("   ".to_string());
+        assert_eq!(
+            announcement(&build(&facts)),
+            None,
+            "a blank line is silence"
+        );
+
+        facts.error = None;
+        facts.status = Some("Scanning… 240 entries, 240 imported".to_string());
+        assert_eq!(
+            announcement(&build(&facts)),
+            None,
+            "a scan that counts up is read from the strip, not announced twice a second"
+        );
+
+        facts.status = Some("Scan finished: 1,200 entries".to_string());
+        assert_eq!(
+            announcement(&build(&facts)),
+            Some("Scan finished: 1,200 entries")
+        );
     }
 
     #[test]
@@ -1475,145 +2670,5 @@ mod tests {
         assert_eq!(pending(), 1);
         assert_eq!(drain(), vec![Action::GoHome]);
         assert_eq!(pending(), 0);
-    }
-
-    #[test]
-    fn a_screen_with_nothing_on_it_still_announces_its_navigation() {
-        let snapshot = build(&ScreenFacts::new(Surface::Browse, "Library"));
-        assert_eq!(
-            snapshot
-                .controls
-                .iter()
-                .filter(|c| c.key.starts_with("item:"))
-                .count(),
-            0
-        );
-        assert!(snapshot.controls.iter().any(|c| c.key == "nav:home"));
-    }
-
-    #[test]
-    fn a_fullscreen_player_does_not_announce_a_header_it_hides() {
-        let mut facts = ScreenFacts::new(Surface::Player, "Player");
-        facts.player = Some(Player {
-            title: "Film".to_string(),
-            state: "Playing".to_string(),
-            play: "Pause".to_string(),
-            position: 0.0,
-            duration: 60.0,
-            muted: false,
-            volume: 40,
-            fullscreen: true,
-            up_next: None,
-            skip: None,
-            audio: Vec::new(),
-            subtitles: Vec::new(),
-        });
-        let snapshot = build(&facts);
-        assert!(snapshot.controls.iter().all(|c| !c.key.starts_with("nav:")));
-        assert!(snapshot.controls.iter().any(|c| c.key == "player:play"));
-    }
-
-    #[test]
-    fn a_stale_control_has_no_action_to_run() {
-        let snapshot = home();
-        let keys: Vec<&str> = snapshot.controls.iter().map(|c| c.key.as_str()).collect();
-        assert!(!keys.contains(&"settings:99"));
-        assert!(keys.contains(&"item:2"));
-    }
-
-    #[test]
-    fn the_detail_play_control_names_the_file_the_button_plays() {
-        let mut subject = item(9, "Aardvark");
-        subject.kind = MediaKind::Series;
-        subject.season = Some(1);
-        subject.episode = Some(3);
-        let episodes = [
-            item(1, "Aardvark"),
-            item(2, "Aardvark"),
-            item(3, "Aardvark"),
-        ];
-        let mut facts = ScreenFacts::new(Surface::Detail, "Details");
-        facts.subject = Some(&subject);
-        facts.items = episodes.iter().collect();
-
-        let snapshot = build(&facts);
-        let play = snapshot
-            .controls
-            .iter()
-            .find(|control| control.key == "detail:play")
-            .expect("the detail screen publishes a play control");
-
-        assert_eq!(play.label, "Play S01E03");
-        assert_eq!(play.action, Some(Action::PlayDetail));
-        assert!(play.enabled);
-    }
-
-    #[test]
-    fn the_detail_play_control_follows_the_subject_rather_than_the_first_episode() {
-        let mut subject = item(9, "Aardvark");
-        subject.kind = MediaKind::Series;
-        subject.season = Some(1);
-        subject.episode = Some(3);
-        subject.available = false;
-        let mut first = item(1, "Aardvark");
-        first.position_ms = 90_000;
-        let mut facts = ScreenFacts::new(Surface::Detail, "Details");
-        facts.subject = Some(&subject);
-        facts.items = vec![&first];
-
-        let snapshot = build(&facts);
-        let play = snapshot
-            .controls
-            .iter()
-            .find(|control| control.key == "detail:play")
-            .expect("the detail screen publishes a play control");
-
-        assert_eq!(play.label, "Play S01E03");
-        assert!(
-            !play.enabled,
-            "the file that plays is the one that is unreadable"
-        );
-    }
-
-    #[test]
-    fn a_film_that_has_started_announces_where_it_would_resume() {
-        let mut subject = item(1, "Zulu");
-        subject.position_ms = 12 * 60_000;
-        let mut facts = ScreenFacts::new(Surface::Detail, "Details");
-        facts.subject = Some(&subject);
-        facts.items = vec![&subject];
-
-        let snapshot = build(&facts);
-        let play = snapshot
-            .controls
-            .iter()
-            .find(|control| control.key == "detail:play")
-            .expect("the detail screen publishes a play control");
-
-        assert_eq!(play.label, "Resume 12 min in");
-    }
-
-    #[test]
-    fn the_focused_episode_is_the_only_one_announced_as_focused() {
-        let mut subject = item(3, "Aardvark");
-        subject.kind = MediaKind::Series;
-        subject.season = Some(1);
-        subject.episode = Some(3);
-        let episodes = [
-            item(1, "Aardvark"),
-            item(2, "Aardvark"),
-            item(3, "Aardvark"),
-        ];
-        let mut facts = ScreenFacts::new(Surface::Detail, "Details");
-        facts.subject = Some(&subject);
-        facts.items = episodes.iter().collect();
-        facts.focus = Some(2);
-
-        let snapshot = build(&facts);
-        let focused: Vec<&Control> = snapshot.controls.iter().filter(|c| c.focused).collect();
-
-        assert_eq!(focused.len(), 1);
-        assert_eq!(focused[0].key, "item:2");
-        assert_eq!(focused[0].action, Some(Action::Open(2)));
     }
 }
