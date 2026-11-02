@@ -262,6 +262,18 @@ impl Library {
         self
     }
 
+    fn heal_missing_tables(connection: &Connection) -> Result<()> {
+        for statement in schema::CREATE {
+            if let Err(error) = connection.execute(statement, []) {
+                let text = error.to_string();
+                if !text.contains("already exists") {
+                    return Err(error.into());
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn from_connection(
         mut connection: Connection,
         path: Option<PathBuf>,
@@ -277,6 +289,10 @@ impl Library {
                 "corrupt_database",
                 "The library failed its integrity check. Restore a validated backup.",
             ));
+        }
+
+        if version != 0 {
+            Self::heal_missing_tables(&connection)?;
         }
 
         match version {
