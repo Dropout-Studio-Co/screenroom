@@ -39,7 +39,7 @@ pub fn card_columns(width: f32) -> usize {
 
 pub struct Poster<'a> {
     title: &'a str,
-    caption: &'a str,
+    caption: String,
     art: Option<image::Handle>,
     progress: Option<f32>,
     focused: bool,
@@ -48,7 +48,8 @@ pub struct Poster<'a> {
 }
 
 impl<'a> Poster<'a> {
-    pub fn new(title: &'a str, caption: &'a str) -> Self {
+    pub fn new(title: &'a str, caption: impl Into<String>) -> Self {
+        let caption: String = caption.into();
         Self {
             title,
             caption,
@@ -126,7 +127,7 @@ impl<'a> Poster<'a> {
             })
             .width(Length::Fill);
 
-        let caption = text(truncate(self.caption, CAPTION_CHARS).to_string())
+        let caption = text(truncate(&self.caption, CAPTION_CHARS).to_string())
             .size(tokens.type_scale.caption)
             .font(theme::regular())
             .color(theme::muted())
@@ -144,6 +145,13 @@ impl<'a> Poster<'a> {
                 .into(),
             None => card.into(),
         }
+    }
+}
+
+#[cfg(test)]
+impl Poster<'_> {
+    pub fn caption_text(&self) -> &str {
+        &self.caption
     }
 }
 

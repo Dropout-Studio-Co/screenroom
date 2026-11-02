@@ -41,6 +41,32 @@ mod tests {
     }
 
     #[test]
+    fn every_card_keeps_its_own_caption_however_many_cards_were_drawn_before_it() {
+        for index in 0..2_000 {
+            let caption = format!("{index} min left");
+            let poster = Poster::new("A Film", caption.clone());
+            assert_eq!(
+                poster.caption_text(),
+                caption,
+                "card {index} lost the caption the library still had"
+            );
+        }
+    }
+
+    #[test]
+    fn a_long_caption_is_carried_by_its_card_instead_of_being_dropped() {
+        let caption = "Season 4 \u{00b7} Episode 12 \u{00b7} 34 min left \u{00b7} remastered with \
+                       commentary, audio description and the 4K HDR master"
+            .to_string();
+        assert!(
+            caption.len() > 96,
+            "this caption is longer than the old cap"
+        );
+        let poster = Poster::new("A Film", caption.clone());
+        assert_eq!(poster.caption_text(), caption);
+    }
+
+    #[test]
     fn the_grid_column_count_follows_the_window_width() {
         assert_eq!(poster::card_columns(1440.0), 6);
         assert_eq!(poster::card_columns(1024.0), 4);

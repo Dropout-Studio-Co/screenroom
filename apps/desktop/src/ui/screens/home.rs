@@ -14,7 +14,6 @@ use iced::{
 };
 use screenroom_core::{LibraryItem, MediaKind};
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
 
 const CONTINUE: &str = "Continue watching";
 
@@ -31,10 +30,6 @@ const PROGRESS_HEIGHT: f32 = 2.0;
 const INVITATION_WIDTH: f32 = 560.0;
 
 const FALLBACK_WIDTH: f32 = 1440.0;
-
-const SHARED_CAPTIONS: usize = 1024;
-
-const SHARED_CAPTION_BYTES: usize = 96;
 
 pub struct Home<'a> {
     pub continue_watching: &'a [LibraryItem],
@@ -280,8 +275,7 @@ impl<'a> Home<'a> {
 
         for (position, item) in entries.iter().enumerate().skip(start).take(RAIL_WINDOW) {
             let focused = focused_here && focus.column == position;
-            let caption = caption_ref(caption(item));
-            let mut card = Poster::new(item.title.as_str(), caption)
+            let mut card = Poster::new(item.title.as_str(), caption(item))
                 .art(self.art.get(&item.work_id).cloned())
                 .width(card_width)
                 .focused(focused)
@@ -553,31 +547,6 @@ fn fade(color: iced::Color, alpha: f32) -> iced::Color {
         a: color.a * alpha.clamp(0.0, 1.0),
         ..color
     }
-}
-
-fn caption_ref(text: String) -> &'static str {
-    static CACHE: LazyLock<Mutex<HashMap<String, &'static str>>> =
-        LazyLock::new(|| Mutex::new(HashMap::new()));
-
-    if text.len() > SHARED_CAPTION_BYTES {
-        return "";
-    }
-
-    let mut cache = CACHE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-
-    if let Some(shared) = cache.get(&text) {
-        return shared;
-    }
-
-    if cache.len() >= SHARED_CAPTIONS {
-        return "";
-    }
-
-    let shared: &'static str = Box::leak(text.clone().into_boxed_str());
-    cache.insert(text, shared);
-    shared
 }
 
 fn span(width: f32) -> f32 {
