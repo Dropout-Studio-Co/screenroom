@@ -3,6 +3,7 @@ use crate::design;
 use crate::ui::components::poster::{self, Poster};
 use crate::ui::components::rail;
 use crate::ui::icons::{self, Icon};
+use crate::ui::motion::MotionState;
 use crate::ui::route::{FocusPos, Nav};
 use crate::ui::theme::{self, Breakpoint, Gap, Radius};
 use iced::widget::canvas::gradient::Linear;
@@ -22,8 +23,6 @@ const RECENT: &str = "Recently added";
 const FILMS: &str = "Films";
 
 const SERIES: &str = "Series";
-
-const RAIL_WINDOW: usize = 24;
 
 const PROGRESS_HEIGHT: f32 = 2.0;
 
@@ -45,6 +44,8 @@ pub struct Home<'a> {
     pub art: &'a HashMap<String, image::Handle>,
 
     pub waiting: &'a HashSet<String>,
+
+    pub motion: &'a MotionState,
 
     pub width: f32,
 }
@@ -99,9 +100,11 @@ impl<'a> Home<'a> {
         let last = sections.len().saturating_sub(1);
 
         let mut rails: Vec<Element<'a, Message>> = Vec::new();
+        let mut base = 0;
         for (index, (label, entries)) in sections.iter().enumerate() {
             let shelf: Element<'a, Message> =
-                self.shelf(index, label, entries, focus, breakpoint.card());
+                self.shelf(index, label, entries, focus, breakpoint.card(), base);
+            base += entries.len();
             rails.push(gutter(shelf));
             if index < last {
                 rails.push(
@@ -253,16 +256,10 @@ impl<'a> Home<'a> {
         entries: &[&'a LibraryItem],
         focus: FocusPos,
         card_width: f32,
+        base: usize,
     ) -> Element<'a, Message> {
         let focused_here = focus.rail == index;
-        let start = if focused_here {
-            focus
-                .column
-                .saturating_sub(RAIL_WINDOW / 3)
-                .min(entries.len().saturating_sub(RAIL_WINDOW))
-        } else {
-            0
-        };
+        let (start, shown) = rail::window(focus.column, focused_here, entries.len());
 
         let mut cards: Vec<(Element<'a, Message>, usize)> = Vec::new();
 
@@ -275,13 +272,14 @@ impl<'a> Home<'a> {
             ));
         }
 
-        for (position, item) in entries.iter().enumerate().skip(start).take(RAIL_WINDOW) {
+        for (position, item) in entries.iter().enumerate().skip(start).take(shown) {
             let focused = focused_here && focus.column == position;
             let mut card = Poster::new(item.title.as_str(), caption(item))
                 .art(self.art.get(&item.work_id).cloned())
                 .waiting(self.waiting.contains(&item.work_id))
                 .width(card_width)
                 .focused(focused)
+                .lift(self.motion.lift(base + position))
                 .on_press(Message::OpenDetail(item.id.clone()));
 
             if let Some(progress) = progress_fraction(item) {
@@ -729,6 +727,7 @@ impl Program<Message> for Backdrop {
 #[cfg(test)]
 mod tests {
     use crate::app::Screen;
+    use crate::ui::motion::MotionState;
     use crate::ui::route::Nav;
     use crate::ui::screens::home::{self, Home};
     use screenroom_core::{LibraryItem, MediaKind};
@@ -820,6 +819,7 @@ mod tests {
             empty: true,
             art: &art,
             waiting: &HashSet::new(),
+            motion: &MotionState::default(),
             width: 1440.0,
         };
         let _ = home.view();
@@ -877,6 +877,7 @@ mod tests {
             empty: false,
             art: &art,
             waiting: &HashSet::new(),
+            motion: &MotionState::default(),
             width: 1280.0,
         };
         let _ = home.view();

@@ -1,6 +1,6 @@
 use crate::design;
 use iced::font::{Family, Weight};
-use iced::widget::{container, scrollable};
+use iced::widget::{button, container, scrollable};
 use iced::{Background, Border, Color, Font, Shadow, Theme};
 use std::borrow::Cow;
 
@@ -174,6 +174,22 @@ pub fn surface(level: u8) -> Color {
 
 pub fn hair() -> Color {
     design::tokens().palette.hair
+}
+
+pub fn veiled<F>(style: F, alpha: f32) -> impl Fn(&Theme, button::Status) -> button::Style + 'static
+where
+    F: Fn(&Theme, button::Status) -> button::Style + 'static,
+{
+    move |theme, status| {
+        let mut style = style(theme, status);
+        style.text_color = crate::ui::motion::with_alpha(style.text_color, alpha);
+        if let Some(Background::Color(color)) = style.background {
+            style.background = Some(Background::Color(crate::ui::motion::with_alpha(
+                color, alpha,
+            )));
+        }
+        style
+    }
 }
 
 pub fn signal() -> Color {
