@@ -796,6 +796,45 @@ fn scan_paths_refuses_a_path_outside_the_root() {
 }
 
 #[test]
+fn scan_paths_refuses_a_file_reached_through_a_symlinked_directory() {
+    let dir = TempDir::new().unwrap();
+    let base = fs::canonicalize(dir.path()).unwrap();
+    let root = base.join("media");
+    fs::create_dir_all(&root).unwrap();
+    let outside = base.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    write_settled(&outside.join("Linked.2020.mkv"), b"secret");
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&outside, root.join("shortcut")).unwrap();
+    #[cfg(not(unix))]
+    return;
+
+    let library = Library::open_in_memory().unwrap();
+    library.add_source(&root, None).unwrap();
+
+    let summary = scanner(&library)
+        .scan_paths(
+            &root,
+            &[root.join("shortcut").join("Linked.2020.mkv")],
+            &ScanToken::new(),
+            |_| {},
+        )
+        .unwrap();
+
+    assert_eq!(
+        summary.imported, 0,
+        "a file reached through a symlinked folder must not be read"
+    );
+    let codes: Vec<_> = summary.issues.iter().map(|issue| issue.code).collect();
+    assert!(
+        codes.iter().any(|code| *code == "unsafe_path"),
+        "codes: {codes:?}"
+    );
+    assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 0);
+}
+
+#[test]
 fn scan_paths_honours_cancellation() {
     let dir = TempDir::new().unwrap();
     let root = fs::canonicalize(dir.path()).unwrap();

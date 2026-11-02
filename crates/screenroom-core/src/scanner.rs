@@ -451,6 +451,10 @@ impl<'a> LibraryScanner<'a> {
             if !crate::watch::accept(Path::new(&relative)) {
                 continue;
             }
+            if reached_through_symlink(&root, &relative) {
+                issues.push(&relative, "unsafe_path");
+                continue;
+            }
             match std::fs::symlink_metadata(root.join(&relative)) {
                 Ok(metadata) if metadata.file_type().is_symlink() => continue,
                 Ok(metadata) if metadata.is_dir() => continue,
@@ -745,6 +749,28 @@ fn withdrawal_allowed(volume: VolumeCheck, imported: u64, known: u64) -> bool {
         VolumeCheck::Unknown => imported > 0 || known == 0,
         VolumeCheck::Mismatch | VolumeCheck::Unreadable => false,
     }
+}
+
+fn reached_through_symlink(root: &Path, relative: &str) -> bool {
+    let mut current = root.to_path_buf();
+    let path = Path::new(relative);
+    let mut ancestors: Vec<&std::ffi::OsStr> = path
+        .parent()
+        .map(|parent| parent.iter().collect())
+        .unwrap_or_default();
+    ancestors.retain(|part| !part.is_empty());
+    for part in ancestors {
+        current.push(part);
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return true;
+                }
+            }
+            Err(_) => return true,
+        }
+    }
+    false
 }
 
 fn relative_to(root: &Path, path: &Path) -> Option<String> {
