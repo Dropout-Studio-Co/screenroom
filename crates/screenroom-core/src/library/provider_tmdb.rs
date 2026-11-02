@@ -96,8 +96,7 @@ pub fn default_credential_path() -> Option<PathBuf> {
         PathBuf::from(std::env::var_os("APPDATA").or_else(|| std::env::var_os("LOCALAPPDATA"))?)
             .join("Screenroom")
     } else if cfg!(target_os = "macos") {
-        PathBuf::from(std::env::var_os("HOME")?)
-            .join("Library/Application Support/Screenroom")
+        PathBuf::from(std::env::var_os("HOME")?).join("Library/Application Support/Screenroom")
     } else {
         std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)

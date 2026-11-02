@@ -759,3 +759,30 @@ fn a_future_schema_is_refused_without_resetting_data() {
         .unwrap();
     assert_eq!(tables, 1);
 }
+
+#[test]
+fn a_library_that_lost_a_table_gets_it_back_on_open() {
+    let directory = tempfile::TempDir::new().expect("directory");
+    let path = directory.path().join("library.db");
+
+    {
+        let library = Library::open(&path).expect("created");
+        drop(library);
+    }
+
+    {
+        let connection = rusqlite::Connection::open(&path).expect("connection");
+        connection
+            .execute("DROP TABLE artwork", [])
+            .expect("dropped");
+        connection
+            .execute("PRAGMA user_version = 10", [])
+            .expect("stamped");
+    }
+
+    let library = Library::open(&path).expect("reopened");
+    let stored = library
+        .artworks_for(&["nothing".to_string()])
+        .expect("the artwork table exists again");
+    assert!(stored.is_empty());
+}
