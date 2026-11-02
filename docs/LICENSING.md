@@ -6,8 +6,8 @@ brands, codecs, media or private design material.
 
 ## First-party source
 
-Screenroom's original first-party code is **MIT**, Copyright (c) 2026 Rahi Khan,
-per the ROOT `LICENSE` file. Third-party files keep their own notices.
+Screenroom's original first-party code is **MIT**, Copyright (c) 2026 Dropout
+Studio, per the ROOT `LICENSE` file. Third-party files keep their own notices.
 
 ## Resolved Rust dependency graph
 
