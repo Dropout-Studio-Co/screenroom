@@ -6,8 +6,6 @@ use crate::ui::theme::{self, Gap};
 use iced::widget::{Id, Space, column, operation, row, scrollable, text};
 use iced::{Alignment, Element, Length, Task};
 
-pub const RAIL_WINDOW: usize = 24;
-
 pub const LIFT_ROOM: f32 = 8.0;
 
 pub fn rail_id(label: &str) -> Id {
@@ -18,21 +16,38 @@ pub fn focus_offset(focus: usize, card_width: f32) -> f32 {
     (card_width + CARD_GAP) * focus as f32
 }
 
-pub fn window(column: usize, focused: bool, count: usize) -> (usize, usize) {
-    if !focused {
-        return (0, count.min(RAIL_WINDOW));
+pub fn cards_per_view(viewport: f32, card_width: f32) -> usize {
+    if !viewport.is_finite() || viewport <= 0.0 || !card_width.is_finite() || card_width <= 0.0 {
+        return 1;
     }
-    let start = column
-        .saturating_sub(RAIL_WINDOW / 3)
-        .min(count.saturating_sub(RAIL_WINDOW));
-    (start, count.saturating_sub(start).min(RAIL_WINDOW))
+    let stride = card_width + CARD_GAP;
+    ((viewport + CARD_GAP) / stride).floor().max(1.0) as usize
+}
+
+pub fn window_start(column: usize, count: usize, per_view: usize) -> usize {
+    let per_view = per_view.max(1);
+    if count <= per_view {
+        return 0;
+    }
+    column
+        .saturating_sub(per_view / 3)
+        .min(count.saturating_sub(per_view))
+}
+
+pub fn window(column: usize, focused: bool, count: usize, per_view: usize) -> (usize, usize) {
+    let per_view = per_view.max(1);
+    if !focused {
+        return (0, count.min(per_view));
+    }
+    let start = window_start(column, count, per_view);
+    (start, count.saturating_sub(start).min(per_view))
 }
 
 pub fn limit(column: usize, focused: bool, count: usize, card_width: f32, viewport: f32) -> f32 {
     if !viewport.is_finite() || viewport <= 0.0 {
         return 0.0;
     }
-    let (start, shown) = window(column, focused, count);
+    let (start, shown) = window(column, focused, count, cards_per_view(viewport, card_width));
     if shown == 0 {
         return 0.0;
     }
@@ -136,12 +151,12 @@ mod tests {
 
     #[test]
     fn the_window_follows_the_focused_column_without_running_off_the_end() {
-        assert_eq!(window(0, true, 60), (0, RAIL_WINDOW));
-        assert_eq!(window(3, false, 60), (0, RAIL_WINDOW));
-        assert_eq!(window(12, true, 60).0, 4);
-        assert_eq!(window(59, true, 60).0, 60 - RAIL_WINDOW);
-        assert_eq!(window(5, true, 3), (0, 3));
-        assert_eq!(window(0, true, 0), (0, 0));
+        assert_eq!(window(0, true, 60, 5), (0, 5));
+        assert_eq!(window(3, false, 60, 5), (0, 5));
+        assert_eq!(window(12, true, 60, 5).0, 11);
+        assert_eq!(window(59, true, 60, 5).0, 55);
+        assert_eq!(window(5, true, 3, 5), (0, 3));
+        assert_eq!(window(0, true, 0, 5), (0, 0));
     }
 
     #[test]

@@ -4319,11 +4319,7 @@ impl App {
         } else {
             INITIAL_WINDOW_WIDTH
         };
-        let available = (width - 2.0 * ui::theme::PAD).max(1.0);
-        match ui::theme::Breakpoint::at(width).content_cap() {
-            Some(cap) => available.min(cap),
-            None => available,
-        }
+        ui::screens::home::rail_span(width).max(1.0)
     }
 
     fn scroll_focused_rail(&mut self) -> Task<Message> {

@@ -266,7 +266,8 @@ impl<'a> Home<'a> {
         base: usize,
     ) -> Element<'a, Message> {
         let focused_here = focus.rail == index;
-        let (start, shown) = rail::window(focus.column, focused_here, entries.len());
+        let per_view = rail::cards_per_view(rail_span(self.width), card_width);
+        let (start, shown) = rail::window(focus.column, focused_here, entries.len(), per_view);
 
         let mut cards: Vec<(Element<'a, Message>, usize)> = Vec::new();
 
@@ -309,6 +310,17 @@ impl<'a> Home<'a> {
         );
         strip
     }
+}
+
+pub(crate) fn rail_span(width: f32) -> f32 {
+    if !width.is_finite() || width <= 0.0 {
+        return width;
+    }
+    let inner = match Breakpoint::at(width).content_cap() {
+        Some(cap) => width.min(cap + 2.0 * theme::PAD),
+        None => width,
+    };
+    (inner - 2.0 * theme::PAD).max(0.0)
 }
 
 fn shelves<'a>(items: &[&'a LibraryItem]) -> Vec<(&'static str, Vec<&'a LibraryItem>)> {
