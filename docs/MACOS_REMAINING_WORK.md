@@ -68,7 +68,7 @@ accessibility is documented as blocked upstream with evidence.
 | Unverified | **1** (acceptance step 8: 4K on battery) |
 | Blocked | **3 rows carry a named blocker** (F05 live, F15 live, F23) |
 | Not applicable to macOS | **0** of these 50 |
-| Outstanding implementation tasks | **1 P1** (P1-09 accessibility) and **0 P2**; P1-03 is implemented and needs one owner look; P1-12's mechanism is complete and only its execution needs the owner |
+| Outstanding implementation tasks | **1 P1** (P1-09 accessibility) and **0 P2**; P1-03 is implemented and needs one owner look; P1-12 closed 2026-11-03: the owner played titles with Wi-Fi off and it behaved |
 | Outstanding human/device tasks | **9** (8 owner observations + 1 owner hardware run) |
 
 The four measures the brief asks to keep apart:
@@ -187,7 +187,7 @@ player's chrome receding has not been watched in a window. That is P2-06 below.
 | --- | --- | --- | --- | --- |
 | Q00 | Installed local app, no browser, no server, no localhost runtime | COMPLETE | bundle walked end to end; `verify-bundle.sh` | — |
 | Q00B | Dropout Design System, pinned, private | COMPLETE | `ds_pinned.rs` generated at a pinned commit; theme string visible; neutral fallback | the DS sync is machine-local; a clean checkout builds without it |
-| Q01 | Offline: library, profiles, artwork, resume, playback with the network off | COMPLETE by construction (no network code at all; only the browser handoff and an opt-in SSDP probe) | not yet *executed* with Wi-Fi off (P1-12) | execution pending |
+| Q01 | Offline: library, profiles, artwork, resume, playback with the network off | COMPLETE by construction (no network code at all; only the browser handoff and an opt-in SSDP probe) | executed with Wi-Fi off on 2026-11-03; playback, rail scrolling and embedded subtitle switching all worked | PASS (owner) |
 | Q02 | Performance: startup, first frame, 4K, memory, no runaway jobs | **COMPLETE (SDR and HDR)** | startup ~1.2 s; 4K 24.4 fps at 13.95 % mean CPU with zero uploads; the extended-range path measured 24.51 fps at 14.27 % in the same hidden-window check; paging 13.7 ms first page and 78 ms grouped last page at 10k rows; backups and restores run off the UI thread | single-run CPU samples; the 16F swapchain costs GPU memory (P1-03) |
 | Q03 | Fidelity: aspect, anamorphic, timebase, honest codec claims | COMPLETE | `step_7`, `anamorphic_video_renders_at_its_display_aspect_without_letterbox_rows` | the *look* of step 7 is the owner's |
 | Q04 | Portability: one monorepo, isolated platform adapters | COMPLETE | layout, `cfg` boundaries | — |
@@ -561,7 +561,7 @@ than reclassified.
   4K file this library does not contain. If a 4K sample is wanted, it has to be
   provided.
 
-#### P1-12 · Prove offline behaviour — **mechanism proven, Wi-Fi-off run deferred by the owner**
+#### P1-12 · Prove offline behaviour — **CLOSED (owner, 2026-11-03)** — **mechanism proven, Wi-Fi-off run deferred by the owner**
 
 - **Requirement:** Q01, PRD acceptance criterion G.
 - **Status:** PARTIAL. The owner asked that Wi-Fi stay up while other work runs, so
