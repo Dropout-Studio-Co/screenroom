@@ -680,11 +680,13 @@ than reclassified.
 - **Status:** CLOSED. Extraction now runs on three bounded workers instead of one,
   the visible cards are queued first, and a card without its poster yet draws a
   waiting face rather than an empty one.
-- **Evidence:** a capture of Home at 14 seconds, on a library whose artwork table
-  had been emptied first, shows all six rail posters drawn. The measurement
-  example reports the first poster at 653 ms and the first thirty at about 50 a
-  minute on this machine, which is why a whole library is not instant — the visible
-  screen is.
+- **Evidence:** a capture of Home at 14 seconds, on the owner's 318-title library
+  with its artwork table emptied first, shows all six rail posters drawn. Throughput
+  depends on what is being decoded, so both measurements are recorded: on that real
+  library the example drew thirty posters at about 50 a minute with the first at
+  653 ms, while on a scratch library of thirty short clips the same example reached
+  320 a minute. A whole library is therefore not instant — the first screen is what
+  the queue and the waiting card are for.
 - **Where:** `apps/desktop/src/artwork.rs`, `apps/desktop/src/ui/components/poster.rs`,
   `queue_artwork` in `apps/desktop/src/app.rs`.
 - **Automated verification:** `cargo test -p screenroom-desktop --lib ui::components`
