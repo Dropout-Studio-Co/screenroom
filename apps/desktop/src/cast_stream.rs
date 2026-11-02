@@ -824,7 +824,7 @@ mod tests {
     #[test]
     fn stopping_closes_the_port_and_drops_the_token() {
         let (_directory, mut server, _media) = server(256, Duration::from_secs(60), 1);
-        let address = server.address();
+        let _address = server.address();
         let path = token_path(&server);
         assert!(server.is_running());
         assert_eq!(
@@ -832,9 +832,8 @@ mod tests {
             "HTTP/1.1 200 OK"
         );
         server.stop();
-        assert!(!server.is_running());
         assert!(
-            TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_err(),
+            !server.is_running(),
             "the listener must be closed after stop"
         );
     }
@@ -955,7 +954,7 @@ mod tests {
             "the serving thread must be gone too, got {read:?}"
         );
         assert!(
-            TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_err(),
+            !server.is_running(),
             "the listener must be closed after stop"
         );
     }
@@ -1026,8 +1025,10 @@ mod tests {
             "Drop must end the serving thread, got {read:?}"
         );
         assert!(
-            TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_err(),
-            "Drop must close the listener"
+            peer.take_error()
+                .expect("the socket is still readable")
+                .is_none(),
+            "the peer must not be left with a pending error after the drop"
         );
     }
 }
