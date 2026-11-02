@@ -701,6 +701,7 @@ impl FrameRenderer {
         }
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     fn disable_extended_range(&mut self, core: &Mpv) -> Result<OutputDescription, PlayerError> {
         match self {
             Self::Software(_) => Ok(OutputDescription::default()),
@@ -1766,5 +1767,79 @@ mod tests {
         let snapshot = shared.lock().unwrap().clone();
         assert_eq!(snapshot.state, PlayerState::Failed);
         assert_eq!(snapshot.failure.unwrap().code, "file_missing");
+    }
+
+    fn track(kind: TrackKind, title: Option<&str>, language: Option<&str>) -> MediaTrack {
+        MediaTrack {
+            id: 1,
+            kind,
+            title: title.map(str::to_string),
+            language: language.map(str::to_string),
+            codec: None,
+            selected: false,
+            external: false,
+        }
+    }
+
+    #[test]
+    fn a_track_kind_keeps_the_spelling_libmpv_and_the_ui_expect() {
+        assert_eq!(TrackKind::Video.as_str(), "video");
+        assert_eq!(TrackKind::Audio.as_str(), "audio");
+        assert_eq!(TrackKind::Subtitle.as_str(), "subtitle");
+        assert_eq!(NO_TRACK, 0, "zero is 'off', never a real track index");
+    }
+
+    #[test]
+    fn a_track_label_joins_only_the_parts_the_file_actually_has() {
+        let full = MediaTrack {
+            id: 3,
+            kind: TrackKind::Subtitle,
+            title: Some("English (SDH)".to_string()),
+            language: Some("eng".to_string()),
+            codec: Some("subrip".to_string()),
+            selected: false,
+            external: false,
+        };
+        assert_eq!(full.label(), "English (SDH) · eng · subrip");
+
+        assert_eq!(
+            track(TrackKind::Audio, Some("Commentary"), None).label(),
+            "Commentary · audio",
+            "an untagged codec falls back to the kind, not to an empty string"
+        );
+        assert_eq!(
+            track(TrackKind::Audio, None, Some("jpn")).label(),
+            "jpn · audio"
+        );
+        assert_eq!(
+            track(TrackKind::Subtitle, None, None).label(),
+            "subtitle",
+            "a bare track is still something the menu can show"
+        );
+
+        let mut external = track(TrackKind::Subtitle, Some("Punjabi"), Some("pan"));
+        external.external = true;
+        assert_eq!(
+            external.label(),
+            "Punjabi · pan · subtitle",
+            "an attached file is labelled by its own tags, not by how it was found"
+        );
+    }
+
+    #[test]
+    fn the_subtitle_ranges_admit_normal_settings_and_stay_inside_libmpv() {
+        assert_eq!(SUB_SCALE_RANGE, (0.1, 10.0));
+        assert_eq!(SUB_POSITION_RANGE, (0.0, 150.0));
+
+        let (scale_low, scale_high) = SUB_SCALE_RANGE;
+        let (position_low, position_high) = SUB_POSITION_RANGE;
+        assert!(
+            scale_low < 1.0 && scale_high > 1.0,
+            "100% is inside the range"
+        );
+        assert!(position_low <= 0.0 && position_high >= 100.0);
+        assert!(1.0_f64.clamp(scale_low, scale_high) == 1.0);
+        assert!((-5.0_f64).clamp(position_low, position_high) == position_low);
+        assert!(900.0_f64.clamp(scale_low, scale_high) == scale_high);
     }
 }

@@ -264,4 +264,98 @@ mod tests {
         let restored = library.add_source(&root, None).unwrap();
         assert_eq!(restored.id, source.id);
     }
+
+    fn media_root(directory: &tempfile::TempDir, name: &str) -> PathBuf {
+        let root = directory.path().join(name);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn a_source_with_no_label_is_named_after_its_folder_not_its_full_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = media_root(&directory, "Films");
+        let library = Library::open_in_memory().unwrap();
+
+        let source = library.add_source(&root, None).unwrap();
+        assert_eq!(source.label, "Films");
+        assert_eq!(source.state, SourceState::Available);
+        assert_eq!(source.last_scan_ms, None);
+        assert_eq!(library.sources().unwrap(), vec![source]);
+    }
+
+    #[test]
+    fn an_explicit_label_is_trimmed_and_a_blank_one_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let library = Library::open_in_memory().unwrap();
+        let root = media_root(&directory, "Films");
+
+        for blank in ["", "   ", "\t\n"] {
+            let error = library.add_source(&root, Some(blank)).unwrap_err();
+            assert_eq!(error.code(), "invalid_input", "{blank:?} is not a label");
+        }
+        assert!(
+            library.sources().unwrap().is_empty(),
+            "a refused label must not leave a half-made source"
+        );
+
+        let source = library
+            .add_source(&root, Some("  Living room drive  "))
+            .unwrap();
+        assert_eq!(source.label, "Living room drive");
+        assert_eq!(
+            library.rename_source(&source.id, "   ").unwrap_err().code(),
+            "invalid_input",
+            "renaming to nothing is refused, not silently emptied"
+        );
+        assert_eq!(
+            library.source(&source.id).unwrap().label,
+            "Living room drive"
+        );
+        library.rename_source(&source.id, " Bedroom ").unwrap();
+        assert_eq!(library.source(&source.id).unwrap().label, "Bedroom");
+    }
+
+    #[test]
+    fn a_label_too_long_for_the_interface_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let library = Library::open_in_memory().unwrap();
+        let root = media_root(&directory, "Films");
+        let long = "a".repeat(121);
+        assert_eq!(
+            library.add_source(&root, Some(&long)).unwrap_err().code(),
+            "invalid_input"
+        );
+        assert!(library.sources().unwrap().is_empty());
+
+        let source = library.add_source(&root, None).unwrap();
+        assert_eq!(
+            library.rename_source(&source.id, &long).unwrap_err().code(),
+            "invalid_input"
+        );
+        assert_eq!(library.source(&source.id).unwrap().label, "Films");
+    }
+
+    #[test]
+    fn an_unknown_source_is_reported_by_name_rather_than_returned_empty() {
+        let library = Library::open_in_memory().unwrap();
+        assert_eq!(
+            library.source("missing").unwrap_err().code(),
+            "source_missing"
+        );
+        assert_eq!(
+            library
+                .rename_source("missing", "Anything")
+                .unwrap_err()
+                .code(),
+            "source_missing"
+        );
+        assert_eq!(
+            library
+                .set_source_state("missing", SourceState::Disconnected)
+                .unwrap_err()
+                .code(),
+            "source_missing"
+        );
+    }
 }
