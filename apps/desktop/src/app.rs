@@ -539,6 +539,8 @@ pub struct App {
 
     player_chrome: bool,
 
+    accessibility: Arc<crate::accessibility::Snapshot>,
+
     preferences: Preferences,
 
     profiles: Vec<Profile>,
@@ -791,10 +793,6 @@ pub enum Message {
 
     SkipSegment,
 
-    MarkSegment(String),
-
-    FinishSegment,
-
     FocusSettingsField(SettingsField),
 
     ApplySubtitleLanguage,
@@ -1026,6 +1024,7 @@ impl App {
         app.open_requested_screen();
         app.ensure_artwork();
         app.start_durations();
+        app.refresh_accessibility();
         (app, task)
     }
 
@@ -1127,6 +1126,7 @@ impl App {
             window_width: verification_size().width,
             last_input: std::time::Instant::now(),
             player_chrome: true,
+            accessibility: Default::default(),
             preferences,
             profiles: Vec::new(),
             settings_focus: 0,
@@ -1198,6 +1198,7 @@ impl App {
         app.sync_language_inputs();
         app.reload();
         app.open_checked_screen();
+        app.refresh_accessibility();
         app
     }
 
@@ -4195,6 +4196,22 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.dispatch(message);
+        self.refresh_accessibility();
+        task
+    }
+
+    fn refresh_accessibility(&mut self) {
+        let candidate = {
+            let facts = self.accessible_screen();
+            crate::accessibility::snapshot(&facts)
+        };
+        if *self.accessibility != *candidate {
+            self.accessibility = candidate;
+        }
+    }
+
+    fn dispatch(&mut self, message: Message) -> Task<Message> {
         if !matches!(message, Message::Tick) {
             self.last_input = std::time::Instant::now();
         }
@@ -4388,8 +4405,6 @@ impl App {
                 }
             }
             Message::SkipSegment => self.skip_segment(),
-            Message::MarkSegment(kind) => self.toggle_segment_mark(&kind),
-            Message::FinishSegment => self.finish_segment_mark(),
             Message::SubtitleLanguageChanged(value) => self.subtitle_input = value,
             Message::AudioLanguageChanged(value) => self.audio_input = value,
             Message::Resized(width) => {
@@ -5036,6 +5051,7 @@ impl App {
             }
             Screen::Detail => {
                 if let Some(detail) = &self.detail {
+                    facts.subject = Some(&detail.item);
                     facts.items = if detail.episodes.is_empty() {
                         vec![&detail.item]
                     } else {
@@ -5046,10 +5062,6 @@ impl App {
                         watchlist: detail.item.watchlisted,
                         watched: detail.item.watched,
                     });
-                    facts.play = Some((
-                        ui::screens::detail::primary_action(&detail.item).0,
-                        detail.item.available,
-                    ));
                 }
                 facts.focus = Some(self.focus);
             }
@@ -5114,7 +5126,7 @@ impl App {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        crate::accessibility::publish(self.accessible_screen());
+        crate::accessibility::publish_snapshot(Arc::clone(&self.accessibility));
         let body = match self.screen {
             Screen::Home => self.home_screen(),
             Screen::Browse => self.library_screen(),
@@ -5300,9 +5312,9 @@ impl App {
 
     fn detail_extra(&self, item: &LibraryItem) -> Element<'_, Message> {
         let tokens = design::tokens();
-        let secondary = |label: String, message: Message| -> Element<'_, Message> {
+        let secondary = |label: String, message: Option<Message>| -> Element<'_, Message> {
             button(text(label).size(tokens.type_scale.label))
-                .on_press(message)
+                .on_press_maybe(message)
                 .style(design::quiet_style(false))
                 .padding([tokens.spacing.field_y, tokens.spacing.field_x])
                 .into()
@@ -5310,18 +5322,21 @@ impl App {
 
         column![
             row![
-                secondary("Start over".to_string(), Message::Restart(item.id.clone()),),
+                secondary(
+                    "Start over".to_string(),
+                    item.available.then(|| Message::Restart(item.id.clone())),
+                ),
                 secondary(
                     if item.favorite {
                         "Favourited".to_string()
                     } else {
                         "Favourite".to_string()
                     },
-                    Message::ToggleFavorite(item.work_id.clone()),
+                    Some(Message::ToggleFavorite(item.work_id.clone())),
                 ),
                 secondary(
                     "Hide from Continue".to_string(),
-                    Message::HideFromContinue(item.edition_id.clone()),
+                    Some(Message::HideFromContinue(item.edition_id.clone())),
                 ),
             ]
             .spacing(tokens.spacing.field_x)

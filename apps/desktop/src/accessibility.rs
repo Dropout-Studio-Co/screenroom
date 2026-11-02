@@ -142,13 +142,13 @@ pub struct ScreenFacts<'a> {
     pub surface: Surface,
     pub title: String,
     pub items: Vec<&'a LibraryItem>,
+    pub subject: Option<&'a LibraryItem>,
     pub focus: Option<usize>,
     pub page: Option<Page>,
     pub filters: Option<Filters>,
     pub flags: Option<Flags>,
     pub settings: Vec<(String, bool)>,
 
-    pub play: Option<(String, bool)>,
     pub settings_focus: usize,
     pub player: Option<Player>,
     pub status: Option<String>,
@@ -161,13 +161,13 @@ impl<'a> ScreenFacts<'a> {
             surface,
             title: title.into(),
             items: Vec::new(),
+            subject: None,
             focus: None,
             page: None,
             filters: None,
             flags: None,
             settings: Vec::new(),
             settings_focus: 0,
-            play: None,
             player: None,
             status: None,
             error: None,
@@ -224,8 +224,11 @@ pub fn enqueue(action: Action) {
     }
 }
 
-pub fn publish(facts: ScreenFacts<'_>) {
-    let snapshot = Arc::new(build(&facts));
+pub fn snapshot(facts: &ScreenFacts<'_>) -> Arc<Snapshot> {
+    Arc::new(build(facts))
+}
+
+pub fn publish_snapshot(snapshot: Arc<Snapshot>) {
     store(&snapshot);
     #[cfg(target_os = "macos")]
     {
@@ -362,18 +365,12 @@ fn item_controls(facts: &ScreenFacts<'_>, controls: &mut Vec<Control>) {
 }
 
 fn detail_controls(facts: &ScreenFacts<'_>, controls: &mut Vec<Control>) {
-    let Some(item) = facts.items.first() else {
+    let Some(item) = facts.subject else {
         return;
     };
-    let (label, available) = match &facts.play {
-        Some((label, available)) => (label.as_str(), *available),
-        None => (
-            if item.position_ms > 0 { "Resume" } else { "Play" },
-            item.available,
-        ),
-    };
+    let (label, _) = crate::ui::screens::detail::primary_action(item);
     let mut play = button("detail:play", label, Action::PlayDetail);
-    play.enabled = available;
+    play.enabled = item.available;
     controls.push(play);
     let mut restart = button("detail:restart", "Start over", Action::RestartDetail);
     restart.enabled = item.available;
@@ -536,6 +533,12 @@ fn player_controls(facts: &ScreenFacts<'_>, controls: &mut Vec<Control>) {
         );
         controls.push(track);
     }
+    controls.push(text(
+        "player:mark-hint",
+        Role::StaticText,
+        crate::ui::screens::player::MARK_HINT,
+        None,
+    ));
 }
 
 fn build(facts: &ScreenFacts<'_>) -> Snapshot {
@@ -1518,5 +1521,101 @@ mod tests {
         let keys: Vec<&str> = snapshot.controls.iter().map(|c| c.key.as_str()).collect();
         assert!(!keys.contains(&"settings:99"));
         assert!(keys.contains(&"item:2"));
+    }
+
+    #[test]
+    fn the_detail_play_control_names_the_file_the_button_plays() {
+        let mut subject = item(9, "Aardvark");
+        subject.kind = MediaKind::Series;
+        subject.season = Some(1);
+        subject.episode = Some(3);
+        let episodes = [
+            item(1, "Aardvark"),
+            item(2, "Aardvark"),
+            item(3, "Aardvark"),
+        ];
+        let mut facts = ScreenFacts::new(Surface::Detail, "Details");
+        facts.subject = Some(&subject);
+        facts.items = episodes.iter().collect();
+
+        let snapshot = build(&facts);
+        let play = snapshot
+            .controls
+            .iter()
+            .find(|control| control.key == "detail:play")
+            .expect("the detail screen publishes a play control");
+
+        assert_eq!(play.label, "Play S01E03");
+        assert_eq!(play.action, Some(Action::PlayDetail));
+        assert!(play.enabled);
+    }
+
+    #[test]
+    fn the_detail_play_control_follows_the_subject_rather_than_the_first_episode() {
+        let mut subject = item(9, "Aardvark");
+        subject.kind = MediaKind::Series;
+        subject.season = Some(1);
+        subject.episode = Some(3);
+        subject.available = false;
+        let mut first = item(1, "Aardvark");
+        first.position_ms = 90_000;
+        let mut facts = ScreenFacts::new(Surface::Detail, "Details");
+        facts.subject = Some(&subject);
+        facts.items = vec![&first];
+
+        let snapshot = build(&facts);
+        let play = snapshot
+            .controls
+            .iter()
+            .find(|control| control.key == "detail:play")
+            .expect("the detail screen publishes a play control");
+
+        assert_eq!(play.label, "Play S01E03");
+        assert!(
+            !play.enabled,
+            "the file that plays is the one that is unreadable"
+        );
+    }
+
+    #[test]
+    fn a_film_that_has_started_announces_where_it_would_resume() {
+        let mut subject = item(1, "Zulu");
+        subject.position_ms = 12 * 60_000;
+        let mut facts = ScreenFacts::new(Surface::Detail, "Details");
+        facts.subject = Some(&subject);
+        facts.items = vec![&subject];
+
+        let snapshot = build(&facts);
+        let play = snapshot
+            .controls
+            .iter()
+            .find(|control| control.key == "detail:play")
+            .expect("the detail screen publishes a play control");
+
+        assert_eq!(play.label, "Resume 12 min in");
+    }
+
+    #[test]
+    fn the_focused_episode_is_the_only_one_announced_as_focused() {
+        let mut subject = item(3, "Aardvark");
+        subject.kind = MediaKind::Series;
+        subject.season = Some(1);
+        subject.episode = Some(3);
+        let episodes = [
+            item(1, "Aardvark"),
+            item(2, "Aardvark"),
+            item(3, "Aardvark"),
+        ];
+        let mut facts = ScreenFacts::new(Surface::Detail, "Details");
+        facts.subject = Some(&subject);
+        facts.items = episodes.iter().collect();
+        facts.focus = Some(2);
+
+        let snapshot = build(&facts);
+        let focused: Vec<&Control> = snapshot.controls.iter().filter(|c| c.focused).collect();
+
+        assert_eq!(focused.len(), 1);
+        assert_eq!(focused[0].key, "item:2");
+        assert_eq!(focused[0].action, Some(Action::Open(2)));
     }
 }
