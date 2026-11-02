@@ -216,7 +216,10 @@ impl<'a> Player<'a> {
 
     pub fn view(self) -> Element<'a, Message> {
         if !self.chrome {
-            return self.picture();
+            return iced::widget::mouse_area(self.picture())
+                .on_press(Message::PlayerWake)
+                .on_move(|_| Message::PlayerWake)
+                .into();
         }
 
         let chrome: Element<'a, Message> =
@@ -225,7 +228,7 @@ impl<'a> Player<'a> {
                 .height(Length::Fill)
                 .into();
 
-        match self.overlay {
+        let visible: Element<'a, Message> = match self.overlay {
             Some(overlay) => stack![
                 chrome,
                 container(column![Space::new().height(Length::Fill), overlay])
@@ -242,7 +245,11 @@ impl<'a> Player<'a> {
             .height(Length::Fill)
             .into(),
             None => chrome,
-        }
+        };
+
+        iced::widget::mouse_area(visible)
+            .on_move(|_| Message::PlayerWake)
+            .into()
     }
 
     fn shows(&self, control: Control) -> bool {

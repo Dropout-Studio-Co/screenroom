@@ -146,7 +146,7 @@ pub struct ScreenFacts<'a> {
     pub page: Option<Page>,
     pub filters: Option<Filters>,
     pub flags: Option<Flags>,
-    pub settings: Vec<String>,
+    pub settings: Vec<(String, bool)>,
     pub settings_focus: usize,
     pub player: Option<Player>,
     pub status: Option<String>,
@@ -573,11 +573,22 @@ fn build(facts: &ScreenFacts<'_>) -> Snapshot {
             item_controls(facts, &mut controls);
         }
         Surface::Settings => {
-            for (index, label) in facts.settings.iter().enumerate() {
-                let mut action =
-                    button(&format!("settings:{index}"), label, Action::Settings(index));
-                action.focused = index == facts.settings_focus;
-                controls.push(action);
+            for (index, (label, actionable)) in facts.settings.iter().enumerate() {
+                if *actionable {
+                    let mut action =
+                        button(&format!("settings:{index}"), label, Action::Settings(index));
+                    action.focused = index == facts.settings_focus;
+                    controls.push(action);
+                } else {
+                    let mut value = text(
+                        &format!("settings:{index}"),
+                        Role::StaticText,
+                        label.clone(),
+                        None,
+                    );
+                    value.focused = index == facts.settings_focus;
+                    controls.push(value);
+                }
             }
         }
         Surface::Player => {
@@ -1338,7 +1349,10 @@ mod tests {
         });
 
         let mut settings = ScreenFacts::new(Surface::Settings, "Settings");
-        settings.settings = vec!["Back up now".to_string(), "Grant a folder".to_string()];
+        settings.settings = vec![
+            ("Back up now".to_string(), true),
+            ("Grant a folder".to_string(), true),
+        ];
 
         let mut player = ScreenFacts::new(Surface::Player, "Player");
         player.player = Some(Player {
@@ -1409,9 +1423,12 @@ mod tests {
 
     #[test]
     fn settings_follow_the_actions_the_screen_offers() {
-        let labels = vec!["Back up now".to_string(), "Grant a folder".to_string()];
+        let rows = vec![
+            ("Back up now".to_string(), true),
+            ("Backup file".to_string(), false),
+        ];
         let mut facts = ScreenFacts::new(Surface::Settings, "Settings");
-        facts.settings = labels.clone();
+        facts.settings = rows.clone();
         facts.settings_focus = 1;
         let snapshot = build(&facts);
         let published: Vec<&Control> = snapshot
@@ -1419,11 +1436,15 @@ mod tests {
             .iter()
             .filter(|control| control.key.starts_with("settings:"))
             .collect();
-        assert_eq!(published.len(), labels.len());
-        assert_eq!(published[0].label, labels[0]);
+        assert_eq!(published.len(), rows.len());
+        assert_eq!(published[0].label, rows[0].0);
         assert_eq!(published[0].action, Some(Action::Settings(0)));
         assert!(published[1].focused);
         assert!(!published[0].focused);
+        assert_eq!(
+            published[1].action, None,
+            "a row that only shows a value must not be announced as a button"
+        );
     }
 
     #[test]

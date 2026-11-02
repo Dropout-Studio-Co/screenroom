@@ -2119,9 +2119,18 @@ What the measurements and the prior art settled, and what they rule out:
   overflow drops events silently. That is why a periodic stat pass is part of the
   design rather than an optimisation.
 
-**Not done:** no watcher runs in the desktop application, no scan happens on
-launch, wake or mount, and `notify` is not yet a dependency. The gates that were
-blocked before stay blocked.
+**The desktop half is wired** (`apps/desktop/src/watch.rs`): one `notify` 8.x
+thread per authorised folder, a 1.2-second quiet window, batches handed to the
+scanner by path, launch and wake and ten-minute reconciliation passes, and a
+thread that reports when it stops rather than dying silently. `notify` is a
+dependency now.
+
+**Proven live:** `scripts/verify-watch.sh` copies a clip into a watched folder and
+the library holds it 4.9 seconds later with no rescan. **Not proven:** a removal is
+corrected by the reconcile pass rather than immediately (P2-08), a folder moved
+into the library is not noticed (its rename has no media extension), a real
+FSEvents callback cannot be observed from inside `cargo test`, and Windows stays
+blocked until it runs there.
 
 ---
 

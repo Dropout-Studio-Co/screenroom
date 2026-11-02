@@ -864,6 +864,8 @@ pub enum Message {
 
     Tick,
 
+    PlayerWake,
+
     Keyboard(keyboard::Event),
 
     RequestTerminate,
@@ -4501,6 +4503,10 @@ impl App {
                     player.select_track(kind, id);
                 }
             }
+            Message::PlayerWake => {
+                self.player_chrome = true;
+                return Task::none();
+            }
             Message::Tick => {
                 let mut tasks = Task::none();
                 for action in crate::accessibility::drain() {
@@ -4865,6 +4871,8 @@ impl App {
                 Key::Named(Named::Enter) => return self.run_settings_action(),
                 Key::Named(Named::ArrowUp) => self.move_settings_focus(false),
                 Key::Named(Named::ArrowDown) => self.move_settings_focus(true),
+                Key::Named(Named::ArrowLeft) => self.step_settings_section(false),
+                Key::Named(Named::ArrowRight) => self.step_settings_section(true),
                 _ => {}
             },
             _ => match key {
@@ -5041,7 +5049,12 @@ impl App {
                 facts.focus = Some(self.focus);
             }
             Screen::Settings => {
-                facts.settings = self.settings_labels();
+                facts.settings = self
+                    .settings_labels()
+                    .into_iter()
+                    .zip(self.settings_activations())
+                    .map(|(label, activation)| (label, activation.is_some()))
+                    .collect();
                 facts.settings_focus = self.settings_focus;
             }
             Screen::Player => {
@@ -6177,6 +6190,22 @@ impl App {
             );
         }
         rows.into()
+    }
+
+    fn step_settings_section(&mut self, forward: bool) {
+        use ui::screens::settings::Section;
+        let all = Section::ALL;
+        let current = all
+            .iter()
+            .position(|section| *section == self.settings_section)
+            .unwrap_or(0);
+        let next = if forward {
+            (current + 1) % all.len()
+        } else {
+            (current + all.len() - 1) % all.len()
+        };
+        self.settings_section = all[next];
+        self.settings_focus = 0;
     }
 
     fn move_settings_focus(&mut self, down: bool) {

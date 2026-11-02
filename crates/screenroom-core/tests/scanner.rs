@@ -828,7 +828,7 @@ fn scan_paths_refuses_a_file_reached_through_a_symlinked_directory() {
     );
     let codes: Vec<_> = summary.issues.iter().map(|issue| issue.code).collect();
     assert!(
-        codes.iter().any(|code| *code == "unsafe_path"),
+        codes.contains(&"unsafe_path"),
         "codes: {codes:?}"
     );
     assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 0);
