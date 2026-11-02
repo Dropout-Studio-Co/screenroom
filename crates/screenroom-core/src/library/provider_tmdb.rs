@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -60,6 +60,51 @@ impl ApiCredential {
         }
         environment_text(API_KEY_ENVIRONMENT).map(|key| Self::ApiKey(Secret::new(key)))
     }
+
+    pub fn from_environment_or_file() -> Option<Self> {
+        Self::from_environment().or_else(|| {
+            let path = default_credential_path()?;
+            Self::from_file(&path)
+        })
+    }
+
+    pub fn from_file(path: &Path) -> Option<Self> {
+        let text = std::fs::read_to_string(path).ok()?;
+        Self::parse(text.trim())
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        if value.is_empty() || value.len() > 512 || value.contains(char::is_whitespace) {
+            return None;
+        }
+        if value.starts_with("eyJ") && value.contains('.') {
+            return Some(Self::ReadToken(Secret::new(value)));
+        }
+        Some(Self::ApiKey(Secret::new(value)))
+    }
+}
+
+pub const CREDENTIAL_FILE_NAME: &str = "tmdb.key";
+
+pub const CREDENTIAL_DIRECTORY_ENVIRONMENT: &str = "SCREENROOM_CONFIG_DIR";
+
+pub fn default_credential_path() -> Option<PathBuf> {
+    let directory = if let Some(explicit) = std::env::var_os(CREDENTIAL_DIRECTORY_ENVIRONMENT) {
+        PathBuf::from(explicit)
+    } else if cfg!(target_os = "windows") {
+        PathBuf::from(std::env::var_os("APPDATA").or_else(|| std::env::var_os("LOCALAPPDATA"))?)
+            .join("Screenroom")
+    } else if cfg!(target_os = "macos") {
+        PathBuf::from(std::env::var_os("HOME")?)
+            .join("Library/Application Support/Screenroom")
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?
+            .join("screenroom")
+    };
+    Some(directory.join(CREDENTIAL_FILE_NAME))
 }
 
 fn environment_text(name: &str) -> Option<String> {
@@ -194,7 +239,7 @@ impl ProviderConfig {
             config.language = value;
         }
         if config.credential.is_none() {
-            config.credential = ApiCredential::from_environment();
+            config.credential = ApiCredential::from_environment_or_file();
         }
         config
     }
@@ -667,8 +712,9 @@ impl CatalogueMetadataProvider for TmdbProvider {
         if self.config.credential.is_none() {
             return ProviderCapability::not_configured(
                 TMDB_PROVIDER,
-                "Online metadata is not configured. Set SCREENROOM_TMDB_API_KEY, \
-                 SCREENROOM_TMDB_READ_TOKEN or SCREENROOM_PROVIDER_CONFIG first.",
+                "Online metadata is not configured. Put a TMDB key in the provider \
+                 file, or set SCREENROOM_TMDB_API_KEY, SCREENROOM_TMDB_READ_TOKEN or \
+                 SCREENROOM_PROVIDER_CONFIG first.",
             );
         }
         if let Err(reason) = scheme_is_carried(self.transport.as_ref(), &self.config.base_url) {
@@ -887,6 +933,54 @@ impl CatalogueMetadataProvider for TmdbProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_key_file_supplies_the_credential_a_finder_launch_would_not_have() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("tmdb.key");
+        std::fs::write(&path, "  3317a41fa5e5c79457e997a7f4b6d851\n").expect("key");
+
+        let credential = ApiCredential::from_file(&path).expect("a key file is a credential");
+        assert!(matches!(credential, ApiCredential::ApiKey(_)));
+        assert!(
+            format!("{credential:?}").contains("redacted"),
+            "the credential must never print its own value"
+        );
+
+        let token = directory.path().join("read.token");
+        std::fs::write(&token, "eyJhbGciOiJIUzI1NiJ9.payload.signature").expect("token");
+        assert!(matches!(
+            ApiCredential::from_file(&token),
+            Some(ApiCredential::ReadToken(_))
+        ));
+    }
+
+    #[test]
+    fn an_empty_or_malformed_key_file_is_not_a_credential() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let empty = directory.path().join("empty.key");
+        std::fs::write(&empty, "   \n").expect("empty");
+        assert!(ApiCredential::from_file(&empty).is_none());
+
+        let spaced = directory.path().join("spaced.key");
+        std::fs::write(&spaced, "two words").expect("spaced");
+        assert!(ApiCredential::from_file(&spaced).is_none());
+
+        assert!(ApiCredential::from_file(&directory.path().join("absent.key")).is_none());
+    }
+
+    #[test]
+    fn the_explicit_config_directory_wins_over_the_platform_default() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let previous = std::env::var_os(CREDENTIAL_DIRECTORY_ENVIRONMENT);
+        unsafe { std::env::set_var(CREDENTIAL_DIRECTORY_ENVIRONMENT, directory.path()) };
+        let resolved = default_credential_path().expect("a path");
+        match previous {
+            Some(value) => unsafe { std::env::set_var(CREDENTIAL_DIRECTORY_ENVIRONMENT, value) },
+            None => unsafe { std::env::remove_var(CREDENTIAL_DIRECTORY_ENVIRONMENT) },
+        }
+        assert_eq!(resolved, directory.path().join(CREDENTIAL_FILE_NAME));
+    }
 
     #[test]
     fn a_config_file_supplies_a_credential_without_exposing_it() {

@@ -95,3 +95,12 @@ The pinned action SHAs move only through Dependabot (`.github/dependabot.yml`),
 because the workflows pin exact commits rather than tags. `apps/tv` is the only
 pnpm manifest in the repository, which is why Dependabot watches that one
 directory.
+
+## Dependabot policy
+
+Major version bumps are ignored here rather than proposed weekly. A major bump is
+a deliberate migration — the Rust edition and the wgpu/iced pair have to move
+together — so it is opened by hand with the code change that makes it work.
+`ignore` filters version updates only: Dependabot's security updates are
+unaffected and still open on their own. Groups keep the routine minor bumps in one
+pull request per ecosystem instead of a queue of them.
