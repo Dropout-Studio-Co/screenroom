@@ -53,6 +53,28 @@ pub fn rails(items: &[LibraryItem]) -> Vec<(&'static str, Vec<&LibraryItem>)> {
     shelves(&items.iter().collect::<Vec<_>>())
 }
 
+pub fn hero_item<'a>(
+    resume: Option<&'a LibraryItem>,
+    continue_watching: &'a [LibraryItem],
+    suggested: &[&'a LibraryItem],
+) -> Option<&'a LibraryItem> {
+    if let Some(item) = resume.filter(|item| item.available) {
+        return Some(item);
+    }
+
+    if let Some(item) = continue_watching
+        .iter()
+        .chain(suggested.iter().copied())
+        .find(|item| item.available)
+    {
+        return Some(item);
+    }
+
+    resume
+        .or_else(|| continue_watching.first())
+        .or_else(|| suggested.first().copied())
+}
+
 pub fn rails_for<'a>(
     continue_watching: &'a [LibraryItem],
     suggested: &[&'a LibraryItem],
@@ -141,22 +163,7 @@ impl<'a> Home<'a> {
     }
 
     fn hero_item(&self) -> Option<&'a LibraryItem> {
-        if let Some(item) = self.resume.filter(|item| item.available) {
-            return Some(item);
-        }
-
-        if let Some(item) = self
-            .continue_watching
-            .iter()
-            .chain(self.suggested.iter().copied())
-            .find(|item| item.available)
-        {
-            return Some(item);
-        }
-
-        self.resume
-            .or_else(|| self.continue_watching.first())
-            .or_else(|| self.suggested.first().copied())
+        hero_item(self.resume, self.continue_watching, &self.suggested)
     }
 
     fn hero(
@@ -566,7 +573,7 @@ fn title_chars(column_width: f32) -> usize {
     (per_line * 2).clamp(20, 64)
 }
 
-fn in_progress(item: &LibraryItem) -> bool {
+pub fn in_progress(item: &LibraryItem) -> bool {
     item.position_ms > 0
         && item.duration_ms > 0
         && item.position_ms < item.duration_ms
@@ -605,7 +612,7 @@ fn runtime_label(duration_ms: i64) -> Option<String> {
     })
 }
 
-fn left_label(item: &LibraryItem) -> Option<String> {
+pub fn left_label(item: &LibraryItem) -> Option<String> {
     if !in_progress(item) {
         return None;
     }
@@ -621,7 +628,7 @@ fn left_label(item: &LibraryItem) -> Option<String> {
     })
 }
 
-fn metadata(item: &LibraryItem) -> String {
+pub fn metadata(item: &LibraryItem) -> String {
     let mut facts: Vec<String> = Vec::new();
 
     if let Some(year) = item.year {

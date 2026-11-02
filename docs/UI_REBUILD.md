@@ -107,7 +107,7 @@ source that consumes it:
 | `SCREENROOM_WINDOW_WIDTH=<px>` | opens at that width, floored at the minimum the layout needs, so a breakpoint can be seen rather than inferred | `app.rs` (`verification_size`) |
 | `SCREENROOM_WINDOW_HEIGHT=<px>` | opens at that height | `app.rs` (`verification_size`) |
 | `SCREENROOM_AX_CHECK=<file>` | writes the accessibility receipt and exits; the default surface is Home | `accessibility.rs` |
-| `SCREENROOM_AX_CHECK_SCREEN=browse\|settings\|detail` | picks the surface that check walks | `app.rs` (`open_checked_screen`) |
+| `SCREENROOM_AX_CHECK_SCREEN=home\|browse\|settings\|detail\|player` | picks the surface that check walks; Home is the default and `browse` and `library` are the same screen | `app.rs` (`open_checked_screen`) |
 
 Example, with a library already built:
 
@@ -136,8 +136,12 @@ commands above:
   --workspace --all-targets -- -D warnings` and `python3 scripts/no_comments.py
   check`;
 - the five breakpoints' geometry, as values, by unit test;
-- Home, Library, Detail and Settings through `SCREENROOM_AX_CHECK` with a hidden
-  window: a non-empty tree with labels and focus matching the app's own snapshot.
+- Home, Library, Detail, Settings and the Player through `SCREENROOM_AX_CHECK`
+  with a hidden window: the tree read back from AppKit matches the application's
+  own snapshot on labels, values, enabled state, `AXPress`, `AXIncrement` /
+  `AXDecrement` and focus, and every control that is not drawn is absent. What
+  that does and does not prove, and the owner's ten-minute listening pass, are in
+  [`VOICEOVER_PASS.md`](VOICEOVER_PASS.md).
 
 Not verified:
 
@@ -151,7 +155,13 @@ Not verified:
   unit-tested and its wiring is in `app.rs`, which is not the same claim.
 - **Accessibility remains window-level.** The bridge publishes roles, labels,
   values and focus, but every element carries the window frame rather than its
-  own geometry, because iced exposes no layout geometry (ADR-017).
+  own geometry, because iced exposes no layout geometry (ADR-017). A picker is
+  published as the options it opens onto and a text field as the value it holds,
+  because neither can be driven through the tree.
+- **Settings rows have no visible focus ring.** Arrow keys move a focus that the
+  tree publishes, and Enter runs the row, but the screen draws no ring on the
+  row, so the tree's focus has nothing on screen to agree with. That is a drawn
+  change, recorded rather than fixed here.
 - **Nothing in this document has run in CI.** The workflows exist; see
   `RELEASE_PIPELINE.md`.
 
