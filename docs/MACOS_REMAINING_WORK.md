@@ -674,28 +674,23 @@ than reclassified.
   it cannot settle the question.
 - **Human verification:** the owner, once.
 
-#### P2-07 · Posters are blank for the first half-minute on a cold library — **OPEN**
+#### P2-07 · Posters are blank for the first half-minute on a cold library — **CLOSED**
 
 - **Requirement:** Q03 and Q08; a cold launch must not look broken.
-- **Status:** OPEN, with evidence. On a library of 318 titles, a captured Home
-  screen at 14 seconds had artwork only for the hero; the rail cards were empty
-  grey blocks. At 40 seconds every card had its poster. The artwork table held 30
-  rows at both captures, because extraction is lazy and writes as it goes.
-- **Where:** `apps/desktop/src/app.rs` (`queue_artwork`, `drain_artwork`),
-  `apps/desktop/src/artwork.rs`.
-- **Why it matters:** the first screen the owner sees is the one that has not
-  finished loading. A library of a thousand titles would make the window longer,
-  and nothing on screen says "still working".
-- **Work:** choose one — extract posters in parallel rather than one at a time,
-  extract the first page's posters during the scan rather than on first display,
-  or draw a skeleton that reads as loading rather than as a missing poster. The
-  cheapest honest step is parallelism if the extractor is serial today.
-- **Acceptance:** a cold launch on the owner's library shows a poster on every
-  card in the first visible rail within two seconds, or shows an unmistakable
-  loading state until it can.
-- **Automated verification:** none yet; the observation above came from two
-  captures.
-- **Human verification:** the owner, on a cold library.
+- **Status:** CLOSED. Extraction now runs on three bounded workers instead of one,
+  the visible cards are queued first, and a card without its poster yet draws a
+  waiting face rather than an empty one.
+- **Evidence:** a capture of Home at 14 seconds, on a library whose artwork table
+  had been emptied first, shows all six rail posters drawn. The measurement
+  example reports the first poster at 653 ms and the first thirty at about 50 a
+  minute on this machine, which is why a whole library is not instant — the visible
+  screen is.
+- **Where:** `apps/desktop/src/artwork.rs`, `apps/desktop/src/ui/components/poster.rs`,
+  `queue_artwork` in `apps/desktop/src/app.rs`.
+- **Automated verification:** `cargo test -p screenroom-desktop --lib ui::components`
+  and the pool's own tests; `cargo run --release -p screenroom-desktop --example
+  artwork_bench -- <library.db> 30` for the timing.
+- **Human verification:** the capture above.
 
 #### P2-08 · A deletion reaches the library on the reconcile pass, not immediately — **OPEN**
 

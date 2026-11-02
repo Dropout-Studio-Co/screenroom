@@ -13,7 +13,7 @@ use iced::{
     Renderer, Shadow, Theme, mouse,
 };
 use screenroom_core::{LibraryItem, MediaKind};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const CONTINUE: &str = "Continue watching";
 
@@ -43,6 +43,8 @@ pub struct Home<'a> {
     pub empty: bool,
 
     pub art: &'a HashMap<String, image::Handle>,
+
+    pub waiting: &'a HashSet<String>,
 
     pub width: f32,
 }
@@ -277,6 +279,7 @@ impl<'a> Home<'a> {
             let focused = focused_here && focus.column == position;
             let mut card = Poster::new(item.title.as_str(), caption(item))
                 .art(self.art.get(&item.work_id).cloned())
+                .waiting(self.waiting.contains(&item.work_id))
                 .width(card_width)
                 .focused(focused)
                 .on_press(Message::OpenDetail(item.id.clone()));
@@ -730,6 +733,7 @@ mod tests {
     use crate::ui::screens::home::{self, Home};
     use screenroom_core::{LibraryItem, MediaKind};
     use std::collections::HashMap;
+    use std::collections::HashSet;
 
     fn item(
         id: &str,
@@ -815,6 +819,7 @@ mod tests {
             nav: &Nav::new(Screen::Home),
             empty: true,
             art: &art,
+            waiting: &HashSet::new(),
             width: 1440.0,
         };
         let _ = home.view();
@@ -871,6 +876,7 @@ mod tests {
             nav: &nav,
             empty: false,
             art: &art,
+            waiting: &HashSet::new(),
             width: 1280.0,
         };
         let _ = home.view();

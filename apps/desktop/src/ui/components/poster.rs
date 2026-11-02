@@ -2,7 +2,7 @@ use crate::app::Message;
 use crate::design;
 use crate::ui::theme::{self, Breakpoint, Gap, Radius};
 use iced::widget::{Space, button, column, container, image, row, stack, text};
-use iced::{Background, Border, ContentFit, Element, Length, Shadow, Theme};
+use iced::{Alignment, Background, Border, ContentFit, Element, Length, Shadow, Theme};
 
 pub const CARD_WIDTH: f32 = 240.0;
 
@@ -15,6 +15,8 @@ const TITLE_CHARS: usize = 28;
 const CAPTION_CHARS: usize = 34;
 
 const PROGRESS_HEIGHT: f32 = 2.0;
+
+const WAITING_LABEL: &str = "Loading poster…";
 
 pub fn bar_width(progress: f32) -> f32 {
     if !progress.is_finite() {
@@ -41,6 +43,7 @@ pub struct Poster<'a> {
     title: &'a str,
     caption: String,
     art: Option<image::Handle>,
+    waiting: bool,
     progress: Option<f32>,
     focused: bool,
     on_press: Option<Message>,
@@ -54,6 +57,7 @@ impl<'a> Poster<'a> {
             title,
             caption,
             art: None,
+            waiting: true,
             progress: None,
             focused: false,
             on_press: None,
@@ -63,6 +67,11 @@ impl<'a> Poster<'a> {
 
     pub fn art(mut self, art: Option<image::Handle>) -> Self {
         self.art = art;
+        self
+    }
+
+    pub fn waiting(mut self, waiting: bool) -> Self {
+        self.waiting = waiting;
         self
     }
 
@@ -99,6 +108,7 @@ impl<'a> Poster<'a> {
                 .height(Length::Fill)
                 .content_fit(ContentFit::Cover)
                 .into(),
+            None if self.waiting => waiting_face(),
             None => container(Space::new().width(Length::Fill).height(Length::Fill)).into(),
         };
 
@@ -153,6 +163,22 @@ impl Poster<'_> {
     pub fn caption_text(&self) -> &str {
         &self.caption
     }
+}
+
+fn waiting_face() -> Element<'static, Message> {
+    container(
+        text(WAITING_LABEL.to_string())
+            .size(design::tokens().type_scale.caption)
+            .font(theme::regular())
+            .color(theme::muted())
+            .align_x(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .align_x(Alignment::Center)
+    .align_y(Alignment::Center)
+    .padding(theme::gap(Gap::Tight))
+    .into()
 }
 
 fn progress_bar(width: f32, progress: f32) -> Element<'static, Message> {

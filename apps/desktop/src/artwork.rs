@@ -1,8 +1,8 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, channel, sync_channel};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use screenroom_core::{ArtworkCandidate, Library};
@@ -14,6 +14,8 @@ const MAX_POSTER_BYTES: usize = 2 * 1024 * 1024;
 const EXTRACT_TIMEOUT: Duration = Duration::from_secs(20);
 
 const QUEUE_DEPTH: usize = 16;
+
+const POSTER_WORKERS: usize = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Poster {
@@ -257,6 +259,8 @@ struct Job {
     candidate: ArtworkCandidate,
 }
 
+type Handler = Arc<dyn Fn(&ArtworkCandidate) -> ArtworkEvent + Send + Sync>;
+
 pub struct Extractor {
     requests: SyncSender<Job>,
     events: Receiver<ArtworkEvent>,
@@ -264,39 +268,34 @@ pub struct Extractor {
 
 impl Extractor {
     pub fn spawn(library: Arc<Library>) -> Self {
+        Self::pooled(Arc::new(move |candidate: &ArtworkCandidate| {
+            draw_and_store(&library, candidate)
+        }))
+    }
+
+    fn pooled(handler: Handler) -> Self {
         let (requests, queue) = sync_channel::<Job>(QUEUE_DEPTH);
         let (sender, events) = channel::<ArtworkEvent>();
-        std::thread::spawn(move || {
-            while let Ok(job) = queue.recv() {
-                let candidate = job.candidate;
-                let outcome = best_poster(&library, &candidate);
-                let event = match outcome {
-                    Ok(poster) => match library.store_artwork(
-                        &candidate.work_id,
-                        Some(&candidate.file_id),
-                        &poster.bytes,
-                        poster.width,
-                        poster.height,
-                        poster.sampled_at_ms,
-                    ) {
-                        Ok(()) => ArtworkEvent::Stored {
-                            work_id: candidate.work_id,
-                        },
-                        Err(error) => ArtworkEvent::Failed {
-                            work_id: candidate.work_id,
-                            reason: format!("{}: {error}", error.code()),
-                        },
-                    },
-                    Err(reason) => ArtworkEvent::Failed {
-                        work_id: candidate.work_id,
-                        reason,
-                    },
-                };
-                if sender.send(event).is_err() {
-                    break;
+        let queue = Arc::new(Mutex::new(queue));
+        for _ in 0..POSTER_WORKERS {
+            let queue = Arc::clone(&queue);
+            let handler = Arc::clone(&handler);
+            let sender = sender.clone();
+            std::thread::spawn(move || {
+                loop {
+                    let job = {
+                        let queue = queue
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        queue.recv()
+                    };
+                    let Ok(job) = job else { return };
+                    if sender.send(handler(&job.candidate)).is_err() {
+                        return;
+                    }
                 }
-            }
-        });
+            });
+        }
         Self { requests, events }
     }
 
@@ -309,6 +308,27 @@ impl Extractor {
 
     pub fn poll(&self) -> Vec<ArtworkEvent> {
         self.events.try_iter().collect()
+    }
+}
+
+fn draw_and_store(library: &Library, candidate: &ArtworkCandidate) -> ArtworkEvent {
+    let work_id = candidate.work_id.clone();
+    match best_poster(library, candidate) {
+        Ok(poster) => match library.store_artwork(
+            &candidate.work_id,
+            Some(&candidate.file_id),
+            &poster.bytes,
+            poster.width,
+            poster.height,
+            poster.sampled_at_ms,
+        ) {
+            Ok(()) => ArtworkEvent::Stored { work_id },
+            Err(error) => ArtworkEvent::Failed {
+                work_id,
+                reason: format!("{}: {error}", error.code()),
+            },
+        },
+        Err(reason) => ArtworkEvent::Failed { work_id, reason },
     }
 }
 
@@ -387,5 +407,125 @@ mod tests {
         bytes.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x11, 0x08, 0x02, 0x58, 0x01, 0x90]);
         assert_eq!(jpeg_dimensions(&bytes), Some((400, 600)));
         assert_eq!(jpeg_dimensions(b"not a jpeg"), None);
+    }
+
+    fn candidate(index: usize) -> ArtworkCandidate {
+        ArtworkCandidate {
+            work_id: format!("work-{index}"),
+            file_id: format!("file-{index}"),
+            title: format!("Title {index}"),
+            duration_ms: 600_000,
+            path: PathBuf::from(format!("/media/{index}.mkv")),
+        }
+    }
+
+    fn drain_until(extractor: &Extractor, wanted: usize) -> Vec<ArtworkEvent> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut events = Vec::new();
+        while events.len() < wanted && Instant::now() < deadline {
+            events.extend(extractor.poll());
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        events
+    }
+
+    #[test]
+    fn the_pool_draws_several_posters_at_once_and_stays_small() {
+        const JOBS: usize = 6;
+        const JOB_COST: Duration = Duration::from_millis(120);
+
+        let live = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let high_water = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let handler: Handler = {
+            let live = Arc::clone(&live);
+            let high_water = Arc::clone(&high_water);
+            Arc::new(move |candidate: &ArtworkCandidate| {
+                let now = live.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                high_water.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+                std::thread::sleep(JOB_COST);
+                live.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                ArtworkEvent::Stored {
+                    work_id: candidate.work_id.clone(),
+                }
+            })
+        };
+
+        let extractor = Extractor::pooled(handler);
+        let started = Instant::now();
+        let queued = (0..JOBS)
+            .filter(|index| extractor.request(candidate(*index)))
+            .count();
+        assert_eq!(queued, JOBS, "every poster must reach the pool");
+
+        let events = drain_until(&extractor, JOBS);
+        let elapsed = started.elapsed();
+        assert_eq!(events.len(), JOBS, "the pool must report every poster");
+
+        let peak = high_water.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            peak >= 2,
+            "a pool of {POSTER_WORKERS} drew at most {peak} poster(s) at once"
+        );
+        assert!(
+            peak <= POSTER_WORKERS,
+            "the pool ran {peak} workers, above its bound of {POSTER_WORKERS}"
+        );
+        assert!(
+            (2..=4).contains(&POSTER_WORKERS),
+            "the owner's laptop must not be flooded by {POSTER_WORKERS} decoders"
+        );
+
+        let serial = JOB_COST * JOBS as u32;
+        assert!(
+            elapsed < serial,
+            "{JOBS} posters took {elapsed:?}, no better than one at a time ({serial:?})"
+        );
+    }
+
+    #[test]
+    fn a_pooled_poster_reports_its_own_work_even_when_jobs_overlap() {
+        let handler: Handler = Arc::new(|candidate: &ArtworkCandidate| ArtworkEvent::Failed {
+            work_id: candidate.work_id.clone(),
+            reason: "no frame".to_string(),
+        });
+        let extractor = Extractor::pooled(handler);
+        for index in 0..5 {
+            assert!(extractor.request(candidate(index)));
+        }
+        let events = drain_until(&extractor, 5);
+        let mut seen: Vec<String> = events
+            .into_iter()
+            .map(|event| match event {
+                ArtworkEvent::Stored { work_id } | ArtworkEvent::Failed { work_id, .. } => work_id,
+            })
+            .collect();
+        seen.sort();
+        assert_eq!(
+            seen,
+            (0..5)
+                .map(|index| format!("work-{index}"))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_full_queue_refuses_rather_than_growing_without_bound() {
+        let handler: Handler = Arc::new(|_candidate: &ArtworkCandidate| {
+            std::thread::sleep(Duration::from_secs(5));
+            ArtworkEvent::Failed {
+                work_id: "held".to_string(),
+                reason: "held".to_string(),
+            }
+        });
+        let extractor = Extractor::pooled(handler);
+        let accepted = (0..QUEUE_DEPTH + POSTER_WORKERS + 8)
+            .filter(|index| extractor.request(candidate(*index)))
+            .count();
+        assert!(
+            accepted <= QUEUE_DEPTH + POSTER_WORKERS,
+            "{accepted} requests were accepted, above the bound of {}",
+            QUEUE_DEPTH + POSTER_WORKERS
+        );
+        assert!(accepted >= QUEUE_DEPTH, "the queue refused work too early");
     }
 }

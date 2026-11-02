@@ -12,11 +12,11 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Length, Subscription, Task, keyboard};
 use screenroom_core::{
-    ArtworkRetention, CatalogueMetadataProvider, ConversionJob, ConversionProfile,
-    ConversionStatus, CoreError, EnrichmentDrainReport, Library, LibraryItem, LibraryQuery,
-    LibraryScanner, MediaKind, OpenSubtitlesProvider, OutputFacts, Preferences, Profile,
-    ProviderCapability, ProviderConfig, Recommendation, ScanToken, SegmentMarker, Sort, Source,
-    SourceState, StoredSubtitle, SubtitleProvider, SubtitleProviderConfig, SubtitleSearch,
+    ArtworkCandidate, ArtworkRetention, CatalogueMetadataProvider, ConversionJob,
+    ConversionProfile, ConversionStatus, CoreError, EnrichmentDrainReport, Library, LibraryItem,
+    LibraryQuery, LibraryScanner, MediaKind, OpenSubtitlesProvider, OutputFacts, Preferences,
+    Profile, ProviderCapability, ProviderConfig, Recommendation, ScanToken, SegmentMarker, Sort,
+    Source, SourceState, StoredSubtitle, SubtitleProvider, SubtitleProviderConfig, SubtitleSearch,
     TmdbProvider, verify_output,
 };
 use screenroom_player::{
@@ -1023,6 +1023,24 @@ fn opening_profile(library: &Library, preferences: &Preferences) -> String {
         .unwrap_or_default()
 }
 
+fn screen_first(candidates: Vec<ArtworkCandidate>, on_screen: &[String]) -> Vec<ArtworkCandidate> {
+    let rank = |candidate: &ArtworkCandidate| {
+        on_screen
+            .iter()
+            .position(|work_id| work_id == &candidate.work_id)
+            .unwrap_or(usize::MAX)
+    };
+    let mut ordered: Vec<(usize, ArtworkCandidate)> = candidates
+        .into_iter()
+        .map(|candidate| (rank(&candidate), candidate))
+        .collect();
+    ordered.sort_by_key(|(place, _)| *place);
+    ordered
+        .into_iter()
+        .map(|(_, candidate)| candidate)
+        .collect()
+}
+
 impl App {
     fn new() -> (Self, Task<Message>) {
         let (mut app, task) = Self::launch();
@@ -1445,6 +1463,40 @@ impl App {
         ids
     }
 
+    fn on_screen_work_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = Vec::new();
+        let mut add = |work_id: &str| {
+            if !ids.iter().any(|known| known == work_id) {
+                ids.push(work_id.to_string());
+            }
+        };
+        match self.screen {
+            Screen::Home => {
+                for item in &self.home {
+                    add(&item.work_id);
+                }
+                for suggestion in &self.suggestions {
+                    add(&suggestion.item.work_id);
+                }
+            }
+            Screen::Browse => {
+                for item in &self.browse.items {
+                    add(&item.work_id);
+                }
+            }
+            Screen::Detail => {
+                if let Some(detail) = &self.detail {
+                    add(&detail.item.work_id);
+                    for episode in &detail.episodes {
+                        add(&episode.work_id);
+                    }
+                }
+            }
+            Screen::Player | Screen::Settings => {}
+        }
+        ids
+    }
+
     fn ensure_artwork(&mut self) {
         self.queue_artwork(false);
     }
@@ -1506,6 +1558,8 @@ impl App {
         if candidates.is_empty() {
             return;
         }
+        let on_screen = self.on_screen_work_ids();
+        let candidates = screen_first(candidates, &on_screen);
         if self.extractor.is_none() {
             self.extractor = Some(Extractor::spawn(Arc::clone(&self.library)));
         }
@@ -5212,6 +5266,7 @@ impl App {
             nav: &self.nav,
             empty: false,
             art: &self.artwork,
+            waiting: &self.artwork_queued,
             width: self.window_width,
         }
         .view()
@@ -7134,6 +7189,93 @@ mod tests {
         app.reload_browse();
         assert!(app.extractor.is_none());
         assert!(app.artwork_queued.is_empty());
+    }
+
+    fn poster_candidate(work_id: &str, title: &str) -> ArtworkCandidate {
+        ArtworkCandidate {
+            work_id: work_id.to_string(),
+            file_id: format!("file-{work_id}"),
+            title: title.to_string(),
+            duration_ms: 600_000,
+            path: std::path::PathBuf::from(format!("/media/{work_id}.mkv")),
+        }
+    }
+
+    #[test]
+    fn the_rail_on_screen_is_drawn_before_the_shelves_behind_it() {
+        let candidates = vec![
+            poster_candidate("behind-1", "Aardvark"),
+            poster_candidate("third", "Third on screen"),
+            poster_candidate("behind-2", "Zebra"),
+            poster_candidate("first", "First on screen"),
+            poster_candidate("second", "Second on screen"),
+        ];
+        let on_screen = vec![
+            "first".to_string(),
+            "second".to_string(),
+            "third".to_string(),
+        ];
+
+        let ordered = screen_first(candidates, &on_screen);
+        let order: Vec<&str> = ordered
+            .iter()
+            .map(|candidate| candidate.work_id.as_str())
+            .collect();
+        assert_eq!(order, ["first", "second", "third", "behind-1", "behind-2"]);
+    }
+
+    #[test]
+    fn a_screen_with_nothing_of_its_own_keeps_the_queue_order_it_had() {
+        let candidates = vec![poster_candidate("b", "B"), poster_candidate("a", "A")];
+        let ordered = screen_first(candidates, &[]);
+        let order: Vec<&str> = ordered
+            .iter()
+            .map(|candidate| candidate.work_id.as_str())
+            .collect();
+        assert_eq!(order, ["b", "a"]);
+    }
+
+    #[test]
+    fn a_screen_asks_for_its_own_cards_before_what_sits_behind_it() {
+        let (mut app, _directory) = app_with(6);
+        app.navigate(Screen::Browse);
+        app.reload_browse();
+        app.reload_home();
+
+        let on_screen = app.on_screen_work_ids();
+        assert_eq!(
+            on_screen.len(),
+            app.browse.items.len(),
+            "a library page must name exactly the cards it shows"
+        );
+        for item in &app.browse.items {
+            assert!(
+                on_screen.contains(&item.work_id),
+                "a card on the library page was left out of the queue order"
+            );
+        }
+        let visible = app.visible_work_ids();
+        assert!(
+            visible.len() >= on_screen.len(),
+            "the whole visible set must still be offered to the extractor"
+        );
+    }
+
+    #[test]
+    fn home_names_the_hero_and_its_rails_before_the_library_behind_them() {
+        let (mut app, _directory) = app_with(8);
+        app.navigate(Screen::Home);
+        app.reload_home();
+
+        let on_screen = app.on_screen_work_ids();
+        let expected: Vec<String> = app
+            .home
+            .iter()
+            .chain(app.suggestions.iter().map(|suggestion| &suggestion.item))
+            .map(|item| item.work_id.clone())
+            .collect();
+        assert_eq!(on_screen, expected);
+        assert!(!on_screen.is_empty(), "home offered no card to draw");
     }
 
     #[test]
