@@ -692,26 +692,21 @@ than reclassified.
   artwork_bench -- <library.db> 30` for the timing.
 - **Human verification:** the capture above.
 
-#### P2-08 · A deletion reaches the library on the reconcile pass, not immediately — **OPEN**
+#### P2-08 · A deletion reaches the library on the reconcile pass, not immediately — **CLOSED**
 
 - **Requirement:** automatic discovery must not leave a film listed that is no
   longer there, and must never delete history.
-- **Status:** OPEN, with evidence. `scripts/verify-watch.sh` copies a clip into a
-  watched folder and reports **"the library picked up the new file in 4.9s"** —
-  a real FSEvents callback through to a stored row, no rescan. The same script
-  removes the file again and reports that it is still listed as available after
-  ten seconds. The row is not wrong so much as stale: the reconcile pass corrects
-  it, and history is never deleted.
-- **Cause:** a removal is planned correctly, but applying it becomes a full walk,
-  and that walk is submitted while the ingest of the preceding copy is still
-  running, so it is not performed until the next reconcile.
-- **Where:** `apps/desktop/src/app.rs` (`apply_work`, `submit_job`),
-  `apps/desktop/src/watch.rs` (`work_for`).
-- **Work:** queue the withdraw instead of submitting it into a busy worker, or
-  give the core a per-path withdraw so a removal does not need a walk at all.
-- **Acceptance:** `scripts/verify-watch.sh` prints both PASS lines, with the
-  removal under ten seconds, and a missing drive still deletes nothing.
-- **Automated verification:** `scripts/verify-watch.sh`.
+- **Status:** CLOSED. A removal now withdraws that one locator through the same
+  rules a walk uses, instead of being queued behind the arrival and losing its
+  place; the volume-identity guard remains the only authority on withdrawal, so a
+  missing drive still deletes nothing.
+- **Evidence:** `scripts/verify-watch.sh` prints both lines —
+  `the library picked up the new file in 4.66s without a rescan` and
+  `the removed file stopped being available in 0.08s and kept its history`.
+- **Where:** `apps/desktop/src/watch.rs`, `App::handle_watched` and `apply_work`,
+  `crates/screenroom-core/src/scanner.rs` (per-path withdraw),
+  `crates/screenroom-core/src/library/catalog.rs`.
+- **Automated verification:** the crate and desktop suites, plus the script.
 - **Human verification:** none needed beyond the script.
 
 ---
