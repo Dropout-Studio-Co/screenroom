@@ -36,6 +36,12 @@ cd apps/tv && pnpm install --frozen-lockfile && pnpm typecheck && pnpm test
 Six tests are skipped by name because a headless hosted runner cannot measure what
 they measure. No secrets. `release.yml` calls this file as its reusable gate.
 
+The `rust-test` job's limit is 45 minutes rather than 20 because Actions caches are
+scoped to the ref that wrote them: a **tag** push starts cold, and this repository's
+desktop suite was cut off at the old 20-minute limit once while warming, then
+finished in 2 min 34 s on the next run with the cache in place. The longer limit is
+a budget for the cold build, not a slower gate.
+
 ### `ci.yml`
 
 The owner's macOS gate. It runs on `[self-hosted, macOS]` and only when the
