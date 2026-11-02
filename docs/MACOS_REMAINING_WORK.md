@@ -698,13 +698,18 @@ than reclassified.
 
 - **Requirement:** automatic discovery must not leave a film listed that is no
   longer there, and must never delete history.
-- **Status:** CLOSED. A removal now withdraws that one locator through the same
-  rules a walk uses, instead of being queued behind the arrival and losing its
-  place; the volume-identity guard remains the only authority on withdrawal, so a
-  missing drive still deletes nothing.
+- **Status:** CLOSED. The cause was not a lost job. macOS reports a deletion as a
+  remove event followed by that same path's metadata and content events, and the
+  batch collapse kept the last non-removal, so the removal was discarded before any
+  job was planned. A removal is now sticky — only a real arrival supersedes it — and
+  it withdraws that one locator without a walk, behind the same guards: the
+  volume-identity check remains the only authority, and a missing or replaced volume
+  withdraws nothing.
 - **Evidence:** `scripts/verify-watch.sh` prints both lines —
   `the library picked up the new file in 4.66s without a rescan` and
-  `the removed file stopped being available in 0.08s and kept its history`.
+  `the removed file stopped being available in 0.08s and kept its history`; repeated
+  on the same commit it reported 1.4 seconds for the removal, so the honest figure is
+  about a second rather than a fixed one.
 - **Where:** `apps/desktop/src/watch.rs`, `App::handle_watched` and `apply_work`,
   `crates/screenroom-core/src/scanner.rs` (per-path withdraw),
   `crates/screenroom-core/src/library/catalog.rs`.
