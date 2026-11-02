@@ -550,6 +550,75 @@ impl<'a> LibraryScanner<'a> {
         })
     }
 
+    pub fn withdraw_paths(
+        &self,
+        root: &Path,
+        paths: &[PathBuf],
+        token: &ScanToken,
+    ) -> Result<usize> {
+        let resolved = self.source_for_root(root)?;
+        self.library.claim_scan(&resolved.id)?;
+        let _guard = ScanGuard {
+            library: self.library,
+            source_id: resolved.id.clone(),
+        };
+
+        let source = self.library.source(&resolved.id)?;
+        if source.state == SourceState::Removed {
+            return Err(CoreError::library(
+                "source_removed",
+                "This source was removed.",
+            ));
+        }
+        if source.root_path.is_empty() {
+            return Err(CoreError::library(
+                "source_disconnected",
+                "Relink the source before withdrawing anything.",
+            ));
+        }
+        let root = match std::fs::canonicalize(&source.root_path) {
+            Ok(root) => root,
+            Err(_) => return Ok(0),
+        };
+        if self.library.path_key(&root) != self.library.path_key(Path::new(&source.root_path)) {
+            return Err(CoreError::library(
+                "unsafe_path",
+                "The source was replaced by a symbolic link. Relink it explicitly.",
+            ));
+        }
+
+        let current_volume = VolumeIdentity::probe(&root);
+        let volume = VolumeCheck::classify(
+            self.library.source_volume_identity(&resolved.id)?,
+            current_volume,
+        );
+        if !volume.usable() {
+            return Ok(0);
+        }
+        let known = self.library.locator_facts(&resolved.id)?.len() as u64;
+        if !withdrawal_allowed(volume, 0, known) {
+            return Ok(0);
+        }
+
+        let mut missing = Vec::new();
+        for path in paths {
+            if token.is_cancelled() {
+                break;
+            }
+            let Some(relative) = relative_to(&root, path) else {
+                continue;
+            };
+            if !is_plain_relative(&relative) || !crate::watch::accept(Path::new(&relative)) {
+                continue;
+            }
+            if confirmed_missing(&root.join(&relative)) {
+                missing.push(relative);
+            }
+        }
+
+        self.library.withdraw_locators(&resolved.id, &missing)
+    }
+
     fn source_for_root(&self, root: &Path) -> Result<crate::domain::Source> {
         let key = self.library.path_key(root);
         self.library
@@ -1204,6 +1273,128 @@ mod tests {
         );
         assert_eq!(eight, 1, "8 files were ingested in {eight} transactions");
         assert_eq!(forty, 1, "40 files were ingested in {forty} transactions");
+    }
+
+    #[test]
+    fn a_removal_withdraws_only_the_path_it_names_and_keeps_the_row() {
+        let directory = TempDir::new().unwrap();
+        let root = directory.path().join("media");
+        fs::create_dir_all(&root).unwrap();
+        write_settled(&root.join("Gone.2020.mkv"), b"gone");
+        write_settled(&root.join("Keep.2020.mkv"), b"keep");
+
+        let library = Library::open_in_memory().unwrap();
+        let source = library.add_source(&root, None).unwrap();
+        let stored = PathBuf::from(library.source(&source.id).unwrap().root_path);
+        let scanner =
+            LibraryScanner::new(&library).with_limits(10_000, 32, Duration::from_secs(15));
+        scanner.scan(&source.id, &ScanToken::new(), |_| {}).unwrap();
+
+        let gone = stored.join("Gone.2020.mkv");
+        fs::remove_file(&gone).unwrap();
+
+        let withdrawn = scanner
+            .withdraw_paths(&stored, std::slice::from_ref(&gone), &ScanToken::new())
+            .unwrap();
+
+        assert_eq!(withdrawn, 1, "the removed file was not withdrawn");
+        assert_eq!(
+            library.count(&LibraryQuery::default()).unwrap(),
+            2,
+            "a withdrawal deleted history"
+        );
+        let items = library.items(&LibraryQuery::page(10)).unwrap();
+        let gone_item = items
+            .iter()
+            .find(|item| item.filename == "Gone.2020.mkv")
+            .expect("the withdrawn row is still in the library");
+        assert!(!gone_item.available, "the removed file stayed available");
+        let keep = items
+            .iter()
+            .find(|item| item.filename == "Keep.2020.mkv")
+            .unwrap();
+        assert!(keep.available, "an untouched file was withdrawn too");
+    }
+
+    #[test]
+    fn a_missing_root_withdraws_nothing() {
+        let directory = TempDir::new().unwrap();
+        let root = directory.path().join("drive");
+        fs::create_dir_all(&root).unwrap();
+        write_settled(&root.join("Film.2020.mkv"), b"film");
+        write_settled(&root.join("Show.S01E01.mkv"), b"episode");
+
+        let library = Library::open_in_memory().unwrap();
+        let source = library.add_source(&root, None).unwrap();
+        let stored = PathBuf::from(library.source(&source.id).unwrap().root_path);
+        let scanner =
+            LibraryScanner::new(&library).with_limits(10_000, 32, Duration::from_secs(15));
+        scanner.scan(&source.id, &ScanToken::new(), |_| {}).unwrap();
+
+        let film = stored.join("Film.2020.mkv");
+        let episode = stored.join("Show.S01E01.mkv");
+        fs::remove_dir_all(&stored).unwrap();
+
+        let withdrawn = scanner
+            .withdraw_paths(&stored, &[film, episode], &ScanToken::new())
+            .unwrap();
+
+        assert_eq!(withdrawn, 0, "an unreachable root withdrew something");
+        assert_eq!(
+            library
+                .items(&LibraryQuery::page(10))
+                .unwrap()
+                .iter()
+                .filter(|item| item.available)
+                .count(),
+            2,
+            "a source that went away withdrew its library"
+        );
+        assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 2);
+    }
+
+    #[test]
+    fn a_replaced_volume_withdraws_nothing() {
+        let directory = TempDir::new().unwrap();
+        let root = directory.path().join("drive");
+        fs::create_dir_all(&root).unwrap();
+        write_settled(&root.join("Film.2020.mkv"), b"film");
+
+        let library = Library::open_in_memory().unwrap();
+        let source = library.add_source(&root, None).unwrap();
+        let stored = PathBuf::from(library.source(&source.id).unwrap().root_path);
+        let scanner =
+            LibraryScanner::new(&library).with_limits(10_000, 32, Duration::from_secs(15));
+        scanner.scan(&source.id, &ScanToken::new(), |_| {}).unwrap();
+
+        library
+            .record_volume_identity(
+                &source.id,
+                &VolumeIdentity::new(9_999, Some("the-drive-that-left".into())),
+            )
+            .unwrap();
+
+        let film = stored.join("Film.2020.mkv");
+        fs::remove_file(&film).unwrap();
+
+        let withdrawn = scanner
+            .withdraw_paths(&stored, &[film], &ScanToken::new())
+            .unwrap();
+
+        assert_eq!(withdrawn, 0, "a different volume withdrew a file");
+        assert!(
+            library
+                .items(&LibraryQuery::page(10))
+                .unwrap()
+                .iter()
+                .all(|item| item.available),
+            "the replaced volume's file stopped being available"
+        );
+        assert_eq!(
+            library.source(&source.id).unwrap().state,
+            SourceState::Available,
+            "a single withdrawal declared the source gone"
+        );
     }
 
     #[test]
