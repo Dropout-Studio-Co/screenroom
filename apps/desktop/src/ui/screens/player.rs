@@ -64,6 +64,8 @@ const COMPACT: f32 = 900.0;
 
 pub const CHROME_IDLE_AFTER: Duration = Duration::from_millis(2_500);
 
+pub const MARK_HINT: &str = "i marks an intro · c marks credits · s skips a marked segment";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Control {
     Scrub,
@@ -393,11 +395,18 @@ impl<'a> Player<'a> {
         let controls =
             row![transport, Space::new().width(Length::Fill), tracks,].align_y(Alignment::Center);
 
+        let hint = text(MARK_HINT)
+            .size(tokens.type_scale.micro)
+            .font(theme::regular())
+            .color(theme::muted());
+
         let block = container(
             column![
                 scrub,
                 Space::new().height(Length::Fixed(SCRUB_GAP)),
                 controls,
+                Space::new().height(Length::Fixed(CHROME_GAP)),
+                hint,
             ]
             .width(Length::Fill)
             .align_x(Alignment::Start)
