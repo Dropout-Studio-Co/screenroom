@@ -1,3 +1,5 @@
+import { MOTION } from '../core/motion.ts'
+
 export type Color = number
 
 function rgb(red: number, green: number, blue: number, alpha = 1): Color {
@@ -11,7 +13,7 @@ const ROOT_PX = 16
 
 export const TYPE_SCALE = 1.75
 
-export const FOCUS_SCALE = 1.04
+export const FOCUS_SCALE = MOTION.focusLift
 
 export interface Palette {
 

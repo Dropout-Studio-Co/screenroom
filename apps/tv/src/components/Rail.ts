@@ -2,6 +2,7 @@ import Blits from '@lightningjs/blits'
 
 import type { RailRow } from '../design/rail.ts'
 import { RAIL_WIDTH, railLayout } from '../design/rail.ts'
+import { focusMotion } from '../core/motion.ts'
 import { hex, TOKENS } from '../design/tokens.ts'
 
 export default Blits.Component('Rail', {
@@ -27,6 +28,7 @@ export default Blits.Component('Rail', {
         :w="$row.width"
         :h="$row.height"
         :color="$row.fill"
+        :scale.transition="{value: $row.scale, duration: $focus.duration, easing: $focus.ease}"
         :rounded="$radius"
       >
         <Element
@@ -59,6 +61,7 @@ export default Blits.Component('Rail', {
       labelSize: layout.labelSize,
       markerWidth: layout.markerWidth,
       radius: Math.round(TOKENS.radius.surface),
+      focus: focusMotion(),
       background: hex(TOKENS.palette.background),
       border: hex(TOKENS.palette.hair),
       headingColor: hex(TOKENS.palette.inkMuted),
