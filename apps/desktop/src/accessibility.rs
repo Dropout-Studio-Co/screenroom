@@ -147,6 +147,8 @@ pub struct ScreenFacts<'a> {
     pub filters: Option<Filters>,
     pub flags: Option<Flags>,
     pub settings: Vec<(String, bool)>,
+
+    pub play: Option<(String, bool)>,
     pub settings_focus: usize,
     pub player: Option<Player>,
     pub status: Option<String>,
@@ -165,6 +167,7 @@ impl<'a> ScreenFacts<'a> {
             flags: None,
             settings: Vec::new(),
             settings_focus: 0,
+            play: None,
             player: None,
             status: None,
             error: None,
@@ -362,13 +365,15 @@ fn detail_controls(facts: &ScreenFacts<'_>, controls: &mut Vec<Control>) {
     let Some(item) = facts.items.first() else {
         return;
     };
-    let resume = item.position_ms > 0;
-    let mut play = button(
-        "detail:play",
-        if resume { "Resume" } else { "Play" },
-        Action::PlayDetail,
-    );
-    play.enabled = item.available;
+    let (label, available) = match &facts.play {
+        Some((label, available)) => (label.as_str(), *available),
+        None => (
+            if item.position_ms > 0 { "Resume" } else { "Play" },
+            item.available,
+        ),
+    };
+    let mut play = button("detail:play", label, Action::PlayDetail);
+    play.enabled = available;
     controls.push(play);
     let mut restart = button("detail:restart", "Start over", Action::RestartDetail);
     restart.enabled = item.available;

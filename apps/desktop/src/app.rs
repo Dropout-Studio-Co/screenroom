@@ -79,6 +79,7 @@ pub fn run() -> iced::Result {
     let window = iced::window::Settings {
         visible: !hides_its_window(),
         size: verification_size(),
+        min_size: Some(iced::Size::new(900.0, 600.0)),
         ..Default::default()
     };
 
@@ -5045,6 +5046,10 @@ impl App {
                         watchlist: detail.item.watchlisted,
                         watched: detail.item.watched,
                     });
+                    facts.play = Some((
+                        ui::screens::detail::primary_action(&detail.item).0,
+                        detail.item.available,
+                    ));
                 }
                 facts.focus = Some(self.focus);
             }
