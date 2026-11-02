@@ -58,6 +58,9 @@ pub fn surface_key(frame: &Frame) -> Option<usize> {
     }
 }
 
+// Only the macOS surface-import path caps its texture cache; other targets
+// upload the CPU frame and never import.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const MAX_IMPORTED_SURFACES: usize = 12;
 
 pub fn frame_tag(frame: &Frame) -> usize {
@@ -1006,6 +1009,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         pixel
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn an_imported_surface_is_sampled_the_way_iced_presents_it() {
         let Some((device, queue)) = device() else {
