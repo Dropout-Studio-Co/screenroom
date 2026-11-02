@@ -272,7 +272,7 @@ fn scrim_ink(alpha: f32) -> Color {
 
 fn scrim_gradient() -> iced::Gradient {
     iced::Gradient::Linear(
-        iced::gradient::Linear::new(iced::Radians(std::f32::consts::FRAC_PI_2))
+        iced::gradient::Linear::new(iced::Radians(std::f32::consts::PI))
             .add_stop(0.0, scrim_ink(0.97))
             .add_stop(0.45, scrim_ink(0.9))
             .add_stop(0.78, scrim_ink(0.62))
@@ -282,7 +282,7 @@ fn scrim_gradient() -> iced::Gradient {
 
 fn fade_gradient() -> iced::Gradient {
     iced::Gradient::Linear(
-        iced::gradient::Linear::new(iced::Radians(std::f32::consts::FRAC_PI_2))
+        iced::gradient::Linear::new(iced::Radians(std::f32::consts::PI))
             .add_stop(0.0, scrim_ink(0.28))
             .add_stop(0.32, scrim_ink(0.16))
             .add_stop(0.7, scrim_ink(0.05))
@@ -395,6 +395,30 @@ mod tests {
     use crate::ui::shell;
     use crate::ui::shell::NavLabels;
     use crate::ui::theme::Breakpoint;
+
+    fn axis(gradient: iced::Gradient) -> (iced::Point, iced::Point) {
+        match gradient {
+            iced::Gradient::Linear(linear) => linear.angle.to_distance(&iced::Rectangle::new(
+                iced::Point::ORIGIN,
+                iced::Size::new(1440.0, 76.0),
+            )),
+        }
+    }
+
+    #[test]
+    fn the_bar_scrim_fades_down_the_window_not_across_it() {
+        for gradient in [shell::scrim_gradient(), shell::fade_gradient()] {
+            let (start, end) = axis(gradient);
+            assert!(
+                (start.x - end.x).abs() < 0.01,
+                "the scrim must run vertically, but it spans {start:?} to {end:?}"
+            );
+            assert!(
+                end.y > start.y,
+                "the scrim must darken the top and clear at the bottom"
+            );
+        }
+    }
 
     #[test]
     #[allow(clippy::useless_conversion)]

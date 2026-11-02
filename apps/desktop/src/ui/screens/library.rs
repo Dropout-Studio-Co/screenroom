@@ -235,6 +235,7 @@ impl<'a> Library<'a> {
         let framed = container(
             scrollable(page)
                 .id(grid_id())
+                .direction(theme::scrollbar_direction())
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .style(theme::scrollbar),
@@ -577,7 +578,7 @@ pub fn tile_width(width: f32) -> f32 {
 
     let width = capped_window(width);
     let columns = card_columns(width) as f32;
-    let available = (width - 2.0 * theme::PAD).max(0.0);
+    let available = (width - 2.0 * theme::PAD - theme::scroll_reserve()).max(0.0);
     let tile = (available - CARD_GAP * (columns - 1.0)) / columns;
 
     if tile.is_finite() && tile > 0.0 {
@@ -1138,16 +1139,32 @@ mod tests {
     }
 
     #[test]
-    fn the_grid_fills_the_gutters_exactly_at_the_mockup_width() {
-        let width = 1440.0;
-        let tile = tile_width(width);
-        let columns = card_columns(width) as f32;
-        let span = tile * columns + CARD_GAP * (columns - 1.0) + 2.0 * theme::PAD;
+    fn the_grid_fills_the_gutters_exactly_and_leaves_the_scrollbar_its_strip() {
+        for width in [900.0_f32, 1100.0, 1280.0, 1440.0, 1760.0, 3440.0] {
+            let tile = tile_width(width);
+            let columns = card_columns(capped_window(width)) as f32;
+            let span = tile * columns
+                + CARD_GAP * (columns - 1.0)
+                + 2.0 * theme::PAD
+                + theme::scroll_reserve();
 
-        assert_eq!(columns, 6.0);
+            assert!(
+                (span - capped_window(width)).abs() < 0.01,
+                "at {width}px the grid must fill the window and leave the scrollbar its strip, \
+                 but it spans {span}"
+            );
+        }
+
+        let cite = capped_window(3440.0);
         assert!(
-            (span - width).abs() < 0.01,
-            "the grid leaves a stray gap: {span}"
+            (tile_width(3440.0) * 7.0
+                + CARD_GAP * 6.0
+                + 2.0 * theme::PAD
+                + theme::scroll_reserve()
+                - cite)
+                .abs()
+                < 0.01,
+            "the capped ultrawide column must not push a tile under the scrollbar"
         );
     }
 
