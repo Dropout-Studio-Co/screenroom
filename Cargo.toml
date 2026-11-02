@@ -12,7 +12,7 @@ exclude = ["reference", ".worktrees", "vendor"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-authors = ["Rahi Khan"]
+authors = ["Dropout Studio"]
 repository = "https://github.com/Dropout-Studio-Co/screenroom"
 
 [workspace.dependencies]
