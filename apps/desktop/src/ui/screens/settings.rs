@@ -14,6 +14,22 @@ pub const RAIL_MIN_WIDTH: f32 = 160.0;
 
 pub const CONTENT_MAX_WIDTH: f32 = 780.0;
 
+pub fn content_width(window: f32) -> f32 {
+    if !window.is_finite() || window <= 0.0 {
+        return CONTENT_MAX_WIDTH;
+    }
+
+    let rail = if Breakpoint::at(window) == Breakpoint::Narrow {
+        RAIL_MIN_WIDTH
+    } else {
+        RAIL_WIDTH
+    };
+
+    let available = window - 2.0 * theme::PAD - rail - COLUMN_GAP - theme::scroll_reserve();
+
+    available.clamp(0.0, CONTENT_MAX_WIDTH)
+}
+
 const COLUMN_GAP: f32 = 60.0;
 
 const LABEL_COLUMN: f32 = 520.0;
@@ -210,9 +226,13 @@ impl<'a> Settings<'a> {
         }
 
         scrollable(
-            container(body)
-                .width(Length::Fill)
-                .max_width(CONTENT_MAX_WIDTH),
+            container(
+                container(body)
+                    .width(Length::Fill)
+                    .max_width(content_width(self.width)),
+            )
+            .width(Length::Fill)
+            .height(Length::Shrink),
         )
         .height(Length::Fill)
         .width(Length::Fill)
@@ -590,6 +610,35 @@ mod tests {
         assert_eq!(sections.len(), 9);
         let labels: Vec<&str> = sections.iter().map(|s| s.label()).collect();
         assert!(labels.contains(&"Casting") && labels.contains(&"Profiles"));
+    }
+
+    #[test]
+    fn the_content_column_stops_at_its_own_width_inside_the_window() {
+        for window in [900.0_f32, 1100.0, 1280.0, 1440.0, 1760.0, 3440.0] {
+            let rail = if Breakpoint::at(window) == Breakpoint::Narrow {
+                RAIL_MIN_WIDTH
+            } else {
+                RAIL_WIDTH
+            };
+            let width = content_width(window);
+            assert!(
+                width <= CONTENT_MAX_WIDTH + 0.01,
+                "{window}px must not stretch the content past {CONTENT_MAX_WIDTH}"
+            );
+            let room = window - 2.0 * theme::PAD - rail - COLUMN_GAP;
+            assert!(
+                width <= room + 0.01,
+                "{window}px leaves {room}px beside the rail, so {width}px does not fit"
+            );
+            assert!(width > 0.0, "{window}px must still leave a content column");
+        }
+        assert_eq!(content_width(f32::NAN), CONTENT_MAX_WIDTH);
+        assert_eq!(content_width(0.0), CONTENT_MAX_WIDTH);
+        assert_eq!(content_width(1440.0), CONTENT_MAX_WIDTH);
+        assert!(
+            content_width(900.0) < CONTENT_MAX_WIDTH,
+            "a 900px window cannot hold a 780px column beside the rail"
+        );
     }
 
     #[test]

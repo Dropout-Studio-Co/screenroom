@@ -23,8 +23,6 @@ const FILMS: &str = "Films";
 
 const SERIES: &str = "Series";
 
-const RAIL_WINDOW: usize = 24;
-
 const PROGRESS_HEIGHT: f32 = 2.0;
 
 const INVITATION_WIDTH: f32 = 560.0;
@@ -255,27 +253,14 @@ impl<'a> Home<'a> {
         card_width: f32,
     ) -> Element<'a, Message> {
         let focused_here = focus.rail == index;
-        let start = if focused_here {
-            focus
-                .column
-                .saturating_sub(RAIL_WINDOW / 3)
-                .min(entries.len().saturating_sub(RAIL_WINDOW))
-        } else {
-            0
-        };
+        let per_view = rail::cards_per_view(rail_span(self.width), card_width);
+        let anchor = if focused_here { focus.column } else { 0 };
+        let start = rail::window_start(anchor, entries.len(), per_view);
+        let shown = per_view.min(entries.len().saturating_sub(start)).max(1);
 
         let mut cards: Vec<(Element<'a, Message>, usize)> = Vec::new();
 
-        if start > 0 {
-            cards.push((
-                Space::new()
-                    .width(Length::Fixed(rail::focus_offset(start, card_width)))
-                    .into(),
-                start,
-            ));
-        }
-
-        for (position, item) in entries.iter().enumerate().skip(start).take(RAIL_WINDOW) {
+        for (position, item) in entries.iter().enumerate().skip(start).take(shown) {
             let focused = focused_here && focus.column == position;
             let mut card = Poster::new(item.title.as_str(), caption(item))
                 .art(self.art.get(&item.work_id).cloned())
@@ -295,7 +280,11 @@ impl<'a> Home<'a> {
             label,
             entries.len(),
             cards,
-            if focused_here { focus.column } else { 0 },
+            if focused_here {
+                focus.column.saturating_sub(start)
+            } else {
+                0
+            },
             card_width,
         );
         strip
@@ -355,6 +344,16 @@ fn capped<'a>(body: Element<'a, Message>, breakpoint: Breakpoint) -> Element<'a,
             .into(),
         None => body,
     }
+}
+
+fn rail_span(width: f32) -> f32 {
+    let span = span(width);
+    let limited = match Breakpoint::at(span).content_cap() {
+        Some(cap) => span.min(cap),
+        None => span,
+    };
+
+    (limited - 2.0 * theme::PAD).max(0.0)
 }
 
 fn gutter<'a>(body: Element<'a, Message>) -> Element<'a, Message> {
@@ -729,11 +728,37 @@ impl Program<Message> for Backdrop {
 #[cfg(test)]
 mod tests {
     use crate::app::Screen;
+    use crate::ui::components::rail;
     use crate::ui::route::Nav;
     use crate::ui::screens::home::{self, Home};
+    use crate::ui::theme::Breakpoint;
     use screenroom_core::{LibraryItem, MediaKind};
     use std::collections::HashMap;
     use std::collections::HashSet;
+
+    #[test]
+    fn a_rail_shows_only_whole_cards_at_every_breakpoint() {
+        for width in [900.0_f32, 1100.0, 1280.0, 1440.0, 1760.0, 3440.0] {
+            let breakpoint = Breakpoint::at(width);
+            let card = breakpoint.card();
+            let span = home::rail_span(width);
+            let per_view = rail::cards_per_view(span, card);
+            let used = per_view as f32 * card + (per_view.saturating_sub(1)) as f32 * 16.0;
+
+            assert!(per_view >= 1, "{width}px must fit at least one card");
+            assert!(
+                used <= span + 0.01,
+                "at {width}px {per_view} cards need {used}px of the {span}px rail"
+            );
+            assert!(
+                per_view <= breakpoint.columns() + 2,
+                "a rail at {width}px must not carry more cards than a row of the grid"
+            );
+        }
+
+        assert_eq!(home::rail_span(f32::NAN), 1440.0 - 80.0);
+        assert_eq!(home::rail_span(3440.0), 1760.0 - 80.0);
+    }
 
     fn item(
         id: &str,

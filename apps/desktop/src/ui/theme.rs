@@ -43,6 +43,20 @@ pub fn scrollbar(_theme: &Theme, _status: scrollable::Status) -> scrollable::Sty
 
 pub const PAD: f32 = 40.0;
 
+pub const SCROLLBAR_WIDTH: f32 = 10.0;
+
+pub const SCROLLBAR_GAP: f32 = 4.0;
+
+pub const SCROLL_RESERVE: f32 = SCROLLBAR_WIDTH + SCROLLBAR_GAP;
+
+pub fn scroll_reserve() -> f32 {
+    SCROLL_RESERVE
+}
+
+pub fn scrollbar_direction() -> scrollable::Direction {
+    scrollable::Direction::Vertical(scrollable::Scrollbar::new().spacing(SCROLLBAR_GAP))
+}
+
 pub const FONT: &str = "Inter";
 
 const FACES: [&str; 3] = ["Inter Regular", "Inter Medium", "Inter SemiBold"];
@@ -312,6 +326,7 @@ mod tests {
     #[test]
     fn the_gap_and_radius_scales_are_the_spec_values() {
         assert_eq!(theme::PAD, 40.0);
+        assert_eq!(theme::scroll_reserve(), 14.0);
         assert_eq!(
             [
                 theme::gap(Gap::Tight),
