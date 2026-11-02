@@ -28,6 +28,7 @@ use crate::playback::PlaybackTracker;
 use crate::preview::{PREVIEW_DELAY, Preview, may_preview};
 use crate::probe::{DurationPass, spawn_duration_pass};
 use crate::ui;
+use crate::ui::motion::{self, MotionState};
 use crate::ui::route::{FocusPos, Nav};
 use crate::video_surface::Frame;
 
@@ -539,6 +540,8 @@ pub struct App {
 
     fullscreen: bool,
 
+    motion: MotionState,
+
     window_width: f32,
 
     last_input: std::time::Instant,
@@ -863,6 +866,10 @@ pub enum Message {
 
     Tick,
 
+    MotionTick(std::time::Instant),
+
+    RailScrolled { label: String, offset: f32 },
+
     PlayerWake,
 
     Keyboard(keyboard::Event),
@@ -892,6 +899,21 @@ pub enum Message {
     CastDisconnect,
 
     Close,
+}
+
+impl Screen {
+    fn depth(self) -> i8 {
+        match self {
+            Self::Home => 0,
+            Self::Browse | Self::Settings => 1,
+            Self::Detail => 2,
+            Self::Player => 3,
+        }
+    }
+}
+
+fn screen_depth(screen: Screen) -> i8 {
+    screen.depth()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -952,6 +974,24 @@ fn ticks(
             }
         });
         receiver.map(|()| Message::Tick)
+    })
+}
+
+fn motion_ticks() -> Subscription<Message> {
+    use iced::futures::StreamExt;
+    use iced::futures::channel::mpsc;
+
+    Subscription::run_with((), |()| {
+        let (sender, receiver) = mpsc::unbounded::<std::time::Instant>();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(motion::TICK);
+                if sender.unbounded_send(std::time::Instant::now()).is_err() {
+                    break;
+                }
+            }
+        });
+        receiver.map(Message::MotionTick)
     })
 }
 
@@ -1140,6 +1180,9 @@ impl App {
             mark_pending: None,
             up_next: None,
             auto_skipped: None,
+            motion: MotionState::new(
+                preferences.reduced_motion || crate::accessibility::system_reduce_motion(),
+            ),
             window_width: verification_size().width,
             last_input: std::time::Instant::now(),
             player_chrome: true,
@@ -4235,9 +4278,84 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let before = self.screen;
         let task = self.dispatch(message);
+        if self.screen != before {
+            self.motion.flush_rails();
+            self.motion.clear_lifts();
+            let direction = (screen_depth(self.screen) - screen_depth(before)).signum();
+            self.motion.arrive(direction as f32);
+        }
+        self.sync_motion();
         self.refresh_accessibility();
         task
+    }
+
+    fn reduced_motion(&self) -> bool {
+        self.preferences.reduced_motion || crate::accessibility::system_reduce_motion()
+    }
+
+    fn motion_focus_index(&self) -> Option<usize> {
+        match self.screen {
+            Screen::Home => self.home_flat_index(),
+            Screen::Browse => (self.focus < self.browse.items.len()).then_some(self.focus),
+            Screen::Detail | Screen::Settings | Screen::Player => None,
+        }
+    }
+
+    fn sync_motion(&mut self) {
+        self.motion.set_reduced(self.reduced_motion());
+        match self.motion_focus_index() {
+            Some(index) => self.motion.focus(index),
+            None => self.motion.release_focus(),
+        }
+        self.motion
+            .set_chrome(self.player_chrome && self.screen == Screen::Player);
+    }
+
+    fn rail_viewport(&self) -> f32 {
+        let width = if self.window_width.is_finite() {
+            self.window_width
+        } else {
+            INITIAL_WINDOW_WIDTH
+        };
+        let available = (width - 2.0 * ui::theme::PAD).max(1.0);
+        match ui::theme::Breakpoint::at(width).content_cap() {
+            Some(cap) => available.min(cap),
+            None => available,
+        }
+    }
+
+    fn scroll_focused_rail(&mut self) -> Task<Message> {
+        let Some((label, count)) = self
+            .home_sections()
+            .get(self.nav.focus().rail)
+            .map(|(label, items)| (*label, items.len()))
+        else {
+            return Task::none();
+        };
+        let column = self.nav.focus().column;
+        let card = ui::theme::Breakpoint::at(self.window_width).card();
+        let extent = ui::components::rail::extent(column, true, count, card, self.rail_viewport());
+        self.motion.scroll_rail(
+            label,
+            ui::components::rail::focus_offset(column, card),
+            extent,
+        );
+        Task::none()
+    }
+
+    fn drive_motion(&mut self) -> Task<Message> {
+        let mut tasks = Vec::new();
+        for (label, offset) in self.motion.moving_rails() {
+            tasks.push(ui::components::rail::scroll_task(&label, offset));
+        }
+        if !self.motion.page_settled() {
+            tasks.push(ui::screens::library::scroll_offset_task(
+                self.motion.page_offset(),
+            ));
+        }
+        Task::batch(tasks)
     }
 
     fn refresh_accessibility(&mut self) {
@@ -4251,7 +4369,7 @@ impl App {
     }
 
     fn dispatch(&mut self, message: Message) -> Task<Message> {
-        if !matches!(message, Message::Tick) {
+        if !matches!(message, Message::Tick | Message::MotionTick(_)) {
             self.last_input = std::time::Instant::now();
         }
         if self.route_quit() {
@@ -4322,14 +4440,18 @@ impl App {
                 if self.browse.page + 1 < self.browse.page_count() {
                     self.browse.page += 1;
                     self.focus_card(0);
+                    self.motion.place_page(0.0);
                     self.reload_browse();
+                    return ui::screens::library::scroll_offset_task(0.0);
                 }
             }
             Message::PreviousPage => {
                 if self.browse.page > 0 {
                     self.browse.page -= 1;
                     self.focus_card(0);
+                    self.motion.place_page(0.0);
                     self.reload_browse();
+                    return ui::screens::library::scroll_offset_task(0.0);
                 }
             }
 
@@ -4426,6 +4548,8 @@ impl App {
                 self.save_preferences(preferences);
             }
             Message::ToggleReducedMotion(enabled) => {
+                self.motion
+                    .set_reduced(enabled || crate::accessibility::system_reduce_motion());
                 let preferences = Preferences {
                     reduced_motion: enabled,
                     ..self.preferences.clone()
@@ -4559,6 +4683,13 @@ impl App {
                 self.player_chrome = true;
                 return Task::none();
             }
+            Message::MotionTick(now) => {
+                self.motion.step(now);
+                return self.drive_motion();
+            }
+            Message::RailScrolled { label, offset } => {
+                self.motion.adopt_rail(&label, offset);
+            }
             Message::Tick => {
                 let mut tasks = Task::none();
                 for action in crate::accessibility::drain() {
@@ -4616,14 +4747,7 @@ impl App {
                 ui::theme::Breakpoint::at(self.window_width).columns(),
             );
             self.sync_navigation();
-            let focus = self.nav.focus();
-            return rails.get(focus.rail).map_or(Task::none(), |(label, _)| {
-                ui::components::rail::scroll_task(
-                    label,
-                    focus.column,
-                    ui::theme::Breakpoint::at(self.window_width).card(),
-                )
-            });
+            return self.scroll_focused_rail();
         }
 
         let len = self.visible_len();
@@ -4649,7 +4773,8 @@ impl App {
         self.focus_card(next.unwrap_or(current));
 
         if self.screen == Screen::Browse {
-            return ui::screens::library::scroll_task(self.nav.focus(), self.window_width);
+            let target = ui::screens::library::focus_offset(self.nav.focus(), self.window_width);
+            self.motion.scroll_page(target);
         }
         Task::none()
     }
@@ -5076,6 +5201,9 @@ impl App {
             STATUS_TICK
         };
         subscriptions.push(ticks(interval, STATUS_TICK, self.frame_signals()));
+        if !self.motion.idle() {
+            subscriptions.push(motion_ticks());
+        }
         Subscription::batch(subscriptions)
     }
 
@@ -5799,13 +5927,49 @@ impl App {
                 .width(Length::Fill)
                 .into();
         }
-        crate::ui::shell::frame(
+
+        let framed = crate::ui::shell::frame(
             content,
             Some(self.screen),
             self.status.as_deref(),
             self.error.as_deref(),
             self.window_width,
-        )
+        );
+
+        self.stage(framed)
+    }
+
+    fn stage<'a>(&self, surface: Element<'a, Message>) -> Element<'a, Message> {
+        let scrim = self.motion.arrival_scrim();
+        let offset = self.motion.arrival_offset();
+
+        let staged: Element<'a, Message> = if scrim > 0.001 {
+            let veil = container(Space::new())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(move |_theme| container::Style {
+                    background: Some(iced::Background::Color(motion::with_alpha(
+                        ui::theme::ground(),
+                        scrim,
+                    ))),
+                    ..container::Style::default()
+                });
+            iced::widget::stack![surface, veil]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else {
+            surface
+        };
+
+        if offset.abs() < 0.01 {
+            return staged;
+        }
+
+        iced::widget::Float::new(staged)
+            .translate(move |_bounds, _viewport| iced::Vector::new(offset, 0.0))
+            .style(|_theme| iced::widget::float::Style::default())
+            .into()
     }
 
     fn gutter<'a>(&self, body: Element<'a, Message>) -> Element<'a, Message> {
@@ -5839,6 +6003,7 @@ impl App {
             empty: false,
             art: &self.artwork,
             waiting: &self.artwork_queued,
+            motion: &self.motion,
             width: self.window_width,
         }
         .view()
@@ -5862,6 +6027,7 @@ impl App {
             genres: &self.browse.genres,
             genre: self.browse.genre.as_deref(),
             art: &self.artwork,
+            motion: &self.motion,
             width: self.window_width,
         }
         .view()
@@ -5998,6 +6164,9 @@ impl App {
                 });
         let output = self.snapshot.output.label();
 
+        let reveal = self.motion.chrome();
+        let shown = self.player_chrome || reveal > 0.001;
+
         ui::screens::player::Player {
             snapshot: &self.snapshot,
             title,
@@ -6007,14 +6176,22 @@ impl App {
             width: self.window_width,
             position: self.scrub.unwrap_or(self.snapshot.position),
             volume: self.volume_percent(),
-            chrome: self.player_chrome,
-            overlay: self.player_chrome.then(|| self.player_overlay()),
+            chrome: shown,
+            reveal,
+            overlay: shown.then(|| self.player_overlay(reveal)),
         }
         .view()
     }
 
-    fn player_overlay(&self) -> Element<'_, Message> {
+    fn player_overlay(&self, reveal: f32) -> Element<'_, Message> {
         let tokens = design::tokens();
+        let ink = |color: iced::Color| motion::with_alpha(color, reveal);
+        let action = move |_theme: &iced::Theme, status| {
+            ui::theme::veiled(design::action_style(false), reveal)(_theme, status)
+        };
+        let quiet = move |_theme: &iced::Theme, status| {
+            ui::theme::veiled(design::quiet_style(false), reveal)(_theme, status)
+        };
         let mut block = column![].spacing(tokens.spacing.field_y);
 
         if let Some(up) = &self.up_next {
@@ -6026,14 +6203,15 @@ impl App {
             block = block.push(
                 row![
                     text(format!("Up next: {} in {left:.0} s", up.title))
-                        .size(tokens.type_scale.label),
+                        .size(tokens.type_scale.label)
+                        .color(ink(tokens.palette.foreground)),
                     button(text("Play now").size(tokens.type_scale.label))
                         .on_press(Message::PlayNextNow)
-                        .style(design::action_style(false))
+                        .style(action)
                         .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
                     button(text("Cancel").size(tokens.type_scale.label))
                         .on_press(Message::CancelNext)
-                        .style(design::quiet_style(false))
+                        .style(quiet)
                         .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
                 ]
                 .spacing(tokens.spacing.field_x)
@@ -6051,7 +6229,7 @@ impl App {
                 row![
                     button(text(label).size(tokens.type_scale.label))
                         .on_press(Message::SkipSegment)
-                        .style(design::action_style(false))
+                        .style(action)
                         .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
                     text(if marker.kind == "intro" {
                         "A segment you marked starts here."
@@ -6059,7 +6237,7 @@ impl App {
                         "A credits segment you marked starts here."
                     })
                     .size(tokens.type_scale.micro)
-                    .color(tokens.palette.ink_muted),
+                    .color(ink(tokens.palette.ink_muted)),
                 ]
                 .spacing(tokens.spacing.field_x)
                 .align_y(Alignment::Center),
@@ -6079,13 +6257,28 @@ impl App {
                         .unwrap_or_default()
                 )
                 .size(tokens.type_scale.micro)
-                .color(tokens.palette.ink_muted),
+                .color(ink(tokens.palette.ink_muted)),
+                Space::new().width(Length::Fill),
             ]
             .spacing(tokens.spacing.field_x)
             .align_y(Alignment::Center),
         );
 
-        block.width(Length::Fill).into()
+        container(block.width(Length::Fill))
+            .width(Length::Fill)
+            .padding(tokens.spacing.field_x)
+            .style(move |_theme| container::Style {
+                background: Some(iced::Background::Color(motion::with_alpha(
+                    tokens.palette.surface2,
+                    0.66 * reveal,
+                ))),
+                border: iced::Border {
+                    radius: tokens.radius.overlay.into(),
+                    ..iced::Border::default()
+                },
+                ..container::Style::default()
+            })
+            .into()
     }
 
     fn settings_screen(&self) -> Element<'_, Message> {

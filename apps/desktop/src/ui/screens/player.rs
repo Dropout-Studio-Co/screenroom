@@ -2,6 +2,7 @@ use crate::app::{Message, PlayAction, play_action};
 use crate::design;
 use crate::ui::components::poster;
 use crate::ui::icons::{self, Icon};
+use crate::ui::motion::reveal_scale;
 use crate::ui::route::Nav;
 use crate::ui::theme::{self, Gap};
 use crate::video_surface::VideoSurface;
@@ -197,6 +198,8 @@ pub struct Player<'a> {
 
     pub chrome: bool,
 
+    pub reveal: f32,
+
     pub overlay: Option<Element<'a, Message>>,
 }
 
@@ -212,6 +215,7 @@ impl<'a> Player<'a> {
             position: snapshot.position,
             volume: snapshot.volume.unwrap_or(0.0),
             chrome: true,
+            reveal: 1.0,
             overlay: None,
         }
     }
@@ -224,28 +228,35 @@ impl<'a> Player<'a> {
                 .into();
         }
 
-        let chrome: Element<'a, Message> =
-            stack![self.picture(), self.top_scrim(), self.bottom_scrim(),]
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into();
+        let reveal = self.reveal.clamp(0.0, 1.0);
+        let chrome: Element<'a, Message> = stack![
+            self.picture(),
+            rising(self.top_scrim(), reveal, -(1.0 - reveal) * RISE),
+            rising(self.bottom_scrim(), reveal, (1.0 - reveal) * RISE),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into();
 
         let visible: Element<'a, Message> = match self.overlay {
-            Some(overlay) => stack![
-                chrome,
-                container(column![Space::new().height(Length::Fill), overlay])
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .padding(Padding {
-                        top: 0.0,
-                        right: theme::PAD,
-                        bottom: BOTTOM_SCRIM_HEIGHT,
-                        left: theme::PAD,
-                    })
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
+            Some(overlay) => {
+                let overlay = rising(overlay, reveal, (1.0 - reveal) * RISE);
+                stack![
+                    chrome,
+                    container(column![Space::new().height(Length::Fill), overlay])
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .padding(Padding {
+                            top: 0.0,
+                            right: theme::PAD,
+                            bottom: BOTTOM_SCRIM_HEIGHT,
+                            left: theme::PAD,
+                        })
+                ]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+            }
             None => chrome,
         };
 
@@ -300,6 +311,7 @@ impl<'a> Player<'a> {
     }
 
     fn top_scrim(&self) -> Element<'a, Message> {
+        let reveal = self.reveal.clamp(0.0, 1.0);
         let tokens = design::tokens();
 
         let mut bar = row![
@@ -340,12 +352,13 @@ impl<'a> Player<'a> {
                 bottom: 0.0,
                 left: theme::PAD,
             })
-            .style(|_theme| scrim(TOP_SCRIM, true))
+            .style(move |_theme| scrim(TOP_SCRIM, true, reveal))
             .into()
     }
 
     fn bottom_scrim(&self) -> Element<'a, Message> {
         let tokens = design::tokens();
+        let reveal = self.reveal.clamp(0.0, 1.0);
         let duration = self.snapshot.duration.max(0.0);
         let position = if self.position.is_finite() {
             self.position.clamp(0.0, duration)
@@ -427,7 +440,7 @@ impl<'a> Player<'a> {
         .width(Length::Fill)
         .height(Length::Fixed(BOTTOM_SCRIM_HEIGHT))
         .align_y(Alignment::End)
-        .style(|_theme| scrim(BOTTOM_SCRIM, false));
+        .style(move |_theme| scrim(BOTTOM_SCRIM, false, reveal));
 
         column![Space::new().height(Length::Fill), block]
             .width(Length::Fill)
@@ -537,7 +550,7 @@ fn skip_button<'a>(icon: Icon, seconds: f64) -> Element<'a, Message> {
     icon_button(icon, ICON_SIZE, Message::SeekStep(seconds))
 }
 
-fn scrim(stops: [(f32, f32); 3], from_top: bool) -> container::Style {
+fn scrim(stops: [(f32, f32); 3], from_top: bool, reveal: f32) -> container::Style {
     let ground = theme::ground();
     let angle = if from_top {
         Radians(std::f32::consts::PI)
@@ -548,10 +561,23 @@ fn scrim(stops: [(f32, f32); 3], from_top: bool) -> container::Style {
     let linear = stops
         .into_iter()
         .fold(gradient::Linear::new(angle), |linear, (offset, alpha)| {
-            linear.add_stop(offset, ground.scale_alpha(alpha))
+            linear.add_stop(offset, ground.scale_alpha(alpha * reveal))
         });
 
     surface(Background::from(linear))
+}
+
+const RISE: f32 = 14.0;
+
+fn rising<'a>(element: Element<'a, Message>, reveal: f32, offset: f32) -> Element<'a, Message> {
+    if offset.abs() < 0.01 && (reveal - 1.0).abs() < 1.0e-3 {
+        return element;
+    }
+    iced::widget::Float::new(element)
+        .scale(reveal_scale(reveal))
+        .translate(move |_bounds, _viewport| iced::Vector::new(0.0, offset))
+        .style(|_theme| iced::widget::float::Style::default())
+        .into()
 }
 
 const TOP_SCRIM: [(f32, f32); 3] = [(0.0, 0.75), (0.55, 0.28), (1.0, 0.0)];

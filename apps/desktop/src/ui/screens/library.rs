@@ -15,6 +15,7 @@ use crate::app::{KindFilter, Message, SortChoice, WatchFilter};
 use crate::design;
 use crate::ui::components::poster::{CARD_GAP, CARD_WIDTH, card_columns, truncate};
 use crate::ui::icons::{self, Icon};
+use crate::ui::motion::{self, MotionState};
 use crate::ui::route::{FocusPos, Nav};
 use crate::ui::theme::{self, Breakpoint, Gap, Radius};
 
@@ -209,6 +210,8 @@ pub struct Library<'a> {
     pub genre: Option<&'a str>,
 
     pub art: &'a HashMap<String, image::Handle>,
+
+    pub motion: &'a MotionState,
 
     pub width: f32,
 }
@@ -459,6 +462,7 @@ impl<'a> Library<'a> {
         let focus = self.focus_index();
 
         let mut grid = column![].spacing(theme::gap(Gap::Rail)).width(Length::Fill);
+        let base = page_start(self.nav.focus(), self.items.len());
 
         for (row_index, chunk) in visible_tiles(self.items, self.nav.focus())
             .chunks(columns)
@@ -473,6 +477,7 @@ impl<'a> Library<'a> {
                     self.art.get(&item.work_id),
                     focus == Some(index),
                     width,
+                    self.motion.lift(base + index),
                 ));
             }
 
@@ -587,14 +592,22 @@ pub fn focus_row(focus: FocusPos, width: f32) -> usize {
     focus.column / columns
 }
 
-pub fn scroll_task(focus: FocusPos, width: f32) -> Task<Message> {
+pub fn focus_offset(focus: FocusPos, width: f32) -> f32 {
     let step = tile_width(width) * ART_RATIO + ROW_CHROME + theme::gap(Gap::Rail);
+    focus_row(focus, width) as f32 * step
+}
 
+pub fn scroll_offset_task(offset: f32) -> Task<Message> {
+    let offset = if offset.is_finite() {
+        offset.max(0.0)
+    } else {
+        0.0
+    };
     operation::scroll_to::<Message>(
         grid_id(),
         operation::AbsoluteOffset {
             x: None,
-            y: Some(focus_row(focus, width) as f32 * step),
+            y: Some(offset),
         },
     )
 }
@@ -679,6 +692,7 @@ fn tile<'a>(
     art: Option<&'a image::Handle>,
     focused: bool,
     width: f32,
+    lift: f32,
 ) -> Element<'a, Message> {
     let tokens = design::tokens();
     let art_height = (width * ART_RATIO).round();
@@ -696,7 +710,7 @@ fn tile<'a>(
         .width(Length::Fixed(width))
         .height(Length::Fixed(art_height))
         .clip(true)
-        .style(move |_theme| art_frame(focused));
+        .style(move |_theme| art_frame(focused, lift));
 
     let mut layers = stack![framed];
 
@@ -720,7 +734,7 @@ fn tile<'a>(
         .spacing(theme::gap(Gap::Tight))
         .width(Length::Fixed(width));
 
-    mouse_area(
+    let card: Element<'a, Message> = mouse_area(
         button(card)
             .on_press(Message::OpenDetail(item.id.clone()))
             .padding(0)
@@ -728,7 +742,16 @@ fn tile<'a>(
     )
     .on_enter(Message::HoverCard(item.id.clone()))
     .interaction(mouse::Interaction::Pointer)
-    .into()
+    .into();
+
+    if lift <= 0.002 {
+        return card;
+    }
+
+    iced::widget::Float::new(card)
+        .scale(motion::lift_scale(lift))
+        .style(|_theme| iced::widget::float::Style::default())
+        .into()
 }
 
 fn caption_of(item: &LibraryItem) -> String {
@@ -796,12 +819,13 @@ fn progress_bar(width: f32, progress: f32) -> Element<'static, Message> {
     .into()
 }
 
-fn art_frame(focused: bool) -> container::Style {
+fn art_frame(focused: bool, lift: f32) -> container::Style {
+    let ring = motion::mix(theme::hair(), theme::ink(), lift.clamp(0.0, 1.0));
     container::Style {
         background: Some(Background::Color(theme::surface(2))),
         border: Border {
-            color: if focused { theme::ink() } else { theme::hair() },
-            width: if focused { 2.0 } else { 1.0 },
+            color: if focused { ring } else { theme::hair() },
+            width: 1.0 + lift.clamp(0.0, 1.0),
             radius: theme::radius(Radius::Small).into(),
         },
         text_color: Some(theme::ink()),
@@ -965,6 +989,7 @@ mod tests {
     };
     use crate::app::{KindFilter, Screen, WatchFilter};
     use crate::ui::components::poster::{CARD_GAP, card_columns};
+    use crate::ui::motion::MotionState;
     use crate::ui::route::{FocusPos, Nav};
     use crate::ui::theme;
     use crate::ui::theme::Breakpoint;
@@ -1090,6 +1115,7 @@ mod tests {
             genres: &genres,
             genre: None,
             art: &art,
+            motion: &MotionState::default(),
             width: 1440.0,
         };
 
@@ -1152,6 +1178,7 @@ mod tests {
             genres: &genres,
             genre: Some("Drama"),
             art: &art,
+            motion: &MotionState::default(),
             width: 1440.0,
         };
 

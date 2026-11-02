@@ -1,7 +1,8 @@
 use crate::app::Message;
 use crate::design;
+use crate::ui::motion::{self, lift_scale};
 use crate::ui::theme::{self, Breakpoint, Gap, Radius};
-use iced::widget::{Space, button, column, container, image, row, stack, text};
+use iced::widget::{Float, Space, button, column, container, image, row, stack, text};
 use iced::{Alignment, Background, Border, ContentFit, Element, Length, Shadow, Theme};
 
 pub const CARD_WIDTH: f32 = 240.0;
@@ -46,6 +47,7 @@ pub struct Poster<'a> {
     waiting: bool,
     progress: Option<f32>,
     focused: bool,
+    lift: f32,
     on_press: Option<Message>,
     width: f32,
 }
@@ -60,6 +62,7 @@ impl<'a> Poster<'a> {
             waiting: true,
             progress: None,
             focused: false,
+            lift: 0.0,
             on_press: None,
             width: CARD_WIDTH,
         }
@@ -85,6 +88,13 @@ impl<'a> Poster<'a> {
         self
     }
 
+    pub fn lift(mut self, lift: f32) -> Self {
+        if lift.is_finite() {
+            self.lift = lift.clamp(0.0, 1.0);
+        }
+        self
+    }
+
     pub fn on_press(mut self, message: Message) -> Self {
         self.on_press = Some(message);
         self
@@ -101,6 +111,7 @@ impl<'a> Poster<'a> {
         let tokens = design::tokens();
         let art_height = (self.width * ART_RATIO).round();
         let focused = self.focused;
+        let lift = self.lift;
 
         let face: Element<'a, Message> = match self.art {
             Some(handle) => image(handle)
@@ -116,7 +127,7 @@ impl<'a> Poster<'a> {
             .width(Length::Fixed(self.width))
             .height(Length::Fixed(art_height))
             .clip(true)
-            .style(move |_theme| art_frame(focused))
+            .style(move |_theme| art_frame(focused, lift))
             .into();
 
         let mut layers = stack![framed];
@@ -147,14 +158,23 @@ impl<'a> Poster<'a> {
             .spacing(theme::gap(Gap::Tight))
             .width(Length::Fixed(self.width));
 
-        match self.on_press {
+        let card: Element<'a, Message> = match self.on_press {
             Some(message) => button(card)
                 .on_press(message)
                 .padding(0)
                 .style(card_button)
                 .into(),
             None => card.into(),
+        };
+
+        if lift <= 0.002 {
+            return card;
         }
+
+        Float::new(card)
+            .scale(lift_scale(lift))
+            .style(|_theme| iced::widget::float::Style::default())
+            .into()
     }
 }
 
@@ -205,12 +225,13 @@ fn progress_bar(width: f32, progress: f32) -> Element<'static, Message> {
     .into()
 }
 
-fn art_frame(focused: bool) -> container::Style {
+fn art_frame(focused: bool, lift: f32) -> container::Style {
+    let ring = motion::mix(theme::hair(), theme::ink(), lift.clamp(0.0, 1.0));
     container::Style {
         background: Some(Background::Color(theme::surface(2))),
         border: Border {
-            color: if focused { theme::ink() } else { theme::hair() },
-            width: if focused { 2.0 } else { 1.0 },
+            color: if focused { ring } else { theme::hair() },
+            width: 1.0 + lift.clamp(0.0, 1.0),
             radius: theme::radius(Radius::Small).into(),
         },
         text_color: Some(theme::ink()),
@@ -219,11 +240,15 @@ fn art_frame(focused: bool) -> container::Style {
     }
 }
 
-fn card_button(_theme: &Theme, _status: button::Status) -> button::Style {
+fn card_button(_theme: &Theme, status: button::Status) -> button::Style {
+    let pressed = matches!(status, button::Status::Pressed);
     button::Style {
-        background: None,
+        background: pressed.then(|| Background::Color(motion::with_alpha(theme::ink(), 0.07))),
         text_color: theme::ink(),
-        border: Border::default(),
+        border: Border {
+            radius: theme::radius(Radius::Surface).into(),
+            ..Border::default()
+        },
         shadow: Shadow::default(),
         snap: false,
     }
