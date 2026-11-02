@@ -79,7 +79,7 @@ converting it twice.
   least verifiable gain. It also needs a second GPU device and its own swapchain
   timing, and none of it can be verified headlessly.
 - **A separate `NSWindow` for the picture.** Rejected: it breaks fullscreen,
-  mini-player, focus and the in-app layout, and duplicates window management.
+  focus and the in-app layout, and duplicates window management.
 - **Stay on SDR and tone map honestly.** Rejected as the end state: it discards
   every highlight above SDR white on a panel that reports 2.0× of them, and it
   left Q03 permanently unmet. It remains the default until the switch is flipped,

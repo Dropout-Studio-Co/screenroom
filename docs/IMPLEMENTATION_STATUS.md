@@ -1394,37 +1394,22 @@ done.
   has not been looked at in a window. Embedded BitTorrent remains the separate
   decision the PRD says it is, and is not implemented.
 
-## F18 — the mini player (2026-11-01)
+## F18 — Picture-in-Picture: withdrawn (2026-11-02)
 
-**Completed on macOS, verified headlessly. It is not system-wide PiP and says so.**
+**Not offered, on purpose. This supersedes the mini player recorded on 2026-11-01.**
 
-- Genuine macOS Picture in Picture needs a native `AVPictureInPictureController`
-  over an `AVPlayerLayer`, which iced + libmpv do not have: the decoder presents
-  through libmpv's render API into our own wgpu surface. Rather than pretend,
-  the PRD's fallback is implemented — *"distinctly labeled mini-player where
-  feasible"* — and the panel states in its own text that it lives inside this
-  window and is not system-wide Picture in Picture.
-- `Message::ReduceToMini` keeps `self.player` and `self.active` untouched, so
-  the same decoder, the same `load_id`, the same audio and subtitle choices and
-  the same process are used; the screen returns to the one playback started
-  from. Nothing is re-opened, so there is no second decoder and no gap.
-- The docked panel shows a 320×180 picture through the same `VideoSurface`
-  shader as the full player (so aspect ratio is fitted identically), the title,
-  position/duration, a scrub bar, play/pause, ±10 s, *Full player* and *Close*.
-  A failure replaces the picture with the reason, and a silent decoder shows
-  *Preparing streams…* rather than a black box.
-- `Message::ExpandPlayer` and Alt+V return to the full player; Escape or
-  *Close* stops playback through the normal `stop_playback` path, which stores
-  the position and closes the tracker before dropping the frame. `open_player`,
-  `leave_player` and `back()` all clear the flag, and the panel is refused while
-  fullscreen, when nothing is playing, or from any screen but the player.
-- Ticks stay at the player's 60 Hz cadence while the mini player is live, so the
-  picture and the checkpoints keep moving while you browse.
-- **Tests added:** `step_20` — real clip, play, shrink, browse-tick until the
-  position advances, a frame still presented, expand with the same `load_id`,
-  shrink again, Escape closes, no frame left, and the stored position kept.
-- **Not proven:** the panel has not been looked at in a window; system-wide PiP
-  over other applications remains unimplemented and unclaimed.
+- The owner decided on 2026-11-02 that Picture-in-Picture is not wanted in any
+  form. Both the OS feature and the in-app mini player that stood in for it were
+  removed: `mini`, `mini_view`, `reduce_to_mini`, `expand_from_mini`,
+  `close_mini`, `Message::ReduceToMini`, `Message::ExpandPlayer`,
+  `Message::CloseMini`, `Action::MiniPlayer`, the *Mini player* button and the
+  Alt+V shortcut no longer exist, and its acceptance test (`step_20`) was deleted
+  rather than replaced.
+- No capability row, PRD requirement, test-plan row or setting claims the
+  feature. ADR-016 is marked **WITHDRAWN** and nothing else depends on it.
+- Everything the player actually needs is untouched and still proven: playing,
+  pausing, seeking, the next episode, fullscreen, casting, chrome auto-hide and
+  back navigation.
 
 ## F15 — imported subtitles kept and reused offline (2026-11-01)
 
@@ -1708,9 +1693,9 @@ one that had it before.
 Both failures that had been written off as load sensitivity were real, and both
 were in the application rather than in the test harness.
 
-**`step_20_…_mini_player…` — a short viewing stored 0 ms.** `PlaybackTracker`
+**The mini-player step that has since been removed — a short viewing stored 0 ms.** `PlaybackTracker`
 throttles checkpoints to one write per second, and the two stopping paths (leaving
-the player, closing the mini player / quitting) went through the same throttle. A
+the player, quitting) went through the same throttle. A
 viewing shorter than a second therefore kept only its first checkpoint, which lands
 at 0 ms, and `Continue Watching` resumed from the beginning. `record` now takes a
 `force` flag that the stopping paths set, so the place actually reached is written
@@ -1728,9 +1713,10 @@ deliberate "no audio" choice is remembered per kind so it is not mistaken for an
 unresolved one.
 
 Evidence: the failure reproduced 6 of 6 runs of the player suite at
-`--test-threads=22` before the change and 0 of 6 after; `step_20` failed on every
+`--test-threads=22` before the change and 0 of 6 after; that step failed on every
 `cargo test --workspace` before and passed on three consecutive full runs after
-(358 tests, 0 failures each). `cargo fmt --all --check`, `cargo clippy --workspace
+(358 tests, 0 failures each; the test itself was deleted on 2026-11-02 with the
+feature). `cargo fmt --all --check`, `cargo clippy --workspace
 --all-targets -D warnings` and `python3 scripts/no_comments.py check` are clean.
 
 **The GPU path is proven in isolation.** `examples/gl-path-probe/probe.m` renders
@@ -1872,7 +1858,8 @@ pass starts without a provider.
 HDR now reaches an extended-range swapchain behind `SCREENROOM_HDR=extended`
 (ADR-019, [`HWDEC_EVIDENCE.md`](../crates/screenroom-player/HWDEC_EVIDENCE.md)),
 but nobody has looked at it on the panel yet and the switch is still off by
-default. There is no OS-wide Picture-in-Picture. No live
+default. Picture-in-Picture is not offered at all — neither OS-wide nor as an
+in-app mini player (withdrawn 2026-11-02). No live
 provider call has been made, because no key is configured and the std-only transport
 cannot carry https. No media has been played on a real cast receiver. No VoiceOver
 pass is possible on iced 0.14, which ships no accessibility tree at all — recorded

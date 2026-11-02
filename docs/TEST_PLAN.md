@@ -195,7 +195,7 @@ All test media must be **generated or rights-cleared**, tiny except bounded stre
 | F08–F10 | distinct profile progress, stale session event/seek race, periodic checkpoint/crash/reboot, Continue Watching order and marked watched behavior, end/gaps/cross-season rules. |
 | F11–F12 | all 10k fixtures reachable via search/filter/sort/virtualized scroll, scroll restoration, watchlist survives relink/rename/match correction. |
 | F13–F15 | audio/embedded/adjacent subtitle and timing variants, malformed subtitle, quota/provider outage, downloaded subtitle license and reuse, edition-specific manual and provider skip markers. |
-| F16–F19 | cold-start/no-genre recommendations, missing-file exclusion, preview one-decoder/reduced-motion, real PiP controls, receiver accessibility + opt-in LAN session stop. |
+| F16–F19 | cold-start/no-genre recommendations, missing-file exclusion, preview one-decoder/reduced-motion, receiver accessibility + opt-in LAN session stop. F18 PiP is withdrawn (2026-11-02) and has no acceptance step. |
 | F20–F22 | versioned import/export, corrupt/malicious backup, migration rollback, source/codec/permission/provider errors and safe credential exclusion. |
 | F23–F24 | source accuracy/provenance/protocol and `NOT_CHECKED` state; exact endpoint + ISP reach only if legitimately tested, no illegal/unauthorized automation. |
 | F25 | FFprobe choice of remux/audio-transcode/full conversion; separate output; space estimate, cancel/interruption cleanup, validation and edition-time remap. |

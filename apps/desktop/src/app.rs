@@ -5,10 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
-use iced::widget::shader;
 use iced::widget::{
-    Id, Space, button, column, container, image, operation, pick_list, row, slider, text,
-    text_input,
+    Id, Space, button, column, container, image, operation, pick_list, row, text, text_input,
 };
 use iced::{Alignment, Element, Length, Subscription, Task, keyboard};
 use screenroom_core::{
@@ -31,7 +29,7 @@ use crate::preview::{PREVIEW_DELAY, Preview, may_preview};
 use crate::probe::{DurationPass, spawn_duration_pass};
 use crate::ui;
 use crate::ui::route::{FocusPos, Nav};
-use crate::video_surface::{Frame, VideoSurface};
+use crate::video_surface::Frame;
 
 const PLAYER_TICK: Duration = Duration::from_millis(16);
 
@@ -52,10 +50,6 @@ const DEFAULT_COLUMNS: usize = 4;
 const RAIL: i64 = 8;
 
 const SEEK_STEP: f64 = 10.0;
-
-const MINI_WIDTH: f32 = 320.0;
-
-const MINI_HEIGHT: f32 = 180.0;
 
 const DETAIL_POSTER: (f32, f32) = (210.0, 315.0);
 
@@ -546,8 +540,6 @@ pub struct App {
 
     fullscreen: bool,
 
-    mini: bool,
-
     window_width: f32,
 
     last_input: std::time::Instant,
@@ -839,12 +831,6 @@ pub enum Message {
     ClearStatus,
 
     BackFromPlayer,
-
-    ReduceToMini,
-
-    ExpandPlayer,
-
-    CloseMini,
 
     ModeChanged(iced::window::Mode),
 
@@ -1142,7 +1128,6 @@ impl App {
             scrub: None,
             volume_drag: None,
             fullscreen: false,
-            mini: false,
             markers: Vec::new(),
             subtitles: Vec::new(),
             receivers: Vec::new(),
@@ -1945,7 +1930,6 @@ impl App {
         self.reload_subtitles(&item.id);
         self.mark_pending = None;
         self.auto_skipped = None;
-        self.mini = false;
         self.open_screen(Screen::Player);
     }
 
@@ -2427,48 +2411,7 @@ impl App {
         }
     }
 
-    fn reduce_to_mini(&mut self) {
-        if self.player.is_none() || self.screen != Screen::Player || self.fullscreen || self.mini {
-            return;
-        }
-        let origin = self
-            .active
-            .as_ref()
-            .map(|active| active.origin)
-            .unwrap_or(Screen::Browse);
-        self.mini = true;
-        self.navigate(origin);
-        self.reload();
-        self.refresh_detail();
-        self.status = Some(
-            "In the mini player. It lives inside this window; it is not system-wide Picture in \
-             Picture. Alt+V reopens the full player, Escape closes it."
-                .to_string(),
-        );
-    }
-
-    fn expand_from_mini(&mut self) {
-        if !self.mini {
-            return;
-        }
-        self.mini = false;
-        if self.active.is_some() {
-            self.open_screen(Screen::Player);
-        }
-    }
-
-    fn close_mini(&mut self) {
-        if !self.mini {
-            return;
-        }
-        self.mini = false;
-        self.stop_playback();
-        self.reload();
-        self.refresh_detail();
-    }
-
     fn leave_player(&mut self) {
-        self.mini = false;
         let origin = self
             .active
             .as_ref()
@@ -4583,9 +4526,6 @@ impl App {
             }
 
             Message::BackFromPlayer => self.leave_player(),
-            Message::ReduceToMini => self.reduce_to_mini(),
-            Message::ExpandPlayer => self.expand_from_mini(),
-            Message::CloseMini => self.close_mini(),
             Message::PlayNextNow => self.play_up_next(),
             Message::ModeChanged(mode) => {
                 self.fullscreen = mode == iced::window::Mode::Fullscreen;
@@ -4734,10 +4674,6 @@ impl App {
     }
 
     fn back(&mut self) {
-        if self.mini {
-            self.close_mini();
-            return;
-        }
         match self.screen {
             Screen::Player => self.leave_player(),
             Screen::Detail => {
@@ -4847,7 +4783,6 @@ impl App {
                 self.update(Message::VolumeCommit)
             }
             Action::ToggleFullscreen => self.update(Message::ToggleFullscreen),
-            Action::MiniPlayer => self.update(Message::ReduceToMini),
             Action::BackFromPlayer => self.update(Message::BackFromPlayer),
             Action::PlayNext => self.update(Message::PlayNextNow),
             Action::CancelNext => self.update(Message::CancelNext),
@@ -4903,15 +4838,6 @@ impl App {
         let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
             return Task::none();
         };
-
-        if self.mini && modifiers.alt() {
-            if let Key::Character(ref character) = key
-                && character.as_str() == "v"
-            {
-                self.expand_from_mini();
-            }
-            return Task::none();
-        }
 
         if modifiers.command() || modifiers.control() {
             match key {
@@ -5079,7 +5005,7 @@ impl App {
             iced::window::close_requests().map(|_| Message::Close),
             iced::window::resize_events().map(|(_id, size)| Message::Resized(size.width)),
         ];
-        let interval = if self.screen == Screen::Player || self.mini || self.preview.is_some() {
+        let interval = if self.screen == Screen::Player || self.preview.is_some() {
             PLAYER_TICK
         } else {
             STATUS_TICK
@@ -5091,7 +5017,7 @@ impl App {
     fn frame_signals(&self) -> Vec<screenroom_player::FrameTicks> {
         let mut signals = Vec::new();
         if let Some(player) = &self.player
-            && (self.screen == Screen::Player || self.mini)
+            && self.screen == Screen::Player
         {
             signals.push(player.frame_ticks());
         }
@@ -5241,13 +5167,6 @@ impl App {
                 .width(Length::Fill)
                 .into();
         }
-        if self.mini && self.screen != Screen::Player {
-            content = column![content, self.gutter(self.mini_view())]
-                .spacing(design::tokens().spacing.content_pad)
-                .width(Length::Fill)
-                .into();
-        }
-
         crate::ui::shell::frame(
             content,
             Some(self.screen),
@@ -5529,11 +5448,6 @@ impl App {
                 )
                 .size(tokens.type_scale.micro)
                 .color(tokens.palette.ink_muted),
-                Space::new().width(Length::Fill),
-                button(text("Mini player").size(tokens.type_scale.label))
-                    .on_press(Message::ReduceToMini)
-                    .style(design::quiet_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
             ]
             .spacing(tokens.spacing.field_x)
             .align_y(Alignment::Center),
@@ -6357,109 +6271,6 @@ impl App {
                 Row::Value { .. } | Row::Slider { .. } => None,
             })
             .collect()
-    }
-
-    fn mini_view(&self) -> Element<'_, Message> {
-        let tokens = design::tokens();
-        let title = self
-            .active
-            .as_ref()
-            .map(|active| active.title.clone())
-            .unwrap_or_else(|| "Nothing playing".to_string());
-        let duration = self.snapshot.duration.max(0.0);
-        let position = self.scrub.unwrap_or(self.snapshot.position);
-
-        let picture: Element<'_, Message> = match (&self.snapshot.failure, &self.frame) {
-            (Some(failure), _) => container(
-                text(format!("Playback failed — {}", failure.message))
-                    .size(tokens.type_scale.micro)
-                    .color(tokens.palette.destructive),
-            )
-            .style(|_theme| design::container_style(Level::Panel, false))
-            .padding(tokens.spacing.field_y)
-            .width(Length::Fixed(MINI_WIDTH))
-            .height(Length::Fixed(MINI_HEIGHT))
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .into(),
-            (None, Some(frame)) => container(
-                shader::Shader::new(VideoSurface::new(Some(frame.clone())))
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            )
-            .width(Length::Fixed(MINI_WIDTH))
-            .height(Length::Fixed(MINI_HEIGHT))
-            .into(),
-            (None, None) => container(
-                text("Preparing streams…")
-                    .size(tokens.type_scale.micro)
-                    .color(tokens.palette.ink_muted),
-            )
-            .style(|_theme| design::container_style(Level::Panel, false))
-            .width(Length::Fixed(MINI_WIDTH))
-            .height(Length::Fixed(MINI_HEIGHT))
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .into(),
-        };
-
-        let transport = row![
-            button(text(play_action(self.snapshot.state).label()).size(tokens.type_scale.label))
-                .on_press(Message::TogglePlay)
-                .style(design::action_style(true))
-                .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            button(text("−10 s").size(tokens.type_scale.caption))
-                .on_press(Message::SeekStep(-SEEK_STEP))
-                .style(design::quiet_style(false))
-                .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            button(text("+10 s").size(tokens.type_scale.caption))
-                .on_press(Message::SeekStep(SEEK_STEP))
-                .style(design::quiet_style(false))
-                .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-        ]
-        .spacing(tokens.spacing.field_x)
-        .align_y(Alignment::Center);
-
-        let controls = column![
-            text(title).size(tokens.type_scale.body),
-            text(format!("{} / {}", clock(position), clock(duration)))
-                .size(tokens.type_scale.caption)
-                .color(tokens.palette.ink_muted),
-            slider(0.0..=duration.max(1.0), position, Message::Scrub)
-                .on_release(Message::SeekCommit)
-                .step(0.1)
-                .width(Length::Fill),
-            transport,
-            row![
-                button(text("Full player").size(tokens.type_scale.label))
-                    .on_press(Message::ExpandPlayer)
-                    .style(design::action_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                button(text("Close").size(tokens.type_scale.label))
-                    .on_press(Message::CloseMini)
-                    .style(design::danger_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            ]
-            .spacing(tokens.spacing.field_x),
-            text(
-                "Mini player: it lives inside this window and is not system-wide Picture in \
-                 Picture. Alt+V opens the full player, Escape closes it.",
-            )
-            .size(tokens.type_scale.micro)
-            .color(tokens.palette.ink_muted),
-        ]
-        .spacing(tokens.spacing.field_y)
-        .width(Length::Fill);
-
-        container(
-            row![picture, controls]
-                .spacing(tokens.spacing.content_pad)
-                .align_y(Alignment::Center),
-        )
-        .style(|_theme| design::container_style(Level::Panel, false))
-        .padding(tokens.spacing.content_pad)
-        .width(Length::Fill)
-        .into()
     }
 }
 

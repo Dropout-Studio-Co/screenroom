@@ -66,7 +66,6 @@ pub enum Action {
     VolumeDown,
     VolumeUp,
     ToggleFullscreen,
-    MiniPlayer,
     BackFromPlayer,
     PlayNext,
     CancelNext,
@@ -489,7 +488,6 @@ fn player_controls(facts: &ScreenFacts<'_>, controls: &mut Vec<Control>) {
         Action::ToggleFullscreen,
     ));
     if !player.fullscreen {
-        controls.push(button("player:mini", "Mini player", Action::MiniPlayer));
         controls.push(button("player:back", "Back", Action::BackFromPlayer));
     }
     if let Some(title) = &player.up_next {
