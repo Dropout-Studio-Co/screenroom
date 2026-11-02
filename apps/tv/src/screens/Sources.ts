@@ -1,6 +1,7 @@
 import Blits from '@lightningjs/blits'
 
 import { clampIndex } from '../core/focus.ts'
+import { focusMotion } from '../core/motion.ts'
 import { moveNav, RAIL_ENTRIES, railIndexFor, type NavZone } from '../core/nav.ts'
 import { describeScan } from '../core/scan.ts'
 import { railRows, RAIL_WIDTH, type RailRow } from '../design/rail.ts'
@@ -31,6 +32,7 @@ interface Row {
   readonly label: string
   readonly value: string
   readonly y: number
+  readonly x: number
   readonly fill: string
   readonly labelColor: string
   readonly valueColor: string
@@ -82,7 +84,7 @@ export default Blits.Component('Sources', {
         :for="row in $rows"
         key="$row.key"
         :show="$row.visible"
-        :x="$contentLeft"
+        :x.transition="{value: $row.x, duration: $focus.duration, easing: $focus.ease}"
         :y="$row.y"
         :w="$listWidth"
         :h="$rowHeight"
@@ -148,6 +150,7 @@ export default Blits.Component('Sources', {
       pollTimer: null as ReturnType<typeof setTimeout> | null,
       subtitle: '',
       footer: '',
+      focus: focusMotion(),
     }
   },
   computed: {
@@ -214,6 +217,10 @@ export default Blits.Component('Sources', {
       this.valueWidth = this.listWidth - layout.valueX - layout.fieldX
       this.footY = layout.footY
       this.visibleRows = layout.visibleRows
+    },
+
+    rowX(focused: boolean): number {
+      return this.contentLeft + (focused ? 8 : 0)
     },
 
     entries(): Entry[] {
@@ -311,6 +318,7 @@ export default Blits.Component('Sources', {
           label: entry.label,
           value: entry.value,
           y: layout.top + (index - this.scroll) * layout.rowGap,
+          x: this.rowX(focused),
           fill: focused ? hex(TOKENS.palette.focusSurface) : hex(TOKENS.palette.surface1),
           labelColor: focused
             ? hex(TOKENS.palette.focusForeground)

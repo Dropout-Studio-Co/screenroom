@@ -3,6 +3,7 @@ import Blits from '@lightningjs/blits'
 import { formatPosition, progressFraction } from '../core/browse.ts'
 import type { LibraryItem } from '../core/contract.ts'
 import { clampIndex } from '../core/focus.ts'
+import { focusMotion } from '../core/motion.ts'
 import { hex, TOKENS } from '../design/tokens.ts'
 import { routeString } from '../app/route-props.ts'
 import { library } from '../app/runtime.ts'
@@ -16,6 +17,7 @@ interface Action {
   readonly detailColor: string
   readonly focused: boolean
   readonly y: number
+  readonly x: number
 }
 
 export default Blits.Component('Detail', {
@@ -54,7 +56,7 @@ export default Blits.Component('Detail', {
       <Element
         :for="action in $actions"
         key="$action.key"
-        :x="$pad"
+        :x.transition="{value: $action.x, duration: $focus.duration, easing: $focus.ease}"
         :y="$action.y"
         :w="$listWidth"
         :h="$rowHeight"
@@ -112,6 +114,7 @@ export default Blits.Component('Detail', {
       footer: 'Enter selects · Back returns',
       actions: [] as Action[],
       focusIndex: 0,
+      focus: focusMotion(),
     }
   },
   computed: {
@@ -232,6 +235,7 @@ export default Blits.Component('Detail', {
           detailColor: focused ? hex(TOKENS.palette.focusForeground) : hex(TOKENS.palette.inkMuted),
           focused,
           y: layout.listTop + index * layout.rowGap,
+          x: this.actionX(focused),
         }
       })
     },
@@ -270,6 +274,10 @@ export default Blits.Component('Detail', {
       this.markFocus()
     },
 
+    actionX(focused: boolean): number {
+      return this.pad + (focused ? 8 : 0)
+    },
+
     markFocus() {
       const layout = this.layout
       this.actions = this.actions.map((action, index) => {
@@ -278,6 +286,7 @@ export default Blits.Component('Detail', {
           ...action,
           focused,
           y: layout.listTop + index * layout.rowGap,
+          x: this.actionX(focused),
           fill: focused ? hex(TOKENS.palette.focusSurface) : hex(TOKENS.palette.surface1),
           labelColor: focused ? hex(TOKENS.palette.focusForeground) : hex(TOKENS.palette.foreground),
           detailColor: focused ? hex(TOKENS.palette.focusForeground) : hex(TOKENS.palette.inkMuted),

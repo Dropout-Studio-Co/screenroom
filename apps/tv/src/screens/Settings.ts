@@ -1,6 +1,7 @@
 import Blits from '@lightningjs/blits'
 
 import { clampIndex } from '../core/focus.ts'
+import { focusMotion } from '../core/motion.ts'
 import { moveNav, RAIL_ENTRIES, railIndexFor, type NavZone } from '../core/nav.ts'
 import { describeScan, type ScanReport } from '../core/scan.ts'
 import {
@@ -39,6 +40,7 @@ interface Row {
   readonly label: string
   readonly value: string
   readonly y: number
+  readonly x: number
   readonly fill: string
   readonly labelColor: string
   readonly valueColor: string
@@ -102,7 +104,7 @@ export default Blits.Component('Settings', {
         :for="row in $rows"
         key="$row.key"
         :show="$row.visible"
-        :x="$contentLeft"
+        :x.transition="{value: $row.x, duration: $focus.duration, easing: $focus.ease}"
         :y="$row.y"
         :w="$listWidth"
         :h="$rowHeight"
@@ -162,6 +164,7 @@ export default Blits.Component('Settings', {
       scroll: 0,
 
       visibleRows: 12,
+      focus: focusMotion(),
     }
   },
   computed: {
@@ -381,6 +384,7 @@ export default Blits.Component('Settings', {
           value: entry.value,
 
           y: layout.top + (index - this.scroll) * layout.rowGap,
+          x: this.rowX(focused),
           fill: focused ? hex(TOKENS.palette.focusSurface) : hex(TOKENS.palette.surface1),
           labelColor: focused ? hex(TOKENS.palette.focusForeground) : hex(TOKENS.palette.foreground),
           valueColor: focused ? hex(TOKENS.palette.focusForeground) : hex(TOKENS.palette.inkMuted),
@@ -403,6 +407,10 @@ export default Blits.Component('Settings', {
       )
     },
 
+    rowX(focused: boolean): number {
+      return this.contentLeft + (focused ? 8 : 0)
+    },
+
     markFocus() {
       const layout = this.layout
       this.rows = this.rows.map((row, index) => {
@@ -411,6 +419,7 @@ export default Blits.Component('Settings', {
           ...row,
           focused,
           y: layout.top + (index - this.scroll) * layout.rowGap,
+          x: this.rowX(focused),
           visible: index >= this.scroll && index < this.scroll + this.visibleRows,
           fill: focused ? hex(TOKENS.palette.focusSurface) : hex(TOKENS.palette.surface1),
           labelColor: focused ? hex(TOKENS.palette.focusForeground) : hex(TOKENS.palette.foreground),

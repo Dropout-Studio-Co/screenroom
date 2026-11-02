@@ -1,4 +1,5 @@
 import { hex, TOKENS, type Tokens } from './tokens.ts'
+import { focusMotion } from '../core/motion.ts'
 import { RAIL_ENTRIES } from '../core/nav.ts'
 
 export const RAIL_WIDTH = 320
@@ -22,6 +23,8 @@ export interface RailRow {
   readonly active: boolean
 
   readonly focused: boolean
+
+  readonly scale: number
 }
 
 export interface RailLayout {
@@ -70,6 +73,7 @@ export function railRows(
   tokens: Tokens = TOKENS,
 ): RailRow[] {
   const layout = railLayout(tokens)
+  const lift = focusMotion().lift
   return RAIL_ENTRIES.map((entry, index) => {
     const isFocused = focused && index === focusedIndex
     const active = index === activeIndex
@@ -96,6 +100,7 @@ export function railRows(
       markerColor: hex(tokens.palette.signal),
       active,
       focused: isFocused,
+      scale: isFocused ? lift : 1,
     }
   })
 }

@@ -2,6 +2,7 @@ import Blits from '@lightningjs/blits'
 
 import { hex, TOKENS } from './design/tokens.ts'
 import { prepare } from './app/runtime.ts'
+import { pageTransition } from './app/page-transition.ts'
 import { exitApp } from './platform/tizen.ts'
 import Browse from './screens/Browse.ts'
 import Detail from './screens/Detail.ts'
@@ -30,14 +31,14 @@ export default Blits.Application({
   router: {
 
     routes: [
-      { path: '/', component: Home },
-      { path: '/movies', component: Browse, data: { kind: 'movies' } },
-      { path: '/series', component: Browse, data: { kind: 'series' } },
-      { path: '/search', component: Search },
-      { path: '/sources', component: Sources },
-      { path: '/detail', component: Detail },
-      { path: '/settings', component: Settings },
-      { path: '/player', component: Player },
+      { path: '/', component: Home, transition: pageTransition },
+      { path: '/movies', component: Browse, data: { kind: 'movies' }, transition: pageTransition },
+      { path: '/series', component: Browse, data: { kind: 'series' }, transition: pageTransition },
+      { path: '/search', component: Search, transition: pageTransition },
+      { path: '/sources', component: Sources, transition: pageTransition },
+      { path: '/detail', component: Detail, transition: pageTransition },
+      { path: '/settings', component: Settings, transition: pageTransition },
+      { path: '/player', component: Player, transition: pageTransition },
     ],
 
     backNavigation: true,

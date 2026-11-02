@@ -10,6 +10,12 @@ import {
   type NavPosition,
   type NavZone,
 } from '../core/nav.ts'
+import {
+  bandMove,
+  bandSettle,
+  bandWindow,
+} from '../core/band.ts'
+import { focusMotion, momentumTravel, MOTION, rubberBand } from '../core/motion.ts'
 import { APP_WIDTH, buildCards, gridFor } from '../design/cards.ts'
 import { railRows, RAIL_WIDTH, type RailRow } from '../design/rail.ts'
 import Rail from '../components/Rail.ts'
@@ -72,53 +78,60 @@ export default Blits.Component('Browse', {
         :maxwidth="$noteWidth"
       />
 
-      <Element
-        :for="card in $cards"
-        key="$card.id"
-        :x="$card.x"
-        :y="$card.y"
-        :w="$card.width"
-        :h="$card.height"
-        :color="$card.fill"
-        :scale="$card.scale"
-        :rounded="$radius"
-      >
+      <Element x="0" :y="$bandTop" w="1920" :h="$bandHeight" clipping="true">
         <Element
-          x="0"
-          y="0"
+          :x.transition="{value: $bandX, duration: $bandDuration, easing: $focus.ease, end: $settle.row}"
+          :y.transition="{value: $bandInnerY, duration: $bandDuration, easing: $focus.ease, end: $settle.band}"
+        >
+        <Element
+          :for="card in $cards"
+          key="$card.id"
+          :x="$card.x"
+          :y="$card.y"
           :w="$card.width"
-          :h="$artHeight"
-          :color="$surface2"
+          :h="$card.height"
+          :color="$card.fill"
+          :scale.transition="{value: $card.scale, duration: $focus.duration, easing: $focus.ease}"
           :rounded="$radius"
-        />
-        <Text
-          :x="$fieldX"
-          :y="$titleY"
-          :content="$card.title"
-          :size="$titleSize"
-          :color="$card.titleColor"
-          maxlines="1"
-          textoverflow="ellipsis"
-          :maxwidth="$cardTextWidth"
-        />
-        <Text
-          :x="$fieldX"
-          :y="$subtitleY"
-          :content="$card.subtitle"
-          :size="$captionSize"
-          :color="$card.subtitleColor"
-          maxlines="1"
-          textoverflow="ellipsis"
-          :maxwidth="$cardTextWidth"
-        />
-        <Element
-          x="0"
-          :y="$progressY"
-          :w="$card.progressWidth"
-          :h="$barHeight"
-          :color="$card.progressColor"
-          :show="$card.progressVisible"
-        />
+        >
+          <Element
+            x="0"
+            y="0"
+            :w="$card.width"
+            :h="$artHeight"
+            :color="$surface2"
+            :rounded="$radius"
+          />
+          <Text
+            :x="$fieldX"
+            :y="$titleY"
+            :content="$card.title"
+            :size="$titleSize"
+            :color="$card.titleColor"
+            maxlines="1"
+            textoverflow="ellipsis"
+            :maxwidth="$cardTextWidth"
+          />
+          <Text
+            :x="$fieldX"
+            :y="$subtitleY"
+            :content="$card.subtitle"
+            :size="$captionSize"
+            :color="$card.subtitleColor"
+            maxlines="1"
+            textoverflow="ellipsis"
+            :maxwidth="$cardTextWidth"
+          />
+          <Element
+            x="0"
+            :y="$progressY"
+            :w="$card.progressWidth"
+            :h="$barHeight"
+            :color="$card.progressColor"
+            :show="$card.progressVisible"
+          />
+        </Element>
+        </Element>
       </Element>
 
       <Element :show="$emptyTitle !== ''">
@@ -185,6 +198,20 @@ export default Blits.Component('Browse', {
       zone: 'content' as NavZone,
       railIndex: 0,
       contentIndex: 0,
+
+      focus: focusMotion(),
+      bandX: 0,
+      bandY: 0,
+      bandTop: 0,
+      bandHeight: 0,
+      bandDuration: Math.round(MOTION.spring.response * 1000),
+      padRow: 0,
+      scrollRows: 0,
+      pitch: 0,
+      bandPhase: 'idle' as 'idle' | 'nudge' | 'release',
+      rowNudging: false,
+      nudgeRestY: 0,
+      nudgeRestX: 0,
     }
   },
   computed: {
@@ -205,6 +232,14 @@ export default Blits.Component('Browse', {
         bottom: 1080 - Math.round(TOKENS.spacing.shellPad + TOKENS.type.body * 2.4),
         left: CONTENT_LEFT,
       })
+    },
+
+    settle() {
+      return { band: this.bandSettled, row: this.rowSettled }
+    },
+
+    bandInnerY() {
+      return this.bandY - this.bandTop
     },
   },
   hooks: {
@@ -256,6 +291,8 @@ export default Blits.Component('Browse', {
       this.emptyDetailY = Math.round(TOKENS.spacing.shellPad + TOKENS.type.title * 3.6)
       this.emptyWidth = APP_WIDTH - CONTENT_LEFT - Math.round(TOKENS.spacing.shellPad)
       this.footY = 1080 - Math.round(TOKENS.spacing.shellPad + TOKENS.type.body * 2.4)
+      this.bandTop = grid.originY - 12
+      this.bandHeight = this.footY - grid.originY + 24
     },
 
     visible(): ReturnType<typeof itemsFor> {
@@ -316,14 +353,31 @@ export default Blits.Component('Browse', {
       this.contentIndex = total === 0 ? -1 : Math.min(this.contentIndex, total - 1)
 
       const window = gridWindow(total, COLUMNS, ROWS, this.contentIndex)
-      this.listFirst = window.first
+      const pitch = this.grid.cardHeight + this.grid.gapY
+      this.pitch = pitch
+      const step = bandMove(
+        { scrollRows: this.scrollRows, padRow: this.padRow, offset: this.bandY },
+        window.scrollRows,
+        pitch,
+        ROWS,
+      )
+      const moved =
+        step.state.padRow !== this.padRow ||
+        step.state.offset !== this.bandY ||
+        step.state.scrollRows !== this.scrollRows
+      if (moved) {
+        this.applyBand(step.state.padRow, step.state.scrollRows, step.state.offset, step.animate)
+      }
+
+      const slice = bandWindow(total, COLUMNS, this.padRow, ROWS)
+      this.listFirst = slice.first
       this.cards = buildCards(
-        rows.slice(window.first, window.first + window.count),
+        rows.slice(slice.first, slice.first + slice.count),
 
         this.zone === 'content' ? this.contentIndex : -1,
         this.grid,
         TOKENS,
-        { first: window.first, columns: COLUMNS },
+        { first: slice.first, columns: COLUMNS },
       )
       this.railRows = railRows(railIndexFor(this.route), this.railIndex, this.zone === 'rail')
       this.subheading =
@@ -339,7 +393,115 @@ export default Blits.Component('Browse', {
       )
     },
 
+    springDuration(): number {
+      return this.focus.duration
+    },
+
+    applyBand(padRow: number, scrollRows: number, offset: number, animate: boolean): void {
+      this.bandDuration = animate ? this.springDuration() : 0
+      this.padRow = padRow
+      this.scrollRows = scrollRows
+      this.bandY = offset
+      this.bandDuration = this.springDuration()
+    },
+
+    paintBandCards(): void {
+      const rows = this.visible()
+      const slice = bandWindow(rows.length, COLUMNS, this.padRow, ROWS)
+      this.listFirst = slice.first
+      this.cards = buildCards(
+        rows.slice(slice.first, slice.first + slice.count),
+        this.zone === 'content' ? this.contentIndex : -1,
+        this.grid,
+        TOKENS,
+        { first: slice.first, columns: COLUMNS },
+      )
+    },
+
+    bandSettled(): void {
+      if (this.bandPhase === 'nudge' || this.bandPhase === 'release') {
+        this.bandPhase = 'idle'
+        this.bandDuration = this.springDuration()
+        this.bandY = this.nudgeRestY
+        return
+      }
+      const settled = bandSettle(
+        { scrollRows: this.scrollRows, padRow: this.padRow, offset: this.bandY },
+        this.pitch,
+      )
+      if (settled.padRow === this.padRow && settled.offset === this.bandY) {
+        return
+      }
+      this.bandDuration = 0
+      this.padRow = settled.padRow
+      this.bandY = settled.offset
+      this.bandDuration = this.springDuration()
+      this.paintBandCards()
+    },
+
+    rowSettled(): void {
+      if (!this.rowNudging) {
+        return
+      }
+      this.rowNudging = false
+      this.bandDuration = this.springDuration()
+      this.bandX = this.nudgeRestX
+    },
+
+    nudge(direction: 'up' | 'down'): void {
+      if (this.bandPhase !== 'idle') {
+        return
+      }
+      this.bandPhase = 'nudge'
+      this.nudgeRestY = this.bandY
+      this.bandDuration = MOTION.nudgeMs
+      const travel = rubberBand(MOTION.nudgePx, Math.max(1, ROWS * this.pitch))
+      this.bandY = this.nudgeRestY + (direction === 'down' ? -travel : travel)
+    },
+
+    nudgeRow(direction: 'left' | 'right'): void {
+      if (this.rowNudging) {
+        return
+      }
+      this.rowNudging = true
+      this.nudgeRestX = this.bandX
+      this.bandDuration = MOTION.nudgeMs
+      const travel = rubberBand(MOTION.nudgePx, Math.max(1, this.grid.cardWidth))
+      this.bandX = this.nudgeRestX + (direction === 'right' ? -travel : travel)
+    },
+
+    release(direction: number): void {
+      if (this.bandPhase !== 'idle') {
+        return
+      }
+      const limit = Math.max(1, this.pitch) * MOTION.momentumLimit
+      const travel = Math.abs(momentumTravel(direction * this.pitch * 9, limit))
+      if (travel < 1) {
+        return
+      }
+      this.bandPhase = 'release'
+      this.nudgeRestY = this.bandY
+      this.bandDuration = Math.round(MOTION.nudgeMs * 1.4)
+      this.bandY = this.nudgeRestY - direction * travel
+    },
+
+    resetNudge(): void {
+      if (this.bandPhase !== 'idle') {
+        this.bandDuration = 0
+        this.bandY = this.nudgeRestY
+        this.bandDuration = this.springDuration()
+      }
+      if (this.rowNudging) {
+        this.bandDuration = 0
+        this.bandX = this.nudgeRestX
+        this.bandDuration = this.springDuration()
+        this.rowNudging = false
+      }
+      this.bandPhase = 'idle'
+    },
+
     press(direction: 'left' | 'right' | 'up' | 'down'): void {
+      this.resetNudge()
       const current: NavPosition = {
         zone: this.zone,
         rail: this.railIndex,
@@ -351,6 +513,13 @@ export default Blits.Component('Browse', {
         next.rail === this.railIndex &&
         next.content === this.contentIndex
       ) {
+        if (this.zone === 'content') {
+          if (direction === 'up' || direction === 'down') {
+            this.nudge(direction)
+          } else {
+            this.nudgeRow(direction)
+          }
+        }
         return
       }
       this.zone = next.zone
@@ -368,8 +537,10 @@ export default Blits.Component('Browse', {
       if (next === this.contentIndex) {
         return
       }
+      this.resetNudge()
       this.contentIndex = next
       this.repaint()
+      this.release(direction)
     },
 
     enter(): void {

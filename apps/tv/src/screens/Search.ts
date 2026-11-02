@@ -7,6 +7,7 @@ import { subtitleFor } from '../design/cards.ts'
 import { keyCells, keyGeometry, resultRowHeight, SEARCH_COLUMNS, SEARCH_RESULT_ROWS, type KeyCell } from '../design/search.ts'
 import { railRows, RAIL_WIDTH, type RailRow } from '../design/rail.ts'
 import Rail from '../components/Rail.ts'
+import { focusMotion } from '../core/motion.ts'
 import { hex, TOKENS } from '../design/tokens.ts'
 import { items, rememberSearch, searchSession } from '../app/runtime.ts'
 
@@ -28,6 +29,7 @@ interface ResultRow {
   readonly titleColor: string
   readonly subtitleColor: string
   readonly focused: boolean
+  readonly scale: number
 }
 
 export default Blits.Component('Search', {
@@ -95,6 +97,7 @@ export default Blits.Component('Search', {
         :w="$result.width"
         :h="$result.height"
         :color="$result.fill"
+        :scale.transition="{value: $result.scale, duration: $focus.duration, easing: $focus.ease}"
         :rounded="$radius"
       >
         <Text
@@ -163,6 +166,7 @@ export default Blits.Component('Search', {
       railIndex: 0,
       keyIndex: 0,
       resultIndex: 0,
+      focus: focusMotion(),
     }
   },
   computed: {
@@ -257,6 +261,7 @@ export default Blits.Component('Search', {
               ? hex(TOKENS.palette.focusForeground)
               : hex(TOKENS.palette.inkMuted),
             focused,
+            scale: focused ? this.focus.lift : 1,
           }
         })
 

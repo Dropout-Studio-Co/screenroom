@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 
 import { RAIL_ENTRIES } from '../src/core/nav.ts'
 import { railLayout, railRows, RAIL_WIDTH } from '../src/design/rail.ts'
-import { hex, TOKENS } from '../src/design/tokens.ts'
+import { FOCUS_SCALE, hex, TOKENS } from '../src/design/tokens.ts'
 
 test('the rail draws every destination, in order, inside its own column', () => {
   const rows = railRows(0, 0, true)
@@ -39,6 +39,18 @@ test('the rail dims itself when the grid owns the cursor', () => {
   const rows = railRows(2, 0, false)
   assert.equal(rows.some((row) => row.focused), false)
   assert.equal(rows[2]?.active, true, 'the destination is still marked')
+})
+
+test('the focused row lifts and its neighbours do not', () => {
+  const rows = railRows(2, 2, true)
+  assert.equal(rows[2]?.scale, FOCUS_SCALE)
+  for (const [index, row] of rows.entries()) {
+    if (index !== 2) {
+      assert.equal(row.scale, 1, `${row.label} should not lift`)
+    }
+  }
+  const dimmed = railRows(2, 0, false)
+  assert.equal(dimmed.some((row) => row.scale !== 1), false, 'no lift while the grid owns the cursor')
 })
 
 test('the rail never gets wider than the room the grid leaves for it', () => {
