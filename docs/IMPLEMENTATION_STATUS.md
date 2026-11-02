@@ -2122,3 +2122,59 @@ What the measurements and the prior art settled, and what they rule out:
 **Not done:** no watcher runs in the desktop application, no scan happens on
 launch, wake or mount, and `notify` is not yet a dependency. The gates that were
 blocked before stay blocked.
+
+---
+
+## Portable CI on a hosted Linux runner (2026-11-02)
+
+The self-hosted macOS pipeline in `docs/RELEASE_PIPELINE.md` only runs when the
+owner's MacBook is on. `.github/workflows/ci-linux.yml` is the gate that needs
+nothing of the owner's: `pull_request`, `push: main` and `workflow_dispatch`, with
+`contents: read` and no deploy, release or signing step. It is a separate file
+because `ci.yml` is the reusable workflow `release.yml` calls; overwriting it
+would break the release lane.
+
+| Job | What it runs |
+| --- | --- |
+| Rust format, clippy and secret scan | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `gitleaks git` 8.30.1 from a SHA256-verified download |
+| Rust tests | `cargo test --workspace --all-targets` with `ffmpeg`, `libmpv-dev` and an ALSA `null` sink |
+| TV client tests | Node 24, `pnpm@12.16.1`, `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test` |
+
+`apps/tv` is installed with pnpm because `apps/tv/pnpm-lock.yaml` is the lockfile
+that exists. `actions/checkout`, `actions/setup-node` and `actions/cache` are
+pinned to commit SHAs; the cache covers `~/.cargo` and `target/`.
+`.github/dependabot.yml` keeps actions, cargo and the TV package current weekly.
+
+**Evidence (macOS ARM64 host, `rustc 1.99.1`).** `cargo fmt --all --check` clean;
+clippy exit 0, the only notice being the pre-existing `block 0.1.6` future
+incompatibility inside the iced stack; `cargo test --workspace --all-targets`
+**697 passed, 0 failed** in 86 s with a warm target directory; `pnpm typecheck`
+clean in 9.9 s; `pnpm test` **228 passed, 0 failed** in 1.5 s.
+
+**Evidence (Linux).** The same three Rust commands, the same packages, an
+unprivileged user, in an `ubuntu:24.04` container: clippy clean and **666 passed,
+0 failed, 0 ignored**, exit 0. The desktop package's own suite runs in a second step with
+`--test-threads=1`: on the hosted x86_64 runner that binary died with SIGSEGV while
+libtest ran its tests in parallel, which an arm64 `ubuntu:24.04` container does not
+reproduce, so the serial form is the one the runner can finish.
+
+Six tests are skipped by name in the workflow:
+five measure something a headless runner cannot provide (mpv's audio clock in real
+time, a one-second on-screen position on a shared vCPU, macOS launchd PATH
+behaviour) and one is a 5 ms poll that can miss a whole 1,200-file scan on a fast
+SSD. All six run on the macOS host. A seventh failure the first hosted run found —
+`a_long_scan_publishes_what_it_has_before_it_finishes` counting commits through the
+process-global `commit_observer` while libtest ran the binary's tests in parallel —
+was fixed at the source instead: every test that installs the observer now holds a
+test-only mutex, and six consecutive `cargo test -p screenroom-core --lib` runs
+agree. Twenty-five further
+tests are `cfg(target_os = "macos")` and do not exist on Linux.
+
+**Fixed on the way.** `cargo fmt --all --check` used to abort on a clean checkout
+with `couldn't find file … src/design/ds_pinned.rs`, because rustfmt resolves
+module declarations without running `build.rs` and that file is generated and
+Git-ignored; the declaration now carries `#[rustfmt::skip]`. The workspace also
+failed clippy on Linux on two macOS-only items and an unused parameter, and two
+path tests assumed the host folded case (a Windows volume does whatever the host
+does; a case-sensitive volume test granted a directory it never created). All
+fixed without changing behaviour.
