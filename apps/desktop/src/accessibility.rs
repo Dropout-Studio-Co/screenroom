@@ -1147,6 +1147,7 @@ fn player_controls(facts: &ScreenFacts<'_>, controls: &mut Vec<Control>) {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn announcement(snapshot: &Snapshot) -> Option<&str> {
     snapshot
         .controls
@@ -1157,6 +1158,7 @@ fn announcement(snapshot: &Snapshot) -> Option<&str> {
         .filter(|label| !label.starts_with(SCAN_PROGRESS))
 }
 
+#[cfg(any(target_os = "macos", test))]
 const SCAN_PROGRESS: &str = "Scanning\u{2026}";
 
 fn build(facts: &ScreenFacts<'_>) -> Snapshot {
