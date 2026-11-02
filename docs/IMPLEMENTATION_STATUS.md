@@ -2138,10 +2138,11 @@ blocked until it runs there.
 
 The self-hosted macOS pipeline in `docs/RELEASE_PIPELINE.md` only runs when the
 owner's MacBook is on. `.github/workflows/ci-linux.yml` is the gate that needs
-nothing of the owner's: `pull_request`, `push: main` and `workflow_dispatch`, with
-`contents: read` and no deploy, release or signing step. It is a separate file
-because `ci.yml` is the reusable workflow `release.yml` calls; overwriting it
-would break the release lane.
+nothing of the owner's: `pull_request`, `push: main`, `workflow_dispatch` and
+`workflow_call`, with `contents: read` and no deploy, release or signing step. It
+is the reusable gate `release.yml` calls, and `ci.yml` stays the owner's
+self-hosted gate, so the two live in separate files and overwriting one cannot
+break the other.
 
 | Job | What it runs |
 | --- | --- |
