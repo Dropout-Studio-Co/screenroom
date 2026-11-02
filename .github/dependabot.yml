@@ -1,8 +1,7 @@
 version: 2
 
 updates:
-  # Keep the pinned workflow actions current. The workflow pins exact SHAs, so
-  # a Dependabot bump is the only way they move.
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -21,7 +20,6 @@ updates:
       prefix: build
     open-pull-requests-limit: 5
 
-  # `apps/tv` is the only npm/pnpm manifest in the repository.
   - package-ecosystem: npm
     directory: /apps/tv
     schedule:

@@ -113,8 +113,7 @@ fn a_case_sensitive_volume_treats_two_spellings_as_two_folders() {
             "one directory must produce one key"
         );
     } else {
-        // A case-sensitive volume really does hold two directories here, so the
-        // second spelling has to exist before it can be granted.
+
         fs::create_dir_all(&other).expect("a second, differently cased folder");
         assert!(
             library.add_source(&other, None).is_ok(),
@@ -152,8 +151,7 @@ fn the_default_semantics_follow_the_volume_this_library_is_on() {
 
 #[test]
 fn a_windows_canonical_path_matches_the_folder_it_came_from() {
-    // A Windows volume folds case whatever the host running this test does, so
-    // the semantics are pinned instead of inherited from the machine.
+
     let library = Library::open_in_memory()
         .unwrap()
         .with_path_style(PathStyle::Windows)

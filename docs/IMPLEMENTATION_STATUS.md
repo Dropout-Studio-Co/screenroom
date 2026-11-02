@@ -2178,3 +2178,23 @@ failed clippy on Linux on two macOS-only items and an unused parameter, and two
 path tests assumed the host folded case (a Windows volume does whatever the host
 does; a case-sensitive volume test granted a directory it never created). All
 fixed without changing behaviour.
+
+## Notes that were comments (2026-11-02)
+
+The repository forbids comments in source, and a merged pull request had added
+eighty-two of them across eight files. They were stripped with the repository's
+own lexer (`python3 scripts/no_comments.py strip`), and the ones that carried a
+reason rather than a restatement are recorded here.
+
+- `apps/desktop/src/design/mod.rs` declares the pinned token module with
+  `#[rustfmt::skip]` because the generated file is Git-ignored: a clean checkout
+  does not have it, and rustfmt resolves module declarations without running
+  `build.rs`, so it would abort the format check on a file that is not there.
+- `apps/desktop/src/quit.rs` reaches its Quit-item lookup from the macOS menu
+  walk only, so on every other target it is reached from tests alone.
+- `apps/desktop/src/video_surface.rs` caps its texture cache only on the macOS
+  surface-import path; other targets upload the CPU frame and never import.
+- `crates/screenroom-core/src/library/catalog.rs` has a process-global commit
+  observer for tests. Two tests installing one would count each other's commits
+  and clear each other's counter, so every test that uses it holds a lock for its
+  duration.

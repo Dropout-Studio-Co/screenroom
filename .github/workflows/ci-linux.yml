@@ -1,9 +1,5 @@
 name: CI (Linux)
 
-# This is the portable gate: a clean, standard hosted ubuntu-latest runner that
-# needs no machine of the owner's to be switched on. `ci.yml` is the owner's
-# self-hosted macOS gate and the reusable workflow release.yml calls; the two
-# are deliberately separate files so neither can break the other.
 on:
   pull_request:
     branches: [main]
@@ -11,13 +7,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Read-only: no job here deploys, signs, publishes or comments.
 permissions:
   contents: read
 
-# One run per pull request (or per branch on a push). A new push to a PR
-# cancels the previous run; a push to main never cancels a run in flight, so
-# the tree that landed always gets a complete result.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -27,8 +19,7 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # Formatting, lints and a secret scan. No compilation output is reused by the
-  # test job because a clippy build and a test build are different artefacts.
+
   rust-fmt-clippy:
     name: Rust format, clippy and secret scan
     runs-on: ubuntu-latest
@@ -38,7 +29,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-          # gitleaks reads commit history, not only the working tree.
+
           fetch-depth: 0
 
       - name: Install rustfmt and clippy
@@ -56,10 +47,6 @@ jobs:
             ${{ runner.os }}-cargo-lint-
             ${{ runner.os }}-cargo-
 
-      # `apps/desktop/src/design/ds_pinned.rs` is generated from the private
-      # design system and Git-ignored, so a clean checkout does not have it.
-      # `design/mod.rs` marks that module `#[rustfmt::skip]` so this check does
-      # not need the private file.
       - name: Verify formatting
         run: cargo fmt --all --check
 
@@ -91,9 +78,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      # The desktop test binaries are large; full debug info is what makes the
-      # linker run out of memory on a 7 GB runner (verified: `ld` is killed with
-      # signal 9 without this). Debug assertions stay on, only debuginfo goes.
+
       CARGO_PROFILE_DEV_DEBUG: 0
     steps:
       - name: Check out the repository
@@ -101,15 +86,6 @@ jobs:
         with:
           persist-credentials: false
 
-      # What the workspace actually needs on Linux:
-      #   ffmpeg        - the artwork, probe and libmpv smoke tests shell out to
-      #                   the `ffmpeg` binary to build their own fixtures.
-      #   libmpv-dev    - libmpv is loaded at runtime with dlopen, so nothing
-      #                   links against it. Installing it means the player tests
-      #                   actually decode instead of reporting "no libmpv" and
-      #                   skipping.
-      # `rusqlite` uses the bundled SQLite amalgamation and `ring` builds its C
-      # with the compiler already on the image, so neither needs a package.
       - name: Install the system dependencies the tests use
         run: |
           sudo apt-get update
@@ -127,9 +103,6 @@ jobs:
             ${{ runner.os }}-cargo-test-
             ${{ runner.os }}-cargo-
 
-      # libmpv refuses to start playback with no audio output at all, which is
-      # what a bare runner has. An ALSA `null` sink gives it one, so the player
-      # tests decode real files here instead of failing on device discovery.
       - name: Give libmpv a headless audio sink
         run: |
           sudo tee /etc/asound.conf >/dev/null <<'EOF'
@@ -140,29 +113,6 @@ jobs:
           chmod 700 "$RUNNER_TEMP/runtime"
           echo "XDG_RUNTIME_DIR=$RUNNER_TEMP/runtime" >> "$GITHUB_ENV"
 
-      # Six tests are skipped by name, not disabled in the source. Five measure
-      # something this runner cannot provide; one is a race a 4-vCPU runner
-      # loses. All six run on the owner's macOS host.
-      #
-      #   audio_is_consumed_in_real_time_without_drifting (screenroom-player)
-      #   resume_position_is_honoured_when_loading        (screenroom-player)
-      #       Both need mpv's audio clock to advance in real time; the runner's
-      #       only audio output is the null sink above, so the clock has nothing
-      #       to consume.
-      #   step_10_quitting_mid_film_and_reopening_resumes_within_a_second (desktop)
-      #   step_12_a_folder_that_disappears_keeps_history_and_a_rescan_recovers_it
-      #       End-to-end steps that assert an on-screen position within one
-      #       second of wall clock on a shared vCPU.
-      #   a_tool_is_found_outside_a_minimal_launch_path (desktop)
-      #       Asserts macOS launchd PATH behaviour: with no Homebrew ffmpeg the
-      #       expectation is a bare `ffmpeg`, while Linux has /usr/bin/ffmpeg.
-      #
-      #   step_1_a_first_run_scan_fills_the_grid_before_it_finishes (desktop)
-      #       Polls the application every 5 ms and asserts it saw cards while the
-      #       scan was still running. On a fast SSD the whole 1,200-file scan can
-      #       finish inside one poll.
-      #
-      # Everything else runs here, including libmpv decoding real files.
       - name: Run the core and player tests
         run: |
           cargo test --workspace --all-targets --exclude screenroom-desktop \
@@ -170,11 +120,6 @@ jobs:
             --skip audio_is_consumed_in_real_time_without_drifting \
             --skip resume_position_is_honoured_when_loading
 
-      # The desktop suite drives libmpv through the real application, several
-      # instances at once. On the hosted x86_64 runner that binary died with
-      # SIGSEGV while libtest was running tests in parallel; serially it has run
-      # clean. `--test-threads=1` is the only difference from the command used
-      # everywhere else.
       - name: Run the desktop tests one at a time
         run: |
           cargo test -p screenroom-desktop --all-targets --no-fail-fast -- \
@@ -184,10 +129,6 @@ jobs:
             --skip a_tool_is_found_outside_a_minimal_launch_path \
             --skip step_1_a_first_run_scan_fills_the_grid_before_it_finishes
 
-  # The TV client is a separate TypeScript package with its own lockfile.
-  # It is installed with pnpm, which is what `apps/tv/pnpm-lock.yaml` is for;
-  # bun would need a second lockfile and a different installer, so the job uses
-  # Node 24 (which runs the `.ts` tests natively) plus pnpm, not bun.
   tv-tests:
     name: TV client tests
     runs-on: ubuntu-latest

@@ -37,3 +37,17 @@ uploaded or copied anywhere, and no DUID or certificate material enters Git.
 A device that is powered off is **skipped**, never faked. Windows needs a Windows
 runner and MSVC, so until that runner exists its job is skipped and the release is
 macOS-only — deliberately, and visibly in the run.
+
+## Two gates, and why
+
+`ci-linux.yml` is the portable gate: a hosted `ubuntu-latest` runner that needs no
+machine of the owner's to be switched on, running formatting, clippy, a secret
+scan, the Rust tests and the TV's tests. `ci.yml` is the owner's self-hosted macOS
+gate and the reusable workflow `release.yml` calls. They are separate files on
+purpose, so neither can break the other, and a pull request gets a result even
+when the owner's machine is asleep.
+
+The pinned action SHAs move only through Dependabot (`.github/dependabot.yml`),
+because the workflows pin exact commits rather than tags. `apps/tv` is the only
+pnpm manifest in the repository, which is why Dependabot watches that one
+directory.

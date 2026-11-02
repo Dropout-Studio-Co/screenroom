@@ -58,8 +58,6 @@ pub fn surface_key(frame: &Frame) -> Option<usize> {
     }
 }
 
-// Only the macOS surface-import path caps its texture cache; other targets
-// upload the CPU frame and never import.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const MAX_IMPORTED_SURFACES: usize = 12;
 

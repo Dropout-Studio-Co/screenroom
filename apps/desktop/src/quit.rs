@@ -37,8 +37,6 @@ impl std::fmt::Display for QuitRouting {
     }
 }
 
-// Only the macOS menu walk asks "where is the Quit item?", so on every other
-// target this is reached from tests alone.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn quit_item_index(actions: &[Option<&CStr>]) -> Option<usize> {
     actions

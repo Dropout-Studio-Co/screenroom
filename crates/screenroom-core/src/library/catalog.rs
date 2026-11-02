@@ -859,9 +859,6 @@ pub(crate) mod commit_observer {
         }
     }
 
-    /// The observer is process-global, so two tests that install one would count
-    /// each other's commits and clear each other's counter. Every test that uses
-    /// it holds this for its duration; libtest runs them in parallel otherwise.
     #[cfg(test)]
     pub(crate) fn test_guard() -> std::sync::MutexGuard<'static, ()> {
         static GUARD: Mutex<()> = Mutex::new(());

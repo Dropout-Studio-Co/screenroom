@@ -163,11 +163,6 @@ pub const NEUTRAL: Tokens = Tokens {
     provenance: "public fallback (no design-system pin in this build)",
 };
 
-// The pinned token file is generated and Git-ignored, so a clean checkout does
-// not have it. rustfmt resolves module declarations without running build.rs and
-// would abort the whole check for a missing file; `#[rustfmt::skip]` keeps the
-// generated file out of formatting (the exporter owns its shape) and lets
-// `cargo fmt --all --check` pass with or without a private pin.
 #[cfg(screenroom_ds_pinned)]
 #[path = "ds_pinned.rs"]
 #[rustfmt::skip]

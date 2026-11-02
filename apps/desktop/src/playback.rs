@@ -113,7 +113,6 @@ mod tests {
         const { assert!(CHECKPOINT_INTERVAL_MS >= 1_000) };
     }
 
-    /// A library holding one film, already left at `position_ms` of `duration_ms`.
     fn watched_film(
         position_ms: i64,
         duration_ms: i64,
