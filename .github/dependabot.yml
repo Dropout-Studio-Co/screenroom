@@ -11,6 +11,9 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: cargo
     directory: /
@@ -19,6 +22,15 @@ updates:
     commit-message:
       prefix: build
     open-pull-requests-limit: 5
+    # Majors are deliberate migrations, so they are ignored here rather than
+    # proposed weekly. `ignore` filters version updates only; Dependabot
+    # security updates are unaffected and still open on their own. For crates
+    # still below 1.0, Dependabot classifies the breaking 0.x minor bump as a
+    # major, so this one rule also holds back 0.32 -> 0.33 style updates while
+    # 0.41.0 -> 0.41.1 patches keep flowing.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: /apps/tv
@@ -27,3 +39,6 @@ updates:
     commit-message:
       prefix: build
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
