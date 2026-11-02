@@ -134,6 +134,7 @@ impl Primitive for VideoPrimitive {
             if let Some(imported) = pipeline.imported.get(&key) {
                 pipeline.bind_group = Some(imported.bind_group.clone());
             }
+            pipeline.note_sampled(queue, key, frame, &surface);
             crate::play_check::note_import();
             pipeline.texture_size = (frame.width, frame.height);
             pipeline.uploaded_generation = Some(frame.generation);
@@ -239,12 +240,21 @@ pub struct VideoPipeline {
     imported: std::collections::HashMap<usize, ImportedSurface>,
     #[cfg(target_os = "macos")]
     imported_size: (u32, u32),
+    #[cfg(target_os = "macos")]
+    sampled: Option<SampledSurface>,
 }
 
 #[cfg(target_os = "macos")]
 struct ImportedSurface {
     texture: wgpu::Texture,
     bind_group: wgpu::BindGroup,
+}
+
+#[cfg(target_os = "macos")]
+struct SampledSurface {
+    key: usize,
+    generation: u64,
+    reads: std::sync::Arc<screenroom_player::SurfaceReads>,
 }
 
 #[cfg(target_os = "macos")]
@@ -259,6 +269,33 @@ impl std::fmt::Debug for ImportedSurface {
 impl VideoPipeline {
     fn bind_cpu_group(&mut self) {
         self.bind_group = self.cpu_bind_group.clone();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn note_sampled(
+        &mut self,
+        queue: &wgpu::Queue,
+        key: usize,
+        frame: &Frame,
+        surface: &screenroom_player::SurfaceFrame,
+    ) {
+        let unchanged = self
+            .sampled
+            .as_ref()
+            .is_some_and(|sampled| sampled.key == key && sampled.generation == frame.generation);
+        if unchanged {
+            return;
+        }
+        surface.reads().note_reading(frame.generation);
+        let reads = std::sync::Arc::clone(surface.reads());
+        if let Some(previous) = self.sampled.take() {
+            queue.on_submitted_work_done(move || previous.reads.note_released(previous.generation));
+        }
+        self.sampled = Some(SampledSurface {
+            key,
+            generation: frame.generation,
+            reads,
+        });
     }
 }
 
@@ -515,12 +552,18 @@ impl shader::Pipeline for VideoPipeline {
             imported: std::collections::HashMap::new(),
             #[cfg(target_os = "macos")]
             imported_size: (0, 0),
+            #[cfg(target_os = "macos")]
+            sampled: None,
         }
     }
 
     fn trim(&mut self) {
         #[cfg(target_os = "macos")]
         self.imported.clear();
+        #[cfg(target_os = "macos")]
+        {
+            self.sampled = None;
+        }
         self.bind_group = self.cpu_bind_group.clone();
     }
 }
