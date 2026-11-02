@@ -2060,27 +2060,38 @@ that falls back to a gradient looks intentional enough to hide the defect.
 happened.** The one-time setup — runner labels, secrets, the Tizen profile — and
 the exact status are in [`RELEASE_PIPELINE.md`](RELEASE_PIPELINE.md).
 
-The reason the runner is self-hosted is in the decision, not the tooling: every
-target here is a device on the owner's home LAN, and a cloud runner cannot reach
-the MacBook, the Windows desktop or the television.
+The device lanes are self-hosted because every target there is a device on the
+owner's home LAN, and a cloud runner cannot reach the television. **Packaging is
+not**: the `macos` job moved to GitHub's hosted `macos-latest`, because a `.app`
+and a `.zip` need nothing on the LAN, this repository is public so hosted minutes
+cost nothing, and the self-hosted gate it used to wait for
+(`vars.SCREENROOM_MACOS_RUNNER`) was never set — the job skipped on every push and
+no release was automated at all. The hosted job installs `mpv` and `ffmpeg` from
+Homebrew, builds `dist/Screenroom.app` ad-hoc signed (there is still no Developer
+ID or notarisation credential, so nothing is notarised), and uploads the `.zip`
+and its manifest fragment. It no longer installs the app on any machine.
 
 | Piece | What it does | Evidence |
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | on a pull request, a push to `main`, and as a callable workflow: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `python3 scripts/no_comments.py check`, then the TV's `pnpm typecheck` and `pnpm test` | parses; every command is one this repository already runs locally |
-| `.github/workflows/release.yml` | calls CI, packages macOS with `scripts/release.sh macos`, merges the per-platform fragments into `manifest.json` (version, tag, generated-at, and per artefact platform, arch, version, filename, sha256 and size), signs it with Ed25519 when the key exists, and publishes `v<version>` | parses; the manifest merge and signing paths were exercised locally |
+| `.github/workflows/release.yml` | calls CI, packages macOS on hosted `macos-latest` with `scripts/release.sh macos`, merges the per-platform fragments into `manifest.json` (version, tag, generated-at, and per artefact platform, arch, version, filename, sha256 and size), signs it with Ed25519 when the key exists, and publishes `v<version>` | parses; the manifest merge and signing paths were exercised locally; the packaging command was run end to end on this Mac |
+| `release.yml` → `publish` job | runs on `ubuntu-latest` only for a pushed `v*` tag or a manual run from `main` with `publish` ticked, and refuses a tag that does not equal `v<version>`. **A push to `main` publishes nothing**; it keeps the artefacts for 14 days instead | the gate and the tag check are written and linted but have never been executed by GitHub |
 | `release.yml` → `windows` job | declared, and skipped unless `vars.SCREENROOM_WINDOWS_RUNNER == 'true'` | **skipped, not greenwashed**: no Windows runner exists, so the Windows gate stays BLOCKED |
 | `scripts/ship.sh` | the owner's command without GitHub: builds and replaces the installed Mac app, and reaches the Windows host over SSH and the TV over sdb at the same time, printing one result per device; a powered-off device is reported as skipped, and only the always-on Mac can fail the run | the three lanes, the configuration file and `SCREENROOM_SHIP_STRICT` are exercised locally; the device lanes depend on the devices being up |
 
 Two claims are deliberately not made. **No job, step or expression has been
-executed by GitHub**, because the runner is not installed on this machine, so the
-workflows are unrun configuration rather than a green build. And **no Windows
-build exists** — the job is written so that enabling a runner is the only missing
-step, and the gate remains blocked until a Windows machine runs it.
+executed by GitHub**, so the hosted `macos` lane, the `publish` gate and the TV
+lane are unrun configuration rather than a green build. And **no Windows build
+exists** — the job is written so that enabling a runner is the only missing step,
+and the gate remains blocked until a Windows machine runs it.
 
-Nothing was added to any workflow that makes it an always-on service: no cloud
-runner, no paid certificate (the signing key is optional and the release publishes
-unsigned without it), and no automatic deployment outside the owner's own
-machines.
+Nothing was added to any workflow that makes it an always-on service: no paid
+certificate (the signing key is optional and the release publishes unsigned
+without it), no automatic deployment outside the owner's own machines, and no
+publish on a normal push. One open constraint belongs to the release gate rather
+than to the pipeline: the hosted bundle embeds Homebrew's **GPL-2.0-or-later**
+`libmpv`, which [`LICENSING.md`](LICENSING.md) classifies as development-only, so
+a publish that uploads this build needs the LGPL-only libmpv decision first.
 
 ## Automatic media discovery: the core half (2026-11-02)
 

@@ -3,14 +3,20 @@ name: Release
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Create or update the GitHub Release for the version in Cargo.toml
+        type: boolean
+        default: false
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   ci:
@@ -20,8 +26,7 @@ jobs:
   macos:
     name: macOS package
     needs: ci
-    if: vars.SCREENROOM_MACOS_RUNNER == 'true'
-    runs-on: [self-hosted, macOS]
+    runs-on: macos-latest
     timeout-minutes: 90
     steps:
       - name: Check out
@@ -29,26 +34,20 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Put the owner's toolchains on PATH
-        run: |
-          for directory in /opt/homebrew/bin /usr/local/bin "$HOME/.cargo/bin"; do
-            if [ -d "$directory" ]; then
-              printf '%s\n' "$directory" >>"$GITHUB_PATH"
-            fi
-          done
-
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
 
       - name: Rust cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
 
+      - name: Install the libraries the bundle links against
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: brew install mpv ffmpeg
+
       - name: Build the application and its manifest fragment
         run: scripts/release.sh macos --out artifacts
-
-      - name: Install on this Mac without launching it
-        if: vars.SCREENROOM_DEPLOY_MACOS != 'false'
-        run: scripts/release.sh install --install "$HOME/Applications"
 
       - name: Keep the artefacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -158,9 +157,15 @@ jobs:
   publish:
     name: Publish the release
     needs: [macos, windows]
-    if: always() && needs.macos.result == 'success' && (needs.windows.result == 'success' || needs.windows.result == 'skipped')
-    runs-on: [self-hosted, macOS]
+    if: |
+      !cancelled()
+      && needs.macos.result == 'success'
+      && (needs.windows.result == 'success' || needs.windows.result == 'skipped')
+      && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -173,13 +178,14 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Put the owner's toolchains on PATH
+      - name: Check the tag matches the version this run built
         run: |
-          for directory in /opt/homebrew/bin /usr/local/bin "$HOME/.cargo/bin"; do
-            if [ -d "$directory" ]; then
-              printf '%s\n' "$directory" >>"$GITHUB_PATH"
-            fi
-          done
+          version="$(scripts/release.sh version)"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            printf 'the tag %s does not match the version in Cargo.toml (v%s)\n' \
+              "$GITHUB_REF_NAME" "$version" >&2
+            exit 1
+          fi
 
       - name: Merge and sign the manifest
         env:
@@ -214,6 +220,8 @@ jobs:
           notes="Screenroom $version, built from $GITHUB_SHA on $GITHUB_REF_NAME."
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "${files[@]}" --clobber
+          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            gh release create "$tag" "${files[@]}" --title "Screenroom $version" --notes "$notes"
           else
             gh release create "$tag" "${files[@]}" --title "Screenroom $version" --notes "$notes" --target "$GITHUB_SHA"
           fi
