@@ -13,7 +13,7 @@ screenroom-player = { path = "../../crates/screenroom-player" }
 
 iced = { version = "0.14", features = ["wgpu", "image", "canvas"] }
 
-wgpu = "27"
+wgpu = "30"
 
 notify = "8"
 
