@@ -19,6 +19,8 @@ pub const MEDIA_EXTENSIONS: &[&str] = &[
 
 const DOWNLOAD_SUFFIXES: &[&str] = &[".part", ".crdownload", ".download", ".aria2", ".!qB"];
 
+const INGEST_CHUNK: usize = 256;
+
 #[derive(Debug, Clone, Default)]
 pub struct ScanToken(Arc<AtomicBool>);
 
@@ -305,6 +307,10 @@ impl<'a> LibraryScanner<'a> {
                     Ok(file) => {
                         prepared.push(file);
                         imported += 1;
+                        if prepared.len() >= INGEST_CHUNK {
+                            self.apply(source_id, &source.root_path, &scan_id, &prepared)?;
+                            prepared.clear();
+                        }
                         on_update(&ScanUpdate {
                             visited,
                             imported,
@@ -463,6 +469,10 @@ impl<'a> LibraryScanner<'a> {
                 Ok(file) => {
                     prepared.push(file);
                     imported += 1;
+                    if prepared.len() >= INGEST_CHUNK {
+                        self.apply(&source.id, &source.root_path, &scan_id, &prepared)?;
+                        prepared.clear();
+                    }
                     on_update(&ScanUpdate {
                         visited,
                         imported,
@@ -1090,6 +1100,40 @@ mod tests {
             "only the changed file may be read again"
         );
         read_observer::clear();
+    }
+
+    #[test]
+    fn a_long_scan_publishes_what_it_has_before_it_finishes() {
+        let directory = TempDir::new().unwrap();
+        let root = directory.path();
+        let total = INGEST_CHUNK * 2 + 4;
+        for index in 0..total {
+            write_settled(&root.join(format!("Bulk.{index:05}.2020.mkv")), b"data");
+        }
+
+        let library = Library::open_in_memory().unwrap();
+        let source = library.add_source(root, None).unwrap();
+        let scanner =
+            LibraryScanner::new(&library).with_limits(10_000, 32, Duration::from_secs(15));
+
+        let seen = Arc::new(AtomicUsize::new(0));
+        let committed = Arc::clone(&seen);
+        crate::library::commit_observer::install(Arc::new(move || {
+            committed.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        let summary = scanner.scan(&source.id, &ScanToken::new(), |_| {}).unwrap();
+        crate::library::commit_observer::clear();
+
+        assert_eq!(summary.imported as usize, total);
+        assert!(
+            seen.load(Ordering::SeqCst) >= 3,
+            "a walk longer than one chunk must publish its rows before it ends"
+        );
+        assert!(
+            seen.load(Ordering::SeqCst) < total,
+            "and must not fall back to one transaction per file"
+        );
     }
 
     #[test]
