@@ -2206,3 +2206,19 @@ reason rather than a restatement are recorded here.
   observer for tests. Two tests installing one would count each other's commits
   and clear each other's counter, so every test that uses it holds a lock for its
   duration.
+
+## Real media, on the owner's own drive (2026-11-02)
+
+`scripts/verify-media.sh` runs the application's own scanner and player against
+the mounted library and reports what it proves. On the owner's 916 GB exFAT drive:
+
+- 775 media files across 69 folders were scanned in **2.7 s** at **10 MB** resident,
+  complete, with no issues.
+- They resolved to **318 titles**: 300 films and 18 series holding 49 seasons and
+  475 episodes. Every file belongs to a film or an episode; every title has a year;
+  no title is listed twice.
+- The 21 files the walk does not import are macOS `._` AppleDouble sidecars on the
+  exFAT volume, which the scanner rightly refuses.
+- Real playback of a 1080p HEVC film measured **24.09 fps** sustained through
+  VideoToolbox, 14 % CPU, 72–86 MB resident, first frame at 1.0 s.
+- The drive is only ever read. Nothing in this check writes to it.
