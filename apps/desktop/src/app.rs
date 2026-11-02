@@ -3904,6 +3904,16 @@ impl App {
                 crate::watch::Job::Ingest { root, paths, .. } => LibraryScanner::new(&library)
                     .with_limits(250_000, 64, INGEST_STABLE_AGE)
                     .scan_paths(root, paths, &token, &mut progress),
+                crate::watch::Job::Withdraw { root, paths, .. } => LibraryScanner::new(&library)
+                    .with_limits(250_000, 64, INGEST_STABLE_AGE)
+                    .withdraw_paths(root, paths, &token)
+                    .map(|withdrawn| screenroom_core::ScanSummary {
+                        visited: withdrawn as u64,
+                        imported: 0,
+                        issues: Vec::new(),
+                        cancelled: false,
+                        complete: true,
+                    }),
             };
             match outcome {
                 Ok(summary) => {
@@ -4099,8 +4109,8 @@ impl App {
                 self.apply_work(
                     &root,
                     crate::watch::Work {
-                        ingest: Vec::new(),
-                        withdraw: true,
+                        walk: true,
+                        ..crate::watch::Work::default()
                     },
                 );
                 self.status = Some(format!("{} — {reason}. Checking it again.", root.display()));
@@ -4121,26 +4131,37 @@ impl App {
         let Some((source, stored_root)) = self.source_for_root(root) else {
             return;
         };
-        if work.withdraw {
+        if work.walk {
             self.submit_job(crate::watch::Job::Scan {
                 source,
                 quiet: true,
             });
             return;
         }
-        let paths = work
-            .ingest
+        if !work.withdraw.is_empty() {
+            self.submit_job(crate::watch::Job::Withdraw {
+                source: source.clone(),
+                paths: self.stored_paths(root, &stored_root, &work.withdraw),
+                root: stored_root.clone(),
+            });
+        }
+        if !work.ingest.is_empty() {
+            self.submit_job(crate::watch::Job::Ingest {
+                source,
+                paths: self.stored_paths(root, &stored_root, &work.ingest),
+                root: stored_root,
+            });
+        }
+    }
+
+    fn stored_paths(&self, root: &Path, stored_root: &Path, paths: &[PathBuf]) -> Vec<PathBuf> {
+        paths
             .iter()
             .map(|path| match path.strip_prefix(root) {
                 Ok(relative) => stored_root.join(relative),
                 Err(_) => path.clone(),
             })
-            .collect();
-        self.submit_job(crate::watch::Job::Ingest {
-            source,
-            root: stored_root,
-            paths,
-        });
+            .collect()
     }
 
     fn source_for_root(&self, root: &Path) -> Option<(String, PathBuf)> {
@@ -8450,30 +8471,55 @@ mod tests {
     }
 
     #[test]
-    fn a_watched_removal_asks_for_the_walk_that_can_withdraw() {
+    fn a_watched_removal_withdraws_the_path_it_names() {
         let directory = tempfile::TempDir::new().expect("temp dir");
         let media = directory.path().join("media");
-        write_settled(&media.join("Gone (2001).mkv"), b"not really a video");
+        let gone = media.join("Gone (2001).mkv");
+        write_settled(&gone, b"not really a video");
         let library = Library::open_in_memory().expect("library");
         let mut app = App::with_library(library, None, "test".into());
         add_folder(&mut app, &media);
+        let _ = app.update(Message::GoBrowse);
+        assert_eq!(app.browse.items.len(), 1);
 
-        app.handle_watched(crate::watch::Watched::Rescan {
+        std::fs::remove_file(&gone).expect("remove");
+        app.handle_watched(crate::watch::Watched::Changes {
             root: media.clone(),
-            reason: "test".to_string(),
+            changes: vec![screenroom_core::MediaChange::Removed(gone.clone())],
         });
 
         let running = app
             .scan_queue
             .running()
             .cloned()
-            .expect("a walk was queued");
-        assert!(running.is_scan(), "a removal is never an ingest");
+            .expect("a withdrawal was queued");
+        assert!(
+            matches!(running, crate::watch::Job::Withdraw { .. }),
+            "a removal asked for a walk instead of withdrawing one path: {running:?}"
+        );
+        assert_eq!(running.paths().len(), 1);
+        assert_eq!(
+            running.paths()[0].file_name(),
+            gone.file_name(),
+            "the withdrawal names a different file"
+        );
         assert!(
             running.is_quiet(),
             "a removal does not take the status line"
         );
+
         finish_scan(&mut app);
+
+        assert_eq!(app.error, None);
+        assert_eq!(
+            app.library.count(&LibraryQuery::default()).expect("count"),
+            1,
+            "a withdrawal deleted the row"
+        );
+        assert!(
+            !app.library.items(&LibraryQuery::page(10)).expect("items")[0].available,
+            "the removed file is still available"
+        );
     }
 
     #[test]

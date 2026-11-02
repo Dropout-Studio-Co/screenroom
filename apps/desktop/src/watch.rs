@@ -108,12 +108,14 @@ fn removed(paths: &[PathBuf]) -> Vec<MediaChange> {
 pub struct Work {
     pub ingest: Vec<PathBuf>,
 
-    pub withdraw: bool,
+    pub withdraw: Vec<PathBuf>,
+
+    pub walk: bool,
 }
 
 impl Work {
     pub fn is_empty(&self) -> bool {
-        self.ingest.is_empty() && !self.withdraw
+        self.ingest.is_empty() && self.withdraw.is_empty() && !self.walk
     }
 }
 
@@ -124,13 +126,14 @@ pub fn work_for(root: &Path, changes: &[MediaChange]) -> Work {
         || plan.relocations.len() >= MAX_PLAN_ENTRIES;
     if capped {
         return Work {
-            ingest: Vec::new(),
-            withdraw: true,
+            walk: true,
+            ..Work::default()
         };
     }
     Work {
         ingest: plan.ingest,
-        withdraw: !plan.forget.is_empty() || !plan.relocations.is_empty(),
+        withdraw: plan.forget,
+        walk: !plan.relocations.is_empty(),
     }
 }
 
@@ -184,19 +187,27 @@ pub enum Job {
         root: PathBuf,
         paths: Vec<PathBuf>,
     },
+
+    Withdraw {
+        source: String,
+        root: PathBuf,
+        paths: Vec<PathBuf>,
+    },
 }
 
 impl Job {
     pub fn source(&self) -> &str {
         match self {
-            Self::Scan { source, .. } | Self::Ingest { source, .. } => source,
+            Self::Scan { source, .. }
+            | Self::Ingest { source, .. }
+            | Self::Withdraw { source, .. } => source,
         }
     }
 
     pub fn paths(&self) -> &[PathBuf] {
         match self {
             Self::Scan { .. } => &[],
-            Self::Ingest { paths, .. } => paths,
+            Self::Ingest { paths, .. } | Self::Withdraw { paths, .. } => paths,
         }
     }
 
@@ -208,6 +219,7 @@ impl Job {
         match self {
             Self::Scan { quiet, .. } => *quiet,
             Self::Ingest { .. } => false,
+            Self::Withdraw { .. } => true,
         }
     }
 }
@@ -217,6 +229,7 @@ pub struct Queue {
     running: Option<Job>,
     scans: BTreeMap<String, bool>,
     ingest: BTreeMap<String, (PathBuf, Vec<PathBuf>)>,
+    withdraw: BTreeMap<String, (PathBuf, Vec<PathBuf>)>,
 }
 
 impl Queue {
@@ -229,7 +242,7 @@ impl Queue {
     }
 
     pub fn queued(&self) -> usize {
-        self.scans.len() + self.ingest.len()
+        self.scans.len() + self.ingest.len() + self.withdraw.len()
     }
 
     pub fn submit(&mut self, job: Job) -> Option<Job> {
@@ -245,6 +258,7 @@ impl Queue {
         match job {
             Job::Scan { source, quiet } => {
                 self.ingest.remove(&source);
+                self.withdraw.remove(&source);
                 self.scans
                     .entry(source)
                     .and_modify(|existing| *existing = *existing && quiet)
@@ -268,6 +282,24 @@ impl Queue {
                     }
                 }
             }
+            Job::Withdraw {
+                source,
+                root,
+                paths,
+            } => {
+                if self.scans.contains_key(&source) {
+                    return;
+                }
+                let entry = self
+                    .withdraw
+                    .entry(source)
+                    .or_insert_with(|| (root, Vec::new()));
+                for path in paths {
+                    if !entry.1.contains(&path) {
+                        entry.1.push(path);
+                    }
+                }
+            }
         }
     }
 
@@ -281,7 +313,16 @@ impl Queue {
     fn next(&mut self) -> Option<Job> {
         if let Some((source, quiet)) = self.scans.pop_first() {
             self.ingest.remove(&source);
+            self.withdraw.remove(&source);
             return Some(Job::Scan { source, quiet });
+        }
+        if let Some(source) = self.withdraw.keys().next().cloned() {
+            let (root, paths) = self.withdraw.remove(&source)?;
+            return Some(Job::Withdraw {
+                source,
+                root,
+                paths,
+            });
         }
         let source = self.ingest.keys().next().cloned()?;
         let (root, paths) = self.ingest.remove(&source)?;
@@ -303,11 +344,13 @@ impl Queue {
     pub fn cancel_pending(&mut self) {
         self.scans.clear();
         self.ingest.clear();
+        self.withdraw.clear();
     }
 
     pub fn drop_source(&mut self, source: &str) {
         self.scans.remove(source);
         self.ingest.remove(source);
+        self.withdraw.remove(source);
     }
 }
 
@@ -598,10 +641,8 @@ mod tests {
                 PathBuf::from("/media/Dune.2021.mkv")
             ]
         );
-        assert!(
-            !arrivals.withdraw,
-            "an arrival must never withdraw anything"
-        );
+        assert!(!arrivals.walk, "an arrival must never withdraw anything");
+        assert!(arrivals.withdraw.is_empty());
         assert!(!arrivals.is_empty());
 
         let removal = work_for(
@@ -610,9 +651,14 @@ mod tests {
                 "/media/Arrival.2016.mkv",
             ))],
         );
-        assert!(
+        assert_eq!(
             removal.withdraw,
-            "a removal needs the walk that can withdraw"
+            vec![PathBuf::from("/media/Arrival.2016.mkv")],
+            "a removal must name the path it withdraws"
+        );
+        assert!(
+            !removal.walk,
+            "a removal does not need a walk of the whole folder"
         );
         assert!(removal.ingest.is_empty());
 
@@ -624,7 +670,11 @@ mod tests {
             ],
         );
         assert_eq!(both.ingest, vec![PathBuf::from("/media/Dune.2021.mkv")]);
-        assert!(both.withdraw, "the same walk also ingests the arrival");
+        assert_eq!(
+            both.withdraw,
+            vec![PathBuf::from("/media/Arrival.2016.mkv")]
+        );
+        assert!(!both.walk, "the arrival and the removal are both per path");
 
         assert!(work_for(&root(), &added_batch(&["notes.txt"])).is_empty());
         assert!(
@@ -644,11 +694,82 @@ mod tests {
 
         let work = work_for(&root(), &burst);
 
-        assert!(work.withdraw, "a capped plan must not run as a partial job");
+        assert!(work.walk, "a capped plan must not run as a partial job");
+        assert!(work.withdraw.is_empty());
         assert!(
             work.ingest.is_empty(),
             "the walk that covers the burst ingests those paths itself"
         );
+    }
+
+    #[test]
+    fn a_relocation_still_asks_for_the_walk() {
+        let work = work_for(
+            &root(),
+            &[MediaChange::Renamed(
+                PathBuf::from("/media/Old.2020.mkv"),
+                PathBuf::from("/media/New.2020.mkv"),
+            )],
+        );
+
+        assert!(
+            work.walk,
+            "a moved file has to be matched by the walk, not withdrawn"
+        );
+        assert!(work.withdraw.is_empty());
+    }
+
+    #[test]
+    fn a_withdrawal_is_queued_behind_the_job_that_is_running() {
+        let mut queue = Queue::new();
+        queue
+            .submit(Job::Ingest {
+                source: "movies".to_string(),
+                root: root(),
+                paths: vec![PathBuf::from("/media/Arrival.2016.mkv")],
+            })
+            .expect("an idle queue starts the ingest");
+        assert!(
+            queue
+                .submit(Job::Withdraw {
+                    source: "movies".to_string(),
+                    root: root(),
+                    paths: vec![PathBuf::from("/media/Arrival.2016.mkv")],
+                })
+                .is_none(),
+            "a second worker started while the ingest ran"
+        );
+        assert_eq!(queue.queued(), 1, "the withdrawal was dropped");
+
+        let next = queue.finish().expect("the queued withdrawal runs next");
+        assert_eq!(next.source(), "movies");
+        assert_eq!(next.paths(), [PathBuf::from("/media/Arrival.2016.mkv")]);
+        assert!(next.is_quiet());
+        assert_eq!(queue.queued(), 0);
+    }
+
+    #[test]
+    fn a_queued_walk_absorbs_the_withdrawal_behind_it() {
+        let mut queue = Queue::new();
+        queue.submit(Job::Ingest {
+            source: "movies".to_string(),
+            root: root(),
+            paths: vec![PathBuf::from("/media/Arrival.2016.mkv")],
+        });
+        queue.submit(Job::Scan {
+            source: "movies".to_string(),
+            quiet: true,
+        });
+        queue.submit(Job::Withdraw {
+            source: "movies".to_string(),
+            root: root(),
+            paths: vec![PathBuf::from("/media/Gone.2020.mkv")],
+        });
+
+        assert_eq!(queue.queued(), 1, "the walk already withdraws for us");
+        let next = queue.finish().expect("the walk");
+        assert!(next.is_scan());
+        assert!(queue.finish().is_none());
     }
 
     #[test]

@@ -299,6 +299,30 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    pub(crate) fn withdraw_locators(
+        &self,
+        source_id: &str,
+        relative_paths: &[String],
+    ) -> Result<usize> {
+        if relative_paths.is_empty() {
+            return Ok(0);
+        }
+        let mut connection = self.connection();
+        let tx = connection.transaction()?;
+        let mut withdrawn = 0;
+        {
+            let mut statement = tx.prepare(
+                "UPDATE files SET available = 0
+                 WHERE source_id = ?1 AND relative_path = ?2 AND available = 1",
+            )?;
+            for relative in relative_paths {
+                withdrawn += statement.execute(params![source_id, relative])?;
+            }
+        }
+        commit(tx)?;
+        Ok(withdrawn)
+    }
+
     pub(crate) fn finish_scan(
         &self,
         source_id: &str,

@@ -47,6 +47,17 @@ impl MediaChange {
     fn is_removal(&self) -> bool {
         matches!(self, Self::Removed(_))
     }
+
+    fn is_arrival(&self) -> bool {
+        matches!(self, Self::Added(_) | Self::Renamed(_, _))
+    }
+}
+
+fn supersedes(event: &MediaChange, existing: &MediaChange) -> bool {
+    if existing.is_removal() {
+        return event.is_arrival();
+    }
+    true
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -110,7 +121,7 @@ pub fn settle(
     for event in events {
         let key = event.target().to_path_buf();
         let replacement = match collapsed.get(&key) {
-            Some(existing) => existing.is_removal() || !event.is_removal(),
+            Some(existing) => supersedes(event, existing),
             None => {
                 order.push(key.clone());
                 true
@@ -386,6 +397,27 @@ mod tests {
             ],
             "an add after a remove is an ingest, not a withdrawal"
         );
+    }
+
+    #[test]
+    fn a_removal_survives_the_metadata_noise_that_follows_it() {
+        let mut hidden = HashSet::new();
+        let path = PathBuf::from("/media/Film.2020.mkv");
+        let burst = [
+            MediaChange::Added(path.clone()),
+            MediaChange::Removed(path.clone()),
+            MediaChange::Modified(path.clone()),
+            MediaChange::Modified(path.clone()),
+        ];
+
+        let emitted = settle(&burst, &mut hidden, quiet(), instant());
+
+        assert_eq!(
+            emitted,
+            vec![MediaChange::Removed(path.clone())],
+            "a removal was replaced by the metadata events that trailed it"
+        );
+        assert_eq!(plan(Path::new("/media"), &emitted).forget, vec![path]);
     }
 
     #[test]

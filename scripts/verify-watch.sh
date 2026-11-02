@@ -81,23 +81,36 @@ fi
 echo "PASS: the library picked up the new file in ${arrived}s without a rescan"
 
 rm -f "$media/Arrived Just Now (2026).mp4"
+
+row_count() {
+    sqlite3 "$library" "select count(*) from files where relative_path like '%$1%';" 2>/dev/null || echo 0
+}
+
 available_rows() {
     sqlite3 "$library" \
         "select count(*) from files where relative_path like '%Arrived Just Now%' and available = 1;" \
         2>/dev/null || echo 0
 }
 
+removed=$(python3 -c 'import time;print(time.time())')
 gone=""
 for _ in $(seq 1 40); do
     if [[ "$(available_rows)" == "0" ]]; then
-        gone="yes"
+        gone=$(python3 -c 'import time;print(round(time.time()-'"$removed"',2))')
         break
     fi
     sleep 0.25
 done
 
 if [[ -z "$gone" ]]; then
-    echo "NOTE: the removed file is still listed as available after 10s; the reconcile pass corrects it later (P2-08)"
-else
-    echo "PASS: the removed file stopped being available within 10s"
+    echo "FAIL: the removed file is still listed as available after 10s"
+    tail -10 "$log" >&2
+    exit 1
 fi
+
+if [[ "$(row_count 'Arrived Just Now')" != "1" ]]; then
+    echo "FAIL: the withdrawal deleted the row instead of marking it unavailable"
+    exit 1
+fi
+
+echo "PASS: the removed file stopped being available in ${gone}s and kept its history"
