@@ -60,25 +60,25 @@ accessibility is documented as blocked upstream with evidence.
 
 | Measure | Result |
 | --- | --- |
-| Applicable macOS requirements | **50** (25 functional + 10 quality + 15 acceptance steps) |
+| Applicable macOS requirements | **49** (24 functional + 10 quality + 15 acceptance steps; F18 PiP was withdrawn on 2026-11-02) |
 | Complete | **45** |
-| Partial | **4** |
+| Partial | **3** |
 | Missing | **0** |
 | Broken | **0** |
 | Unverified | **1** (acceptance step 8: 4K on battery) |
-| Blocked | **4 rows carry a named blocker** (F05 live, F15 live, F18 native PiP, F23) |
+| Blocked | **3 rows carry a named blocker** (F05 live, F15 live, F23) |
 | Not applicable to macOS | **0** of these 50 |
-| Outstanding implementation tasks | **2 P1** (P1-05 PiP, P1-09 accessibility) and **0 P2**; P1-03 is implemented and needs one owner look; P1-12's mechanism is complete and only its execution needs the owner |
+| Outstanding implementation tasks | **1 P1** (P1-09 accessibility) and **0 P2**; P1-03 is implemented and needs one owner look; P1-12's mechanism is complete and only its execution needs the owner |
 | Outstanding human/device tasks | **9** (8 owner observations + 1 owner hardware run) |
 
 The four measures the brief asks to keep apart:
 
 | | Value | Meaning |
 | --- | --- | --- |
-| **Implementation** | 31 of 35 product/quality areas implemented in full (89 %), 4 partial (11 %), 0 absent | every feature area has working code behind it |
-| **Automated verification** | 33 of 35 areas have an automated check that ran | the 2 exceptions are the live provider calls (F05, F15), which need an owner key, and OS-level PiP (F18) |
+| **Implementation** | 31 of 34 product/quality areas implemented in full (91 %), 3 partial (9 %), 0 absent | every feature area has working code behind it |
+| **Automated verification** | 33 of 34 areas have an automated check that ran | the exception is the live provider calls (F05, F15), which need an owner key |
 | **Human/device acceptance** | 7 of 15 checklist steps closed; 7 half-closed; 1 needs the owner and the hardware | see §5 |
-| **Everyday readiness** | **usable now** for 1080p and 4K at the source frame rate: 24.4 fps at 13.95 % mean CPU on 4K HEVC Main10 through the OpenGL path, against 24.2 fps at 89.8 % on the old one | HDR10 reaches an extended-range swapchain and needs one owner look; no OS-wide PiP; no online enrichment or subtitle search without an owner key |
+| **Everyday readiness** | **usable now** for 1080p and 4K at the source frame rate: 24.4 fps at 13.95 % mean CPU on 4K HEVC Main10 through the OpenGL path, against 24.2 fps at 89.8 % on the old one | HDR10 reaches an extended-range swapchain and needs one owner look; no PiP at all (withdrawn 2026-11-02); no online enrichment or subtitle search without an owner key |
 
 **What changed in the second session, measured rather than asserted.** The
 application's own `SCREENROOM_PLAY_CHECK`, same 4K HEVC Main10 fixture, 24 fps
@@ -108,7 +108,7 @@ OpenGL path meets all three on this machine.
 4. **Detail and playback.** Seasons and episodes in the right order, Enter plays the
    highlighted episode, resume from the stored place, pause/seek ±10 s/scrub,
    fullscreen, audio and subtitle track pickers read back from libmpv, subtitle size
-   and position, an in-app mini player, up-next with a cancelable countdown,
+   and position, up-next with a cancelable countdown,
    manually pinned skip-intro/credits markers, keep-open previews on browse.
 5. **Around the film.** Local NFO metadata and genres, imported subtitle files kept
    and reused offline, remux/audio-fix/h264 conversion into a separate folder with
@@ -172,7 +172,7 @@ player's chrome receding has not been watched in a window. That is P2-06 below.
 | F15 | Subtitle search and management | **COMPLETE (core) / BLOCKED (live)** — OpenSubtitles-shaped provider with Bengali, quota/login/rate-limit states and a host allowlist on downloads; import, reuse and removal unchanged | `tests/providers_subtitles.rs` (19), `step_21` | step 5 | owner key + TLS transport + offline-retention decision |
 | F16 | Local recommendations | COMPLETE | recommendation tests | — | — |
 | F17 | Browse previews | COMPLETE | `step_17` (dwell, one decoder, reduced motion, cleanup) | look at a card | — |
-| F18 | Picture-in-Picture | **PARTIAL** — in-app mini player, labelled as such; no macOS PiP | `step_20` | — | ADR-016: iced/wgpu has no `AVPlayerLayer` (P1-05) |
+| F18 | Picture-in-Picture | **WITHDRAWN (2026-11-02)** — not offered: no OS PiP and no mini player | — | — | not wanted |
 | F19 | Casting | **COMPLETE (session) / UNVERIFIED (device)** — discovery, description parsing, session-scoped stream endpoint, SOAP AVTransport control, disconnect recovery, all proven against an in-process fake receiver | `casting`/`cast_stream`/`cast_session` tests (36) | — | no real receiver on this network (P1-08) |
 | F20 | Backup and recovery | COMPLETE | `step_13`, restore-safety tests | step 13 | — |
 | F21 | Settings and secrets | COMPLETE | `settings_are_operable_without_a_pointer`, every action reachable | step 15 | — |
@@ -376,32 +376,17 @@ than reclassified.
 
 ---
 
-#### P1-05 · macOS Picture-in-Picture (F18) — **decision recorded, implementation open**
+#### P1-05 · macOS Picture-in-Picture (F18) — **WITHDRAWN, nothing to do**
 
-- **Requirement:** F18.
-- **Status:** PARTIAL — a labelled in-app mini player exists and is honest about what
-  it is; system-wide PiP does not exist. The decision and the exact API constraint
-  are now recorded as **ADR-016**.
-- **What is missing:** the second display path PiP needs.
-- **Where:** `apps/desktop/src/app.rs` (`reduce_to_mini`, `mini_view`).
-- **Why it matters:** the PRD allows "authentic OS behaviour **or** a distinctly
-  labelled mini-player"; the app chose the second, and that choice is now a decision
-  rather than a sentence in a ledger.
-- **What the SDK actually says** (checked in the installed macOS SDK, not recalled):
-  `AVPictureInPictureController` takes an `AVPlayerLayer` (`initWithPlayerLayer:`) or,
-  since macOS 12, an `AVSampleBufferDisplayLayer` through
-  `AVPictureInPictureControllerContentSource` with a playback delegate. A wgpu
-  surface is neither, so PiP means wrapping decoded frames as `CMSampleBuffer`s — and
-  the OpenGL/`IOSurface` path in P1-01 is the natural source for an
-  `IOSurface`-backed `CVPixelBuffer`.
-- **Work:** only if real PiP is wanted: prototype an `AVSampleBufferDisplayLayer` fed
-  from the player's surfaces and drive `AVPictureInPictureController` from it, keeping
-  the in-app player as the default.
-- **Depends on:** P1-01 for the surfaces.
-- **Acceptance:** PiP floats the film outside the window, controls work, and closing
-  PiP returns to the real player without reloading.
-- **Automated verification:** the mini player's `step_20` stays green either way.
-- **Human verification:** the floating window itself.
+- **Requirement:** none. F18 was withdrawn on 2026-11-02: the owner does not want
+  Picture-in-Picture, so neither the OS feature nor the in-app mini player that
+  stood in for it is offered.
+- **Status:** removed, not deferred. There is no task, no blocker and no code. ADR-016
+  is marked WITHDRAWN and nothing else depends on it.
+- **Left as history:** a mini player did exist between 2026-11-01 and 2026-11-02, with
+  its own acceptance step; both were deleted. The SDK constraint recorded in ADR-016
+  (a wgpu surface is neither an `AVPlayerLayer` nor an `AVSampleBufferDisplayLayer`,
+  so real PiP would need a second display path) remains true and remains unused.
 
 ---
 
@@ -728,7 +713,7 @@ than reclassified.
 
 Detail:
 
-- **Flaky test 1 — `step_20_…_mini_player…`.** The checkpoint writer throttles to one
+- **Flaky test 1 — the mini-player step since deleted.** The checkpoint writer throttles to one
   write per second, and the close path used the same throttle. A viewing that lasted
   a few hundred milliseconds therefore kept only its first checkpoint, which lands at
   0 ms, so the stored place was 0. `record` now takes a `force` flag and the two
@@ -774,7 +759,7 @@ check that actually ran; `Action` is what is still owed and by whom.
 | F15 | Subtitle search | COMPLETE core / BLOCKED live | `providers_subtitles.rs` (19) | key, TLS transport, offline-retention decision | owner |
 | F16 | Local recommendations | COMPLETE | recommendation tests | — | — |
 | F17 | Browse previews | COMPLETE | `step_17` | — | — |
-| F18 | Picture-in-Picture | PARTIAL | `step_20` | ADR-016; needs an `AVSampleBufferDisplayLayer` bridge (P1-05) | agent |
+| F18 | Picture-in-Picture | WITHDRAWN (2026-11-02) | — | not wanted; ADR-016 withdrawn | — |
 | F19 | Casting | COMPLETE session / UNVERIFIED device | `casting`/`cast_stream`/`cast_session` (36) | a real receiver on the LAN (P1-08) | owner |
 | F20 | Backup and recovery | COMPLETE | `step_13`, recovery tests (9), every-table round-trip | — | — |
 | F21 | Settings and secrets | COMPLETE | `settings_are_operable_without_a_pointer`, action strip | — | — |
@@ -853,15 +838,12 @@ What a next session should pick up, in this order:
    `SCREENROOM_HDR=extended` plus an owner look at a film, then flipping the
    default. See ADR-019 for why a PQ-coloured layer and a shared drawable cannot
    both be right.
-2. **P1-05 native PiP.** ADR-016 records the constraint. The missing piece is an
-   `AVSampleBufferDisplayLayer` fed from `SurfaceFrame`s as `CVPixelBuffer`s; the
-   surfaces now exist, so this is a bounded project rather than a guess.
-3. **P1-09 accessibility.** Blocked on iced shipping `accesskit` (ADR-017). If that
+2. **P1-09 accessibility.** Blocked on iced shipping `accesskit` (ADR-017). If that
    is not acceptable, the out-of-tree `NSAccessibility` bridge is the only honest
    route and needs an explicit owner decision.
-4. **P2-05's spirit, not its letter:** paging is measured at 10k and 50k; re-run
+3. **P2-05's spirit, not its letter:** paging is measured at 10k and 50k; re-run
    `library_bench` after any query change and keep the numbers in this document.
-5. **Owner-gated, and only the owner can close them:** P1-04 (the eight
+4. **Owner-gated, and only the owner can close them:** P1-04 (the eight
    observations), P1-11 (the SSD and the real 3240×2160 Main10 file), P1-12 (Wi-Fi
    off), P2-06 (the rebuilt interface at five widths), and the live provider calls
    in P1-06/P1-07.
@@ -893,7 +875,7 @@ check that actually ran; `Action` is what is still owed and by whom.
 | F15 | Subtitle search | COMPLETE core / BLOCKED live | `providers_subtitles.rs` (19) | key, TLS transport, offline-retention decision | owner |
 | F16 | Local recommendations | COMPLETE | recommendation tests | — | — |
 | F17 | Browse previews | COMPLETE | `step_17` | — | — |
-| F18 | Picture-in-Picture | PARTIAL | `step_20` | ADR-016; needs an `AVSampleBufferDisplayLayer` bridge (P1-05) | agent |
+| F18 | Picture-in-Picture | WITHDRAWN (2026-11-02) | — | not wanted; ADR-016 withdrawn | — |
 | F19 | Casting | COMPLETE session / UNVERIFIED device | `casting`/`cast_stream`/`cast_session` (36) | a real receiver on the LAN (P1-08) | owner |
 | F20 | Backup and recovery | COMPLETE | `step_13`, recovery tests (9), every-table round-trip | — | — |
 | F21 | Settings and secrets | COMPLETE | `settings_are_operable_without_a_pointer`, action strip | — | — |

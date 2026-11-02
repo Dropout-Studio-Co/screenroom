@@ -116,7 +116,7 @@ fixture's burnt-in timecode, and the automated frame-rate and resume tests.
 Windows and 4K/HDR remain BLOCKED until that hardware exists.
 
 **Not in M2:** subtitles/track selection, full library UI, design-system styling
-of the player, previews, PiP.
+of the player, previews. (PiP was withdrawn entirely on 2026-11-02.)
 
 ---
 
@@ -228,7 +228,7 @@ behaviour.
 | F14 markers | all | manual intro/credits intervals validated against edition duration; skip only inside a verified interval |
 | F16 recommendations | desktop/TV | explainable local ranking over owned, available media; no hosted AI |
 | F17 previews | desktop | single muted decoder, delay, resource cap, reduced-motion off switch |
-| F18 PiP | desktop/TV | true OS PiP where supported, otherwise a clearly labelled mini-player |
+| F18 PiP | desktop/TV | withdrawn 2026-11-02: not wanted, so neither OS PiP nor a labelled mini-player is offered |
 | F19 casting | desktop | opt-in, session-scoped DLNA; no always-on endpoint |
 | F23 directory | all | user-entered bookmarks with provenance, rights and last-checked status |
 | F24 acquisition | desktop | lawful external handoff; no scraping or embedded torrent client |
@@ -275,7 +275,7 @@ a truthful reason and a recovery path.
 | F15 | Subtitle search | M6 | not started |
 | F16 | Local recommendations | M6 | not started |
 | F17 | Browse previews | M6 | not started |
-| F18 | PiP / mini-player | M6 | not started |
+| F18 | PiP / mini-player | — | withdrawn 2026-11-02: not wanted; nothing is offered |
 | F19 | Casting | M6 | not started |
 | F20 | Backup and recovery | M3 (port of validated format) | delivered: VACUUM-into staging, validated restore, previous library kept |
 | F21 | Settings and secrets | M3 | delivered: typed preferences, profiles, folders, backup entry points |

@@ -205,8 +205,10 @@ arrives, and the application ticked every 16 ms while a player existed — so it
 51.5/s for a 24 fps source. The tick now watches `Player::frame_ticks()`, an atomic the
 worker bumps when it publishes a frame, and only produces a message on a new frame or
 every 250 ms of idle. Interleaved release runs: **4K drawn 13.7–14.1/s** (delivered
-11.9–12.4), **1080p drawn 29.9/s** (delivered 28.7). Playback, seeking, resume and the
-mini-player were exercised by the existing 354-test suite plus the bundle walkthrough.
+11.9–12.4), **1080p drawn 29.9/s** (delivered 28.7). Playback, seeking, resume and
+every other player control were exercised by the existing test suite plus the bundle
+walkthrough; the mini player that this session also covered was removed on 2026-11-02
+with the feature.
 
 **The limit is mpv's CPU colour conversion.** `SCREENROOM_PLAYER_TRACE` puts
 `mpv_render_context_render` at **41.0–41.2 ms** for a 3840×2160 frame, identical with
