@@ -44,7 +44,40 @@ const SORTS: [SortChoice; 4] = [
 pub type Sort = SortChoice;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Filter {
+pub struct FilterChips {
+    pub kind: KindFilter,
+
+    pub watch: WatchFilter,
+
+    pub available_only: bool,
+
+    pub watchlist_only: bool,
+
+    pub favorites_only: bool,
+}
+
+impl FilterChips {
+    pub fn none() -> Self {
+        Self {
+            kind: KindFilter::All,
+            watch: WatchFilter::Any,
+            available_only: false,
+            watchlist_only: false,
+            favorites_only: false,
+        }
+    }
+
+    pub fn narrowed(&self) -> bool {
+        self.kind != KindFilter::All
+            || self.watch != WatchFilter::Any
+            || self.available_only
+            || self.watchlist_only
+            || self.favorites_only
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Chip {
     All,
 
     Films,
@@ -54,47 +87,101 @@ pub enum Filter {
     Unwatched,
 
     AvailableOffline,
+
+    Watchlist,
+
+    Favourites,
 }
 
-impl Filter {
-    pub const ALL: [Filter; 5] = [
-        Filter::All,
-        Filter::Films,
-        Filter::Series,
-        Filter::Unwatched,
-        Filter::AvailableOffline,
+impl Chip {
+    pub const ALL: [Chip; 7] = [
+        Chip::All,
+        Chip::Films,
+        Chip::Series,
+        Chip::Unwatched,
+        Chip::AvailableOffline,
+        Chip::Watchlist,
+        Chip::Favourites,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
-            Filter::All => "All",
-            Filter::Films => "Films",
-            Filter::Series => "Series",
-            Filter::Unwatched => "Unwatched",
-            Filter::AvailableOffline => "Available offline",
+            Chip::All => "All",
+            Chip::Films => "Films",
+            Chip::Series => "Series",
+            Chip::Unwatched => "Unwatched",
+            Chip::AvailableOffline => "Available offline",
+            Chip::Watchlist => "Watchlist",
+            Chip::Favourites => "Favourites",
+        }
+    }
+
+    pub fn kind_group(self) -> bool {
+        matches!(self, Chip::All | Chip::Films | Chip::Series)
+    }
+
+    pub fn active(self, filters: FilterChips) -> bool {
+        match self {
+            Chip::All => filters.kind == KindFilter::All,
+            Chip::Films => filters.kind == KindFilter::Movies,
+            Chip::Series => filters.kind == KindFilter::Series,
+            Chip::Unwatched => filters.watch == WatchFilter::Unwatched,
+            Chip::AvailableOffline => filters.available_only,
+            Chip::Watchlist => filters.watchlist_only,
+            Chip::Favourites => filters.favorites_only,
         }
     }
 
     pub fn message(self, active: bool) -> Message {
         match self {
-            Filter::All => Message::KindChanged(KindFilter::All),
-            Filter::Films => Message::KindChanged(if active {
+            Chip::All => Message::KindChanged(KindFilter::All),
+            Chip::Films => Message::KindChanged(if active {
                 KindFilter::All
             } else {
                 KindFilter::Movies
             }),
-            Filter::Series => Message::KindChanged(if active {
+            Chip::Series => Message::KindChanged(if active {
                 KindFilter::All
             } else {
                 KindFilter::Series
             }),
-            Filter::Unwatched => Message::WatchChanged(if active {
+            Chip::Unwatched => Message::WatchChanged(if active {
                 WatchFilter::Any
             } else {
                 WatchFilter::Unwatched
             }),
-            Filter::AvailableOffline => Message::ToggleAvailableOnly(!active),
+            Chip::AvailableOffline => Message::ToggleAvailableOnly(!active),
+            Chip::Watchlist => Message::ToggleWatchlistOnly(!active),
+            Chip::Favourites => Message::ToggleFavoritesOnly(!active),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChipRows {
+    Single,
+
+    Stacked,
+}
+
+pub fn chip_rows(width: f32) -> ChipRows {
+    match Breakpoint::at(capped_window(width)) {
+        Breakpoint::Narrow => ChipRows::Stacked,
+        _ => ChipRows::Single,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderLayout {
+    Inline,
+
+    Stacked,
+}
+
+pub fn header_layout(width: f32) -> HeaderLayout {
+    match Breakpoint::at(capped_window(width)) {
+        Breakpoint::Narrow => HeaderLayout::Stacked,
+        _ => HeaderLayout::Inline,
     }
 }
 
@@ -109,11 +196,7 @@ pub struct Library<'a> {
 
     pub query: &'a str,
 
-    pub filter: Filter,
-
-    pub watchlist_only: bool,
-
-    pub favorites_only: bool,
+    pub filters: FilterChips,
 
     pub sort: Sort,
 
@@ -196,7 +279,41 @@ impl<'a> Library<'a> {
         .spacing(theme::gap(Gap::Group))
         .align_y(Alignment::End);
 
-        let field = container(
+        let sort = pick_list(SORTS, Some(self.sort), Message::SortChanged)
+            .text_size(tokens.type_scale.label)
+            .font(theme::regular())
+            .padding([theme::gap(Gap::Card), theme::gap(Gap::Group)])
+            .style(field_pick_list)
+            .menu_style(dark_menu);
+
+        match header_layout(self.width) {
+            HeaderLayout::Stacked => column![
+                row![heading, Space::new().width(Length::Fill), sort]
+                    .spacing(theme::gap(Gap::Group))
+                    .align_y(Alignment::Center)
+                    .width(Length::Fill),
+                self.search_field(Length::Fill),
+            ]
+            .spacing(theme::gap(Gap::Card))
+            .width(Length::Fill)
+            .into(),
+            HeaderLayout::Inline => row![
+                heading,
+                Space::new().width(Length::Fill),
+                self.search_field(Length::Fixed(SEARCH_WIDTH)),
+                sort,
+            ]
+            .spacing(theme::gap(Gap::Group))
+            .align_y(Alignment::Center)
+            .width(Length::Fill)
+            .into(),
+        }
+    }
+
+    fn search_field(&self, width: Length) -> Element<'a, Message> {
+        let tokens = design::tokens();
+
+        container(
             row![
                 icons::icon(Icon::Search, 16.0, theme::muted()),
                 text_input("Search titles", self.query)
@@ -210,109 +327,108 @@ impl<'a> Library<'a> {
             .spacing(theme::gap(Gap::Card))
             .align_y(Alignment::Center),
         )
-        .width(Length::Fixed(SEARCH_WIDTH))
+        .width(width)
         .padding(Padding {
             top: theme::gap(Gap::Card),
             bottom: theme::gap(Gap::Card),
             left: theme::gap(Gap::Group),
             right: theme::gap(Gap::Group),
         })
-        .style(field_frame);
-
-        let sort = pick_list(SORTS, Some(self.sort), Message::SortChanged)
-            .text_size(tokens.type_scale.label)
-            .font(theme::regular())
-            .padding([theme::gap(Gap::Card), theme::gap(Gap::Group)])
-            .style(field_pick_list)
-            .menu_style(dark_menu);
-
-        row![heading, Space::new().width(Length::Fill), field, sort,]
-            .spacing(theme::gap(Gap::Group))
-            .align_y(Alignment::Center)
-            .width(Length::Fill)
-            .into()
+        .style(field_frame)
+        .into()
     }
 
     fn chips(&self) -> Element<'a, Message> {
         let tokens = design::tokens();
 
-        let mut strip = row![]
+        let mut kinds = row![]
             .spacing(theme::gap(Gap::Card))
             .align_y(Alignment::Center);
 
-        for filter in Filter::ALL {
-            let active = filter == self.filter;
-            strip = strip.push(
-                button(
-                    text(filter.label())
-                        .size(tokens.type_scale.label)
-                        .font(if active {
-                            theme::medium()
-                        } else {
-                            theme::regular()
-                        })
-                        .color(if active {
-                            theme::ground()
-                        } else {
-                            theme::ink()
-                        }),
-                )
-                .on_press(filter.message(active))
-                .padding([theme::gap(Gap::Card), theme::gap(Gap::Group)])
-                .style(chip_style(active)),
-            );
+        let mut toggles = row![]
+            .spacing(theme::gap(Gap::Card))
+            .align_y(Alignment::Center);
+
+        for chip in Chip::ALL {
+            let active = chip.active(self.filters);
+            let pressed = button(
+                text(chip.label())
+                    .size(tokens.type_scale.label)
+                    .font(if active {
+                        theme::medium()
+                    } else {
+                        theme::regular()
+                    })
+                    .color(if active {
+                        theme::ground()
+                    } else {
+                        theme::ink()
+                    }),
+            )
+            .on_press(chip.message(active))
+            .padding([theme::gap(Gap::Card), theme::gap(Gap::Group)])
+            .style(chip_style(active));
+
+            if chip.kind_group() {
+                kinds = kinds.push(pressed);
+            } else {
+                toggles = toggles.push(pressed);
+            }
         }
 
-        for (label, active, message) in [
-            (
-                "Watchlist",
-                self.watchlist_only,
-                Message::ToggleWatchlistOnly(!self.watchlist_only),
-            ),
-            (
-                "Favourites",
-                self.favorites_only,
-                Message::ToggleFavoritesOnly(!self.favorites_only),
-            ),
-        ] {
-            strip = strip.push(
-                button(
-                    text(label)
-                        .size(tokens.type_scale.label)
-                        .font(if active {
-                            theme::medium()
-                        } else {
-                            theme::regular()
-                        })
-                        .color(if active {
-                            theme::ground()
-                        } else {
-                            theme::ink()
-                        }),
-                )
-                .on_press(message)
-                .padding([theme::gap(Gap::Card), theme::gap(Gap::Group)])
-                .style(chip_style(active)),
-            );
-        }
-
-        if !self.genres.is_empty() {
+        let genre = (!self.genres.is_empty()).then(|| {
             let mut options = vec![ANY_GENRE.to_string()];
             options.extend(self.genres.iter().cloned());
             let active = self.genre.is_some();
 
-            strip = strip.push(
-                pick_list(options, self.genre.map(str::to_string), |choice: String| {
-                    Message::GenreChanged((choice != ANY_GENRE).then_some(choice))
-                })
-                .placeholder("Genre")
-                .text_size(tokens.type_scale.label)
-                .font(theme::regular())
-                .padding([theme::gap(Gap::Card), theme::gap(Gap::Group)])
-                .style(chip_pick_list(active))
-                .menu_style(dark_menu),
-            );
-        }
+            let pick = pick_list(options, self.genre.map(str::to_string), |choice: String| {
+                Message::GenreChanged((choice != ANY_GENRE).then_some(choice))
+            })
+            .placeholder("Genre")
+            .text_size(tokens.type_scale.label)
+            .font(theme::regular())
+            .padding([theme::gap(Gap::Card), theme::gap(Gap::Group)])
+            .style(chip_pick_list(active))
+            .menu_style(dark_menu);
+
+            Element::<Message>::from(pick)
+        });
+
+        let rule = || {
+            container(
+                Space::new()
+                    .width(Length::Fixed(1.0))
+                    .height(Length::Fixed(18.0)),
+            )
+            .height(Length::Fixed(18.0))
+            .style(|_theme| container::Style {
+                background: Some(Background::Color(theme::hair())),
+                ..container::Style::default()
+            })
+        };
+
+        let strip: Element<'a, Message> = match chip_rows(self.width) {
+            ChipRows::Single => {
+                let mut strip = row![kinds, rule(), toggles]
+                    .spacing(theme::gap(Gap::Card))
+                    .align_y(Alignment::Center);
+
+                if let Some(genre) = genre {
+                    strip = strip.push(genre);
+                }
+
+                strip.into()
+            }
+            ChipRows::Stacked => {
+                let mut rows = column![kinds, toggles].spacing(theme::gap(Gap::Card));
+
+                if let Some(genre) = genre {
+                    rows = rows.push(row![genre]);
+                }
+
+                rows.into()
+            }
+        };
 
         let line = text(self.source_line.clone())
             .size(tokens.type_scale.caption)
@@ -383,12 +499,12 @@ impl<'a> Library<'a> {
     fn empty(&self) -> Element<'a, Message> {
         let tokens = design::tokens();
         let narrowed =
-            !self.query.trim().is_empty() || self.filter != Filter::All || self.genre.is_some();
+            !self.query.trim().is_empty() || self.filters.narrowed() || self.genre.is_some();
 
         let (headline, detail) = if narrowed {
             (
                 "Nothing matches these filters.",
-                "Clear the search or choose All to see the whole library.",
+                "Clear the search and switch the other filters off to see the whole library.",
             )
         } else {
             (
@@ -840,10 +956,11 @@ mod tests {
     use screenroom_core::{LibraryItem, MediaKind};
 
     use super::{
-        Filter, Library, PAGE_TILES, SortChoice, SourcePlacement, capped_window, source_line,
-        source_placement, tile_title, tile_width, visible_tiles,
+        Chip, ChipRows, FilterChips, HeaderLayout, Library, PAGE_TILES, SortChoice,
+        SourcePlacement, capped_window, chip_rows, header_layout, source_line, source_placement,
+        tile_title, tile_width, visible_tiles,
     };
-    use crate::app::Screen;
+    use crate::app::{KindFilter, Screen, WatchFilter};
     use crate::ui::components::poster::{CARD_GAP, card_columns};
     use crate::ui::route::{FocusPos, Nav};
     use crate::ui::theme;
@@ -963,9 +1080,7 @@ mod tests {
             page: 0,
             pages: 1,
             query: "",
-            filter: Filter::All,
-            watchlist_only: false,
-            favorites_only: false,
+            filters: FilterChips::none(),
             sort: SortChoice::Title,
             source_line: source_line(0, 0, None),
             nav: &nav,
@@ -1021,9 +1136,13 @@ mod tests {
             page: 0,
             pages: 417,
             query: "the",
-            filter: Filter::Films,
-            watchlist_only: true,
-            favorites_only: false,
+            filters: FilterChips {
+                kind: KindFilter::Movies,
+                watch: WatchFilter::Unwatched,
+                available_only: false,
+                watchlist_only: true,
+                favorites_only: false,
+            },
             sort: SortChoice::Added,
             source_line: source_line(2, 10_000, Some("2 hours ago")),
             nav: &nav,
@@ -1035,5 +1154,62 @@ mod tests {
 
         assert_eq!(library.focus_index(), Some(5));
         let _ = library.view();
+    }
+
+    #[test]
+    fn each_chip_shows_only_its_own_filter_and_leaves_the_others_alone() {
+        let films = FilterChips {
+            kind: KindFilter::Movies,
+            ..FilterChips::none()
+        };
+        let films_and_unwatched = FilterChips {
+            watch: WatchFilter::Unwatched,
+            ..films
+        };
+
+        assert!(
+            Chip::Films.active(films_and_unwatched),
+            "choosing Unwatched may not un-highlight the Films filter that is still applied"
+        );
+        assert!(Chip::Unwatched.active(films_and_unwatched));
+        assert!(!Chip::All.active(films_and_unwatched));
+        assert!(!Chip::Series.active(films_and_unwatched));
+
+        let everything = FilterChips {
+            watch: WatchFilter::Unwatched,
+            available_only: true,
+            watchlist_only: true,
+            favorites_only: true,
+            ..FilterChips::none()
+        };
+        assert!(Chip::All.active(everything));
+        assert!(Chip::Unwatched.active(everything));
+        assert!(Chip::AvailableOffline.active(everything));
+        assert!(Chip::Watchlist.active(everything));
+        assert!(Chip::Favourites.active(everything));
+
+        assert!(everything.narrowed());
+        assert!(!FilterChips::none().narrowed());
+    }
+
+    #[test]
+    fn the_header_and_the_chips_stack_before_they_can_clip() {
+        for width in [640.0_f32, 700.0, 899.0] {
+            assert_eq!(
+                header_layout(width),
+                HeaderLayout::Stacked,
+                "at {width}px the search field needs its own row"
+            );
+            assert_eq!(
+                chip_rows(width),
+                ChipRows::Stacked,
+                "at {width}px the filter chips need two rows"
+            );
+        }
+
+        for width in [900.0_f32, 1_024.0, 1_440.0, 3_440.0] {
+            assert_eq!(header_layout(width), HeaderLayout::Inline);
+            assert_eq!(chip_rows(width), ChipRows::Single);
+        }
     }
 }

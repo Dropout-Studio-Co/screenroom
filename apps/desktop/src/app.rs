@@ -39,6 +39,10 @@ const STATUS_TICK: Duration = Duration::from_millis(250);
 
 const INITIAL_WINDOW_WIDTH: f32 = 1280.0;
 
+const MIN_WINDOW_WIDTH: f32 = 640.0;
+
+const MIN_WINDOW_HEIGHT: f32 = 480.0;
+
 const PAGE_ROWS: usize = 6;
 
 const PAGE_SIZE: i64 = (DEFAULT_COLUMNS * PAGE_ROWS) as i64;
@@ -79,7 +83,7 @@ pub fn run() -> iced::Result {
     let window = iced::window::Settings {
         visible: !hides_its_window(),
         size: verification_size(),
-        min_size: Some(iced::Size::new(900.0, 600.0)),
+        min_size: Some(minimum_window_size()),
         ..Default::default()
     };
 
@@ -98,17 +102,28 @@ pub fn run() -> iced::Result {
     application.run()
 }
 
+pub fn minimum_window_size() -> iced::Size {
+    iced::Size::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+}
+
 fn verification_size() -> iced::Size {
-    let read = |name: &str, fallback: f32| {
-        std::env::var(name)
-            .ok()
+    window_size_from(
+        std::env::var("SCREENROOM_WINDOW_WIDTH").ok().as_deref(),
+        std::env::var("SCREENROOM_WINDOW_HEIGHT").ok().as_deref(),
+    )
+}
+
+fn window_size_from(width: Option<&str>, height: Option<&str>) -> iced::Size {
+    let read = |value: Option<&str>, minimum: f32, fallback: f32| {
+        value
             .and_then(|value| value.trim().parse::<f32>().ok())
-            .filter(|value| value.is_finite() && *value >= 320.0)
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .map(|value| value.max(minimum))
             .unwrap_or(fallback)
     };
     iced::Size::new(
-        read("SCREENROOM_WINDOW_WIDTH", INITIAL_WINDOW_WIDTH),
-        read("SCREENROOM_WINDOW_HEIGHT", 800.0),
+        read(width, MIN_WINDOW_WIDTH, INITIAL_WINDOW_WIDTH),
+        read(height, MIN_WINDOW_HEIGHT, 800.0),
     )
 }
 
@@ -5209,9 +5224,7 @@ impl App {
             page: self.browse.page as u32,
             pages: self.browse.page_count() as u32,
             query: &self.browse.text,
-            filter: self.browse_filter(),
-            watchlist_only: self.browse.watchlist_only,
-            favorites_only: self.browse.favorites_only,
+            filters: self.filter_chips(),
             sort: self.browse.sort,
             source_line: ui::screens::library::source_line(
                 self.sources.len(),
@@ -5227,18 +5240,13 @@ impl App {
         .view()
     }
 
-    fn browse_filter(&self) -> ui::screens::library::Filter {
-        use ui::screens::library::Filter;
-        if self.browse.available_only {
-            Filter::AvailableOffline
-        } else if self.browse.watch == WatchFilter::Unwatched {
-            Filter::Unwatched
-        } else {
-            match self.browse.kind {
-                KindFilter::Movies => Filter::Films,
-                KindFilter::Series => Filter::Series,
-                KindFilter::All => Filter::All,
-            }
+    fn filter_chips(&self) -> ui::screens::library::FilterChips {
+        ui::screens::library::FilterChips {
+            kind: self.browse.kind,
+            watch: self.browse.watch,
+            available_only: self.browse.available_only,
+            watchlist_only: self.browse.watchlist_only,
+            favorites_only: self.browse.favorites_only,
         }
     }
 
@@ -6617,6 +6625,47 @@ mod tests {
         assert!(
             card < 600.0,
             "a card on the ultrawide is {card:.0}px wide, which is a billboard"
+        );
+    }
+
+    #[test]
+    fn the_window_has_a_minimum_it_can_actually_draw() {
+        let minimum = minimum_window_size();
+        assert!(
+            minimum.width >= 600.0,
+            "a window narrower than {}px clips the navigation and the library header",
+            minimum.width
+        );
+        assert!(
+            minimum.height >= 480.0,
+            "a window this short hides the grid"
+        );
+        assert_eq!(
+            ui::theme::Breakpoint::at(minimum.width),
+            ui::theme::Breakpoint::Narrow,
+            "the minimum width has to be a width the narrow layout was drawn for"
+        );
+        assert_eq!(
+            ui::screens::library::header_layout(minimum.width),
+            ui::screens::library::HeaderLayout::Stacked,
+            "the header must stack at the narrowest window it allows"
+        );
+    }
+
+    #[test]
+    fn a_requested_window_size_is_raised_to_the_minimum_the_layout_supports() {
+        assert_eq!(
+            window_size_from(Some("320"), Some("240")),
+            minimum_window_size(),
+            "a request below the minimum opens at the minimum, not at the default"
+        );
+        assert_eq!(
+            window_size_from(Some("1280"), Some("800")),
+            iced::Size::new(1280.0, 800.0)
+        );
+        assert_eq!(
+            window_size_from(None, Some(" ")),
+            iced::Size::new(INITIAL_WINDOW_WIDTH, 800.0)
         );
     }
 

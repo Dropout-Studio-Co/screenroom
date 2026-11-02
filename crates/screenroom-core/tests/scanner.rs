@@ -827,10 +827,7 @@ fn scan_paths_refuses_a_file_reached_through_a_symlinked_directory() {
         "a file reached through a symlinked folder must not be read"
     );
     let codes: Vec<_> = summary.issues.iter().map(|issue| issue.code).collect();
-    assert!(
-        codes.contains(&"unsafe_path"),
-        "codes: {codes:?}"
-    );
+    assert!(codes.contains(&"unsafe_path"), "codes: {codes:?}");
     assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 0);
 }
 
