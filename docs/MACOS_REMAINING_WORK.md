@@ -697,6 +697,28 @@ than reclassified.
   captures.
 - **Human verification:** the owner, on a cold library.
 
+#### P2-08 · A deletion reaches the library on the reconcile pass, not immediately — **OPEN**
+
+- **Requirement:** automatic discovery must not leave a film listed that is no
+  longer there, and must never delete history.
+- **Status:** OPEN, with evidence. `scripts/verify-watch.sh` copies a clip into a
+  watched folder and reports **"the library picked up the new file in 4.9s"** —
+  a real FSEvents callback through to a stored row, no rescan. The same script
+  removes the file again and reports that it is still listed as available after
+  ten seconds. The row is not wrong so much as stale: the reconcile pass corrects
+  it, and history is never deleted.
+- **Cause:** a removal is planned correctly, but applying it becomes a full walk,
+  and that walk is submitted while the ingest of the preceding copy is still
+  running, so it is not performed until the next reconcile.
+- **Where:** `apps/desktop/src/app.rs` (`apply_work`, `submit_job`),
+  `apps/desktop/src/watch.rs` (`work_for`).
+- **Work:** queue the withdraw instead of submitting it into a busy worker, or
+  give the core a per-path withdraw so a removal does not need a walk at all.
+- **Acceptance:** `scripts/verify-watch.sh` prints both PASS lines, with the
+  removal under ten seconds, and a missing drive still deletes nothing.
+- **Automated verification:** `scripts/verify-watch.sh`.
+- **Human verification:** none needed beyond the script.
+
 ---
 
 ## 6. What was completed in this session

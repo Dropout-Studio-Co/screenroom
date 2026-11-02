@@ -454,6 +454,8 @@ enum ScanEvent {
         enriched: u64,
     },
 
+    Settling(Vec<String>),
+
     Failed(String),
 }
 
@@ -576,13 +578,15 @@ pub struct App {
     new_root: String,
     scan_token: Option<ScanToken>,
 
-    pending_scans: Vec<String>,
+    scan_queue: crate::watch::Queue,
     scan_events: Option<Receiver<ScanEvent>>,
 
     scan_visited: u64,
     scan_imported: u64,
 
     scan_started_ms: Option<i64>,
+
+    scan_quiet: bool,
 
     scan_refresh_ms: i64,
     status: Option<String>,
@@ -610,7 +614,30 @@ pub struct App {
     terminate_check: Option<PathBuf>,
     terminate_routing: crate::quit::TerminateRouting,
     terminate_deadline: Option<std::time::Instant>,
+
+    auto_discovery: bool,
+    watchers: crate::watch::WatchSet,
+    watch_tick: std::time::Instant,
+    watch_wall: Duration,
+    watch_last_arrival_check: std::time::Instant,
+    watch_reconciled: bool,
+    watch_reconcile_at: std::time::Instant,
+    watch_deferred: Vec<DeferredPath>,
 }
+
+#[derive(Debug, Clone)]
+struct DeferredPath {
+    at: std::time::Instant,
+    source: String,
+    root: PathBuf,
+    path: PathBuf,
+}
+
+const MAX_DEFERRED: usize = 512;
+
+const DEFERRED_RETRY: Duration = Duration::from_secs(3);
+
+const INGEST_STABLE_AGE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsField {
@@ -1126,11 +1153,12 @@ impl App {
             armed_profile: None,
             new_root: String::new(),
             scan_token: None,
-            pending_scans: Vec::new(),
+            scan_queue: crate::watch::Queue::new(),
             scan_events: None,
             scan_visited: 0,
             scan_imported: 0,
             scan_started_ms: None,
+            scan_quiet: false,
             scan_refresh_ms: 0,
             status: None,
             error,
@@ -1154,6 +1182,15 @@ impl App {
             terminate_check: None,
             terminate_routing: crate::quit::TerminateRouting::Unsupported,
             terminate_deadline: None,
+
+            auto_discovery: !cfg!(test),
+            watchers: crate::watch::WatchSet::new(),
+            watch_tick: std::time::Instant::now(),
+            watch_wall: crate::watch::clock(),
+            watch_last_arrival_check: std::time::Instant::now(),
+            watch_reconciled: false,
+            watch_reconcile_at: std::time::Instant::now(),
+            watch_deferred: Vec::new(),
         };
         app.sync_language_inputs();
         app.reload();
@@ -2501,6 +2538,7 @@ impl App {
             return;
         }
         self.drain_scan();
+        self.watch_step();
         if self.scan_token.is_none()
             && let Some(destination) = self.queued_backup.take()
         {
@@ -3055,6 +3093,8 @@ impl App {
         self.armed_remove = None;
         match self.library.remove_source(&source_id) {
             Ok(()) => {
+                self.scan_queue.drop_source(&source_id);
+                self.arm_watchers();
                 self.status = Some(
                     "Folder removed from the library. Its files are untouched on disk.".to_string(),
                 );
@@ -3739,16 +3779,24 @@ impl App {
     }
 
     fn start_scan(&mut self, source_id: String) {
-        if self.scan_token.is_some() {
-            if !self.pending_scans.contains(&source_id) {
-                self.pending_scans.push(source_id);
-            }
-            self.status = Some(format!(
-                "A scan is running; {} more queued.",
-                self.pending_scans.len()
-            ));
+        self.submit_job(crate::watch::Job::Scan {
+            source: source_id,
+            quiet: false,
+        });
+    }
+
+    fn submit_job(&mut self, job: crate::watch::Job) {
+        if let Some(next) = self.scan_queue.submit(job) {
+            self.start_job(next);
             return;
         }
+        self.status = Some(format!(
+            "A scan is running; {} more queued.",
+            self.scan_queue.queued()
+        ));
+    }
+
+    fn start_job(&mut self, job: crate::watch::Job) {
         let token = ScanToken::new();
         self.scan_token = Some(token.clone());
         self.scan_visited = 0;
@@ -3756,15 +3804,16 @@ impl App {
         self.scan_started_ms = Some(now_ms());
 
         self.scan_refresh_ms = 0;
-        self.status = Some("Scanning…".to_string());
+        self.scan_quiet = job.is_quiet();
+        if !self.scan_quiet {
+            self.status = Some("Scanning…".to_string());
+        }
         let (sender, receiver) = std::sync::mpsc::channel();
         self.scan_events = Some(receiver);
         let library = Arc::clone(&self.library);
         let progress_sender = sender.clone();
         std::thread::spawn(move || {
-            let scanner =
-                LibraryScanner::new(&library).with_limits(250_000, 64, Duration::from_secs(2));
-            let outcome = scanner.scan(&source_id, &token, |update| {
+            let mut progress = |update: &screenroom_core::ScanUpdate| {
                 let _ = progress_sender.send(ScanEvent::Progress {
                     visited: update.visited,
                     imported: update.imported,
@@ -3773,13 +3822,31 @@ impl App {
                     complete: false,
                     enriched: 0,
                 });
-            });
+            };
+            let source_id = job.source().to_string();
+            let outcome = match &job {
+                crate::watch::Job::Scan { source, .. } => LibraryScanner::new(&library)
+                    .with_limits(250_000, 64, Duration::from_secs(2))
+                    .scan(source, &token, &mut progress),
+                crate::watch::Job::Ingest { root, paths, .. } => LibraryScanner::new(&library)
+                    .with_limits(250_000, 64, INGEST_STABLE_AGE)
+                    .scan_paths(root, paths, &token, &mut progress),
+            };
             match outcome {
                 Ok(summary) => {
                     let enriched = library
                         .enrich_from_sidecars(Some(&source_id))
                         .map(|enriched| enriched.works)
                         .unwrap_or(0);
+                    let settling: Vec<String> = summary
+                        .issues
+                        .iter()
+                        .filter(|issue| issue.code == "still_downloading")
+                        .map(|issue| issue.relative_path.clone())
+                        .collect();
+                    if !settling.is_empty() {
+                        let _ = sender.send(ScanEvent::Settling(settling));
+                    }
                     let _ = sender.send(ScanEvent::Progress {
                         visited: summary.visited,
                         imported: summary.imported,
@@ -3800,10 +3867,13 @@ impl App {
         let Some(receiver) = self.scan_events.as_ref() else {
             return;
         };
+        let quiet = self.scan_quiet;
+        let ingest_job = self.scan_queue.running().is_some_and(|job| !job.is_scan());
         let mut finished = false;
         let mut failure = None;
         let mut status = None;
         let mut refresh = false;
+        let mut settling = Vec::new();
         loop {
             match receiver.try_recv() {
                 Ok(ScanEvent::Progress {
@@ -3818,7 +3888,12 @@ impl App {
                     self.scan_imported = imported;
                     if done {
                         finished = true;
-                        status = Some(if complete && enriched > 0 {
+                        let message = if ingest_job {
+                            format!(
+                                "Added {imported} {}.",
+                                if imported == 1 { "file" } else { "files" }
+                            )
+                        } else if complete && enriched > 0 {
                             format!(
                                 "Scan finished — {visited} entries, {imported} imported, \
                                  details from {enriched} local NFO file(s)."
@@ -3830,8 +3905,9 @@ impl App {
                                 "Scan ended early — {visited} entries, {imported} imported, \
                                  {issues} issue(s). Nothing was deleted."
                             )
-                        });
-                    } else {
+                        };
+                        status = (!quiet).then_some(message);
+                    } else if !quiet {
                         status = Some(format!("Scanning… {visited} entries, {imported} imported"));
 
                         if now_ms() - self.scan_refresh_ms >= SCAN_REFRESH_INTERVAL_MS {
@@ -3840,6 +3916,7 @@ impl App {
                         }
                     }
                 }
+                Ok(ScanEvent::Settling(paths)) => settling.extend(paths),
                 Ok(ScanEvent::Failed(message)) => {
                     finished = true;
                     failure = Some(message);
@@ -3863,21 +3940,226 @@ impl App {
             self.reload_browse();
         }
         if finished {
+            let finished_job = self.scan_queue.running().cloned();
             self.scan_events = None;
             self.scan_token = None;
             self.scan_started_ms = None;
+            self.scan_quiet = false;
             self.reload();
 
             self.start_durations();
-            if !self.pending_scans.is_empty() {
-                let next = self.pending_scans.remove(0);
-                self.start_scan(next);
+            if let Some(crate::watch::Job::Ingest { source, root, .. }) = finished_job {
+                self.defer_settling(&source, &root, settling);
             }
+            if let Some(next) = self.scan_queue.finish() {
+                self.start_job(next);
+            }
+        }
+    }
+
+    fn defer_settling(&mut self, source: &str, root: &Path, settling: Vec<String>) {
+        for relative in settling {
+            if self.watch_deferred.len() >= MAX_DEFERRED {
+                self.submit_job(crate::watch::Job::Scan {
+                    source: source.to_string(),
+                    quiet: true,
+                });
+                return;
+            }
+            let path = root.join(&relative);
+            if self
+                .watch_deferred
+                .iter()
+                .any(|deferred| deferred.source == source && deferred.path == path)
+            {
+                continue;
+            }
+            self.watch_deferred.push(DeferredPath {
+                at: std::time::Instant::now() + DEFERRED_RETRY,
+                source: source.to_string(),
+                root: root.to_path_buf(),
+                path,
+            });
+        }
+    }
+
+    fn drain_deferred(&mut self) {
+        if self.watch_deferred.is_empty() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let mut due: std::collections::BTreeMap<(String, PathBuf), Vec<PathBuf>> =
+            std::collections::BTreeMap::new();
+        let mut index = 0;
+        while index < self.watch_deferred.len() {
+            if self.watch_deferred[index].at <= now {
+                let entry = self.watch_deferred.swap_remove(index);
+                due.entry((entry.source, entry.root))
+                    .or_default()
+                    .push(entry.path);
+            } else {
+                index += 1;
+            }
+        }
+        for ((source, root), paths) in due {
+            self.submit_job(crate::watch::Job::Ingest {
+                source,
+                root,
+                paths,
+            });
+        }
+    }
+
+    fn drain_watch(&mut self) {
+        for event in self.watchers.poll() {
+            self.handle_watched(event);
+        }
+    }
+
+    fn handle_watched(&mut self, event: crate::watch::Watched) {
+        match event {
+            crate::watch::Watched::Changes { root, changes } => {
+                let work = crate::watch::work_for(&root, &changes);
+                self.apply_work(&root, work);
+            }
+            crate::watch::Watched::Rescan { root, reason } => {
+                self.apply_work(
+                    &root,
+                    crate::watch::Work {
+                        ingest: Vec::new(),
+                        withdraw: true,
+                    },
+                );
+                self.status = Some(format!("{} — {reason}. Checking it again.", root.display()));
+            }
+            crate::watch::Watched::Stopped { root, reason } => {
+                self.status = Some(format!(
+                    "Stopped watching {} ({reason}). The library re-checks on its own.",
+                    root.display()
+                ));
+            }
+        }
+    }
+
+    fn apply_work(&mut self, root: &Path, work: crate::watch::Work) {
+        if work.is_empty() {
+            return;
+        }
+        let Some((source, stored_root)) = self.source_for_root(root) else {
+            return;
+        };
+        if work.withdraw {
+            self.submit_job(crate::watch::Job::Scan {
+                source,
+                quiet: true,
+            });
+            return;
+        }
+        let paths = work
+            .ingest
+            .iter()
+            .map(|path| match path.strip_prefix(root) {
+                Ok(relative) => stored_root.join(relative),
+                Err(_) => path.clone(),
+            })
+            .collect();
+        self.submit_job(crate::watch::Job::Ingest {
+            source,
+            root: stored_root,
+            paths,
+        });
+    }
+
+    fn source_for_root(&self, root: &Path) -> Option<(String, PathBuf)> {
+        if let Some(source) = self
+            .sources
+            .iter()
+            .find(|source| Path::new(&source.root_path) == root)
+        {
+            return Some((source.id.clone(), PathBuf::from(&source.root_path)));
+        }
+        let canonical = std::fs::canonicalize(root).ok()?;
+        self.sources
+            .iter()
+            .find(|source| {
+                std::fs::canonicalize(&source.root_path).is_ok_and(|stored| stored == canonical)
+            })
+            .map(|source| (source.id.clone(), PathBuf::from(&source.root_path)))
+    }
+
+    fn arm_watchers(&mut self) -> Vec<PathBuf> {
+        let roots: Vec<PathBuf> = self
+            .sources
+            .iter()
+            .map(|source| PathBuf::from(&source.root_path))
+            .filter(|root| root.is_dir())
+            .collect();
+        self.watchers.sync(&roots)
+    }
+
+    fn reconcile(&mut self) {
+        self.watch_reconcile_at = std::time::Instant::now();
+        self.watch_reconciled = true;
+        self.watchers.clear_retries();
+        self.arm_watchers();
+        for source in self.sources.clone() {
+            if !Path::new(&source.root_path).is_dir() {
+                continue;
+            }
+            self.submit_job(crate::watch::Job::Scan {
+                source: source.id,
+                quiet: true,
+            });
+        }
+    }
+
+    fn catch_up_arrivals(&mut self) {
+        for root in self.arm_watchers() {
+            let Some((source, _)) = self.source_for_root(&root) else {
+                continue;
+            };
+            let walking = self
+                .scan_queue
+                .running()
+                .is_some_and(|job| job.is_scan() && job.source() == source)
+                || self.scan_queue.is_scan_queued(&source);
+            if walking {
+                continue;
+            }
+            self.submit_job(crate::watch::Job::Scan {
+                source,
+                quiet: true,
+            });
+        }
+    }
+
+    fn watch_step(&mut self) {
+        if !self.auto_discovery {
+            return;
+        }
+        self.drain_watch();
+        self.drain_deferred();
+        let wall = crate::watch::clock();
+        let wall_gap = wall.saturating_sub(self.watch_wall);
+        let monotonic_gap = self.watch_tick.elapsed();
+        self.watch_wall = wall;
+        self.watch_tick = std::time::Instant::now();
+        let first = !self.watch_reconciled;
+        let woke = crate::watch::slept(wall_gap, monotonic_gap);
+        let due = self.watch_reconcile_at.elapsed() >= crate::watch::RECONCILE_INTERVAL;
+        if first || woke || due {
+            self.reconcile();
+        } else if self.watch_last_arrival_check.elapsed() >= crate::watch::ARRIVAL_RETRY {
+            self.watch_last_arrival_check = std::time::Instant::now();
+            self.catch_up_arrivals();
         }
     }
 
     fn scan_strip(&self) -> Option<Element<'_, Message>> {
         self.scan_token.as_ref()?;
+        if self.scan_quiet {
+            return None;
+        }
         let tokens = design::tokens();
         let elapsed = self
             .scan_started_ms
@@ -4185,7 +4467,7 @@ impl App {
                 self.error = None;
             }
             Message::CancelScan => {
-                self.pending_scans.clear();
+                self.scan_queue.cancel_pending();
                 if let Some(token) = &self.scan_token {
                     token.cancel();
                     self.status = Some("Stopping the scan…".to_string());
@@ -7881,15 +8163,121 @@ mod tests {
         app.new_root = directory.path().join("b").to_string_lossy().to_string();
         let _ = app.update(Message::AddFolder);
 
-        assert_eq!(app.pending_scans.len(), 1, "the second scan is queued");
+        assert_eq!(app.scan_queue.queued(), 1, "the second scan is queued");
         assert!(app.scan_token.is_some());
         finish_scan(&mut app);
-        assert!(app.pending_scans.is_empty());
+        assert_eq!(app.scan_queue.queued(), 0);
         assert_eq!(
             app.library.count(&LibraryQuery::default()).expect("count"),
             2,
             "both folders were scanned"
         );
+    }
+
+    #[test]
+    fn a_watched_arrival_reaches_the_library_without_a_button() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let media = directory.path().join("media");
+        write_settled(
+            &media.join("Arrival (2016)/Arrival (2016).mkv"),
+            b"not really a video",
+        );
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+        add_folder(&mut app, &media);
+        let _ = app.update(Message::GoBrowse);
+        assert_eq!(app.browse.items.len(), 1);
+
+        let arrival = media.join("Dune (2021)/Dune (2021).mkv");
+        write_settled(&arrival, b"another not really a video");
+        app.handle_watched(crate::watch::Watched::Changes {
+            root: media.clone(),
+            changes: vec![screenroom_core::MediaChange::Added(arrival.clone())],
+        });
+        assert!(app.scan_token.is_some(), "an arrival must start an ingest");
+        finish_scan(&mut app);
+
+        assert_eq!(app.error, None);
+        assert_eq!(
+            app.browse.items.len(),
+            2,
+            "the arrival is in the library without a rescan button"
+        );
+        assert!(
+            app.browse.items.iter().any(|item| item.title == "Dune"),
+            "the arrival was parsed into the catalog"
+        );
+    }
+
+    #[test]
+    fn a_watched_removal_asks_for_the_walk_that_can_withdraw() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let media = directory.path().join("media");
+        write_settled(&media.join("Gone (2001).mkv"), b"not really a video");
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+        add_folder(&mut app, &media);
+
+        app.handle_watched(crate::watch::Watched::Rescan {
+            root: media.clone(),
+            reason: "test".to_string(),
+        });
+
+        let running = app
+            .scan_queue
+            .running()
+            .cloned()
+            .expect("a walk was queued");
+        assert!(running.is_scan(), "a removal is never an ingest");
+        assert!(
+            running.is_quiet(),
+            "a removal does not take the status line"
+        );
+        finish_scan(&mut app);
+    }
+
+    #[test]
+    fn a_sleep_gap_on_the_tick_triggers_the_catch_up_walk() {
+        let (mut app, _directory) = app_with(1);
+        app.auto_discovery = true;
+        app.watch_reconciled = true;
+        app.watch_reconcile_at = std::time::Instant::now();
+        app.watch_wall = crate::watch::clock() - Duration::from_secs(3_600);
+
+        let _ = app.update(Message::Tick);
+
+        let running = app
+            .scan_queue
+            .running()
+            .cloned()
+            .expect("a sleep gap must start a walk");
+        assert!(running.is_scan());
+        finish_scan(&mut app);
+    }
+
+    #[test]
+    fn a_reconcile_walks_each_attached_folder_once() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let media = directory.path().join("media");
+        write_settled(&media.join("Arrival (2016).mkv"), b"not really a video");
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+        add_folder(&mut app, &media);
+        assert!(app.scan_queue.running().is_none());
+
+        app.reconcile();
+
+        assert!(
+            app.scan_queue.running().is_some(),
+            "a reconcile starts a walk"
+        );
+        assert!(
+            app.scan_queue.running().is_some_and(|job| job.is_quiet()),
+            "a background reconcile stays out of the status line"
+        );
+        finish_scan(&mut app);
+        assert_eq!(app.scan_queue.queued(), 0);
+        assert!(app.scan_queue.running().is_none());
     }
 
     fn add_folder(app: &mut App, root: &std::path::Path) {

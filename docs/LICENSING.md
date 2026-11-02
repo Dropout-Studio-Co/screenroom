@@ -39,6 +39,7 @@ Principal direct components:
 | serde, serde_json, sha2, thiserror, regex | current workspace pins | MIT OR Apache-2.0 |
 | uuid | 1.29.0 | Apache-2.0 OR MIT |
 | libloading | 0.9.0 | ISC |
+| notify / notify-types | 8.2.1 / 2.2.0 | CC0-1.0 |
 
 Obligations that follow: preserve MIT/BSD/ISC copyright notices, carry the Apache
 2.0 notice and patent grant where used, and keep the zlib and BSL-1.0 notices that
