@@ -15,10 +15,30 @@ Three targets, three lanes, one rule: **a device that is off is skipped, never f
 
 ## 1. Workflows
 
+### `ci-linux.yml`
+
+The gate every push to `main` and every pull request runs, on a hosted
+`ubuntu-latest` runner that needs nothing of the owner's switched on:
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+gitleaks git                       # history scan, 8.30.1, SHA256-verified
+cargo test --workspace --all-targets
+cd apps/tv && pnpm install --frozen-lockfile && pnpm typecheck && pnpm test
+```
+
+Six tests are skipped by name because a headless hosted runner cannot measure what
+they measure. No secrets. `release.yml` calls this file as its reusable gate.
+
 ### `ci.yml`
 
-Runs on every push to `main`, every pull request targeting `main`, and as a
-reusable workflow (`workflow_call`). One job on `[self-hosted, macOS]`:
+The owner's macOS gate. It runs on `[self-hosted, macOS]` and only when the
+repository variable `SCREENROOM_MACOS_RUNNER` is `'true'`: without it the job is
+**skipped, not queued**, so a Mac that is switched off leaves no permanently
+pending check behind. It no longer triggers on a push or a pull request — that is
+`ci-linux.yml`'s job — and stays reachable through `workflow_call` and
+`workflow_dispatch`. One job:
 
 ```bash
 cargo fmt --all --check
@@ -34,13 +54,16 @@ No secrets. It needs `cargo`/`rustup`, `node` and `pnpm` on the runner.
 
 Runs on a push to `main` (after CI) and by hand (`workflow_dispatch`).
 
-1. `ci` — calls `ci.yml` as a reusable workflow, so the release cannot start on a
-   tree that has not passed. This means a push to `main` runs the checks twice:
-   once from `ci.yml`, once inside the release. On a laptop that is the honest cost
-   of a real `needs:` gate; `Swatinem/rust-cache@v2` keeps the second run warm.
-2. `macos` — `scripts/release.sh macos --out artifacts`, then
-   `scripts/release.sh install` into `~/Applications` **without launching it**, then
-   uploads the `.zip` and its manifest fragment.
+1. `ci` — calls `ci-linux.yml` as a reusable workflow, so the release cannot start
+   on a tree that has not passed, and it does not depend on the owner's Mac being
+   on. A push to `main` therefore runs the hosted checks twice: once from
+   `ci-linux.yml`'s own push trigger, once inside the release. That repetition is
+   the honest cost of a real `needs:` gate.
+2. `macos` — gated on `SCREENROOM_MACOS_RUNNER == 'true'` like `ci.yml`, so a Mac
+   that is off skips the job instead of holding the run open. Otherwise it runs
+   `scripts/release.sh macos --out artifacts`, then `scripts/release.sh install`
+   into `~/Applications` **without launching it**, then uploads the `.zip` and its
+   manifest fragment.
 3. `windows` — `runs-on: [self-hosted, windows]`, gated on the repository variable
    `SCREENROOM_WINDOWS_RUNNER == 'true'`. Windows needs MSVC and cannot be built on
    macOS, so while that runner does not exist the job is **skipped, not greenwashed**:
@@ -107,6 +130,10 @@ ssh-keygen -Y verify -f allowed_signers -I screenroom -n screenroom \
      not been authorised once locally cannot sign in a job — authorise it by running
      `scripts/ship.sh --only tv` by hand once after any key or DUID change.
 6. Variables — **Settings → Secrets and variables → Actions → Variables**:
+   - `SCREENROOM_MACOS_RUNNER` = `true` **only** while a runner with the label
+     `macOS` is registered and running. Until then leave it unset: `ci.yml`'s job
+     and the release's `macos` job are skipped, not queued, and every push is still
+     gated by the hosted `ci-linux.yml`.
    - `SCREENROOM_WINDOWS_RUNNER` = `true` **only** once a Windows runner is
      registered with the label `windows`. Until then leave it unset; the job is
      skipped and the log says so.
