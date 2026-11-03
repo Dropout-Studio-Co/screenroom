@@ -14,7 +14,11 @@ account, a server or a network connection.
 - Play with pause, jump back or forward 10 seconds, pick audio and subtitle
   tracks, and auto-play the next episode.
 - Keep separate viewer profiles, each with its own progress.
-- Run entirely offline. The app opens no network connections.
+- Subtitles come from the film first: a track inside the file, then a sidecar file
+  beside it. Only when neither exists can you ask The Subtitle DB, the one online
+  subtitle provider, and a subtitle it gives you is kept for offline reuse.
+- Run entirely offline. Playback, browsing, resume and the library open no network
+  connections; metadata and subtitle lookups happen only when you press for them.
 
 ## Requirements
 
@@ -78,6 +82,10 @@ never modified.
   else. Without it, the path above is used.
 - Folders, playback preferences and backup or restore are handled in the
   Settings screen inside the app.
+- Online subtitle lookups need a The Subtitle DB key. Keep it in
+  `~/Library/Application Support/Screenroom/subtitles.key` (or set
+  `SCREENROOM_TSDB_API_KEY` for a shell launch); lookups that need no key work
+  without one. See [docs/SUBTITLE_PROVIDER.md](docs/SUBTITLE_PROVIDER.md).
 
 ## Troubleshooting
 

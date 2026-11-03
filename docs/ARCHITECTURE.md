@@ -8,6 +8,11 @@
 > Statements in older documents that assert a Flutter-only or Svelte/Tauri stack,
 > or that list Linux, webOS or Android TV as targets, are superseded and kept as
 > history.
+>
+> **2026-11-03:** [`ADR-005`](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)
+> fixes one online subtitle provider (The Subtitle DB, reached only after embedded
+> tracks and sidecars) and removes VoiceOver-specific bridging and all HDR output.
+> See the "Subtitles" section below.
 
 **Status:** the shared core, the libmpv boundary and the desktop application are
 implemented and verified on the macOS host, including real frame presentation
@@ -137,6 +142,25 @@ enforced by its dependency list, not by convention: it has no UI or HTTP crate.
 - **Track choice:** the core stores a preference; the actual track list comes from
   libmpv and the selection is read back from the player snapshot. The UI never keeps
   a second copy of the truth.
+
+## Subtitles
+
+A subtitle is resolved from the file outwards, and the network is the last resort
+([`ADR-005`](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md),
+[`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md)):
+
+1. an **embedded track** in the file, read from libmpv's own track list;
+2. a **sidecar** beside the media — `.srt`, `.smi`, `.vtt`, `.ass`, `.ssa`, `.sub`,
+   `.ttml`, `.dfxp` — or a copy already imported into the library;
+3. **The Subtitle DB**, the only online provider, and only when neither exists.
+
+The online control returns before it opens a socket when a track or a sidecar is
+present, and there is no second provider and no fallback chain. `screenroom-core`
+owns the resolution order, the store and the provider client over the same
+injectable `HttpTransport` the metadata client uses; `apps/desktop` only asks and
+draws. Imported and downloaded subtitles are stored as bounded text bytes
+(4 MiB, eight formats, provenance) in the `subtitles` table; a media file is never
+written, and no sidecar is created beside it.
 
 ## SQLite and migrations
 
@@ -272,7 +296,7 @@ Measured failure, not preference, reopens a decision:
 - If no bridge keeps desktop presentation at target resolution on the Windows
   machine, reconsider the desktop shell (not the shared core). On macOS the
   software bridge already sustains the media's full rate; the Windows question is
-  whether Arc hardware decode and a D3D11 zero-copy path are needed for 4K/HDR.
+  whether Arc hardware decode and a D3D11 zero-copy path are needed for 4K.
 - If Lightning 3 cannot hold its frame budget on the Tizen 6.0 engine, evaluate a
   lighter Blits-only build for that model.
 - Any new platform family needs its own ADR. Retired targets (Linux, webOS,

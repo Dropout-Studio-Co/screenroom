@@ -8,7 +8,9 @@ person's own three devices.
 authoritative stack decision, amended by
 [`docs/ADR-003_DESKTOP_AND_TV_SCOPE.md`](docs/ADR-003_DESKTOP_AND_TV_SCOPE.md)
 and then by [`docs/ADR-004_PERSONAL_EDITION_SCOPE.md`](docs/ADR-004_PERSONAL_EDITION_SCOPE.md),
-which is the current word on **which platforms exist**.
+which is the current word on **which platforms exist**, and by
+[`docs/ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md`](docs/ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)
+(2026-11-03), which is the current word on **subtitles, VoiceOver and HDR**.
 
 **Scope: exactly three targets.** (1) the owner's MacBook Air M4 on macOS,
 (2) the owner's Windows ultrawide desktop with an Intel Arc B580, (3) the owner's
@@ -25,11 +27,27 @@ first-party code.
 Older statements are **SUPERSEDED** and are history, not requirements:
 “Flutter is the selected stack” (ADR-001), “Svelte/Tauri is the baseline”,
 “Screenroom is a backup name”, “Samsung TV cannot run `.tpk`”, “the UI must be a
-WebView”, every iOS/Android phone or tablet requirement (ADR-003), and the
-ADR-003 platform list that included Linux, LG webOS and Android TV (ADR-004). Do not act on them. Do not delete them: the archive is the audit trail.
+WebView”, every iOS/Android phone or tablet requirement (ADR-003), the
+ADR-003 platform list that included Linux, LG webOS and Android TV (ADR-004),
+OpenSubtitles as the subtitle provider (ADR-010), the HDR presentation path
+(ADR-019) and the VoiceOver accessibility bridge (ADR-017) — all three removed on
+2026-11-03 by ADR-005. Do not act on them. Do not delete them: the archive is the
+audit trail.
 
 Keep one monorepo, offline-first/zero-paid constraints and every hardware gate.
 Never claim a test, a device result or a rendering receipt that did not happen.
+
+**Subtitles resolve from the file outwards** (ADR-005): an embedded track, then a
+sidecar beside the media, and only when neither exists may the app ask The Subtitle
+DB — the single online subtitle provider, with no second service and no fallback
+chain. The key is read from `SCREENROOM_TSDB_API_KEY`, `SCREENROOM_TSDB_CONFIG` or
+`subtitles.key` in the platform config directory; its value never enters Git, a
+log, a test or a document. `docs/SUBTITLE_PROVIDER.md` is the reference, and every
+live provider call is PENDING until a recorded run says otherwise.
+
+**HDR and screen-reader output are not features.** SDR is the only desktop output
+and no accessibility tree is published; keyboard navigation, focus handling,
+reduced motion and subtitle styling are the accessibility requirements.
 
 ## Operating boundaries
 
@@ -193,8 +211,9 @@ capability and per device, never per framework:
 1. **Desktop presentation** — a libmpv frame must be presented through wgpu in an
    iced window on real Windows hardware (and macOS for the OpenGL bridge).
    Compiling the bridge is not presenting a frame.
-2. **Desktop playback quality** — hardware decode, 1080p/4K, HDR, audio and
-   subtitle switching measured on the owner's GPU.
+2. **Desktop playback quality** — hardware decode, 1080p/4K, audio and
+   subtitle switching measured on the owner's GPU. SDR only: HDR was removed on
+   2026-11-03 (ADR-005) and is not a gate.
 3. **Samsung Tizen (physical UA50AU8000RXER)** — signed `.wgt` install, Lightning 3
    bundle running on the Tizen 6.0 engine, USB enumeration, AVPlay local playback,
    lifecycle/focus and durable storage/artwork. The certificate profile is created
@@ -226,7 +245,7 @@ independently verifiable. Never greenwash a missing gate.
    Persist **permitted actual image bytes**, not remote URLs.
 6. Capabilities are per platform. An unsupported combination gets a truthful
    reason and an achievable recovery path. No dead buttons, fake data, false empty
-   results, or pretend HDR/format support.
+   results, or pretend format support.
 7. Bound runtime work; queue heavy jobs outside watching; measure on the actual
    device. TV D-pad focus must be deterministic and must restore predictably.
 8. Use generated or rights-cleared test media. Never commit private viewing

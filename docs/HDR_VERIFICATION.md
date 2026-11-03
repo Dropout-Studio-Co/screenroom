@@ -1,5 +1,15 @@
 # HDR without a display: what was measured, what still needs eyes
 
+> **RETIRED 2026-11-03.** HDR is removed from Screenroom completely: there is no
+> HDR mode, no extended-range output, no HDR preference or setting and no HDR
+> receipt. **SDR is the only desktop output.** This document is kept as the
+> historical record of what was built and measured between 2026-11-01 and
+> 2026-11-02, and of why the remaining step could never be taken by an agent. It
+> does not describe current behaviour, nothing below is re-run, and no HDR receipt
+> will be produced again. Decision:
+> [`ADR-005`](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md); the ADR that
+> created the path, [`ADR-019`](ADR-019_HDR_PRESENTATION.md), is retired in place.
+
 - **Date:** 2026-11-02
 - **Scope:** F07, Q02, Q03, P1-03 of
   [`MACOS_REMAINING_WORK.md`](MACOS_REMAINING_WORK.md), gate 2 of

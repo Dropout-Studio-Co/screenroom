@@ -106,8 +106,7 @@ source that consumes it:
 | `SCREENROOM_WINDOW=hidden` | builds the window hidden and never activates it | `play_check.rs` (`requests_hidden_window`) |
 | `SCREENROOM_WINDOW_WIDTH=<px>` | opens at that width, floored at the minimum the layout needs, so a breakpoint can be seen rather than inferred | `app.rs` (`verification_size`) |
 | `SCREENROOM_WINDOW_HEIGHT=<px>` | opens at that height | `app.rs` (`verification_size`) |
-| `SCREENROOM_AX_CHECK=<file>` | writes the accessibility receipt and exits; the default surface is Home | `accessibility.rs` |
-| `SCREENROOM_AX_CHECK_SCREEN=home\|browse\|settings\|detail\|player` | picks the surface that check walks; Home is the default and `browse` and `library` are the same screen | `app.rs` (`open_checked_screen`) |
+| `SCREENROOM_AX_CHECK`, `SCREENROOM_AX_CHECK_SCREEN` | **removed 2026-11-03** with the VoiceOver bridge ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)); no accessibility receipt is written any more | — |
 
 Example, with a library already built:
 
@@ -115,7 +114,6 @@ Example, with a library already built:
 SCREENROOM_LIBRARY=/tmp/room/library.db \
 SCREENROOM_OPEN_SCREEN=library \
 SCREENROOM_WINDOW=hidden \
-SCREENROOM_AX_CHECK=/tmp/room/ax-library.txt \
   ./target/debug/screenroom-desktop
 ```
 
@@ -135,13 +133,15 @@ commands above:
   `cargo test --workspace`, with `cargo fmt --all --check`, `cargo clippy
   --workspace --all-targets -- -D warnings` and `python3 scripts/no_comments.py
   check`;
-- the five breakpoints' geometry, as values, by unit test;
-- Home, Library, Detail, Settings and the Player through `SCREENROOM_AX_CHECK`
-  with a hidden window: the tree read back from AppKit matches the application's
-  own snapshot on labels, values, enabled state, `AXPress`, `AXIncrement` /
-  `AXDecrement` and focus, and every control that is not drawn is absent. What
-  that does and does not prove, and the owner's ten-minute listening pass, are in
-  [`VOICEOVER_PASS.md`](VOICEOVER_PASS.md).
+- the five breakpoints' geometry, as values, by unit test.
+
+The rebuild session also ran `SCREENROOM_AX_CHECK` on Home, Library, Detail and
+Settings and read the accessibility tree back from AppKit. **That check was
+removed on 2026-11-03** with the `NSAccessibility` bridge (ADR-005), so it is
+history: it is no longer re-runnable, and no VoiceOver receipt is produced. What
+the rebuild's keyboard and focus rules still prove is in the `ui/` tests, and the
+accessibility that remains is keyboard navigation, focus order and restoration,
+reduced motion and subtitle styling.
 
 Not verified:
 
