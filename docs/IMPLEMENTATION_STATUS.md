@@ -59,7 +59,11 @@ the picture's layout bounds during the reveal — a second visible jump on every
 **B. Overlays now follow the pointer's presence, not a timer.** The app listens for
 the native `mouse::Event::CursorEntered`/`CursorLeft` boundary events, keeps a
 `pointer_inside` latch, and snaps the reveal with `MotionState::place_chrome` instead
-of waiting for the idle spring.
+of waiting for the idle spring. A boundary event is acted on in the same update; the
+tick re-asserts the same rule, so a missed event cannot leave overlays up longer than
+the idle window. Local window coordinates decide presence for motion, so a drag that
+leaves the window is not mistaken for one inside it, and a held button or an open
+menu outranks presence in both directions.
 
 Measured on the running app (window screenshots, 150 ms after each transition):
 entry shows the full chrome and subtitle panel; exit removes every overlay —

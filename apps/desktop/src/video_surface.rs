@@ -1089,7 +1089,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         let frame = Frame::cpu(4, 4, 16, bytes, 0, 3);
         pipeline.texture_size = (4, 4);
         pipeline.uploaded_generation = Some(3);
-        pipeline.uploaded_surface = Some(99);
+        pipeline.uploaded_surface = Some(frame_tag(&frame));
         pipeline.bind_group = None;
 
         assert!(
