@@ -165,25 +165,40 @@ fi
 trap release EXIT
 trap 'release; exit 130' INT TERM
 
+exchange() {
+  python3 - "$1" "$2" <<'PY'
+import ctypes
+import sys
+
+libc = ctypes.CDLL(None, use_errno=True)
+swap = libc.renamex_np
+swap.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+swap.restype = ctypes.c_int
+RENAME_SWAP = 0x2
+
+if swap(sys.argv[1].encode(), sys.argv[2].encode(), RENAME_SWAP) != 0:
+    sys.exit(ctypes.get_errno() or 1)
+PY
+}
+
 recover() {
   local candidate newest
-  if [ -d "$installed" ] && [ ! -L "$installed" ]; then
-    mkdir -p "$builds"
-    candidate="$builds/Screenroom-legacy-$(date +%s).app"
-    if mv "$installed" "$candidate" 2>/dev/null; then
-      ln -sfn "$candidate" "$installed" 2>/dev/null || true
-      echo "rebuild-app: moved a directory install into the versioned layout"
-    fi
-  fi
   for candidate in "$install_dir"/.Screenroom.app.previous.* "$install_dir"/.Screenroom.app.staged.*; do
     [ -e "$candidate" ] || continue
-    [ -d "$installed" ] && rm -rf "$candidate"
+    [ -e "$installed" ] && rm -rf "$candidate"
   done
-  if [ ! -e "$installed" ] || { [ -L "$installed" ] && [ ! -e "$installed" ]; }; then
+  if [ -L "$installed" ]; then
+    candidate="$(readlink "$installed")"
+    rm -f "$installed"
+    if [ -d "$candidate" ]; then
+      mv "$candidate" "$installed" 2>/dev/null || true
+      echo "rebuild-app: replaced a symlinked install with a real bundle"
+    fi
+  fi
+  if [ ! -e "$installed" ]; then
     newest="$(ls -dt "$builds"/*.app 2>/dev/null | head -1 || true)"
-    if [ -n "$newest" ]; then
-      ln -sfn "$newest" "$installed"
-      echo "rebuild-app: repointed the install at $newest"
+    if [ -n "$newest" ] && mv "$newest" "$installed" 2>/dev/null; then
+      echo "rebuild-app: restored $installed from the last build"
     fi
   fi
 }
@@ -256,24 +271,34 @@ while [ "$rounds" -lt 20 ]; do
     fi
   fi
 
-  if [ -z "$failed" ]; then
-    link="$install_dir/.Screenroom.app.link.$$"
-    rm -f "$link"
-    if ln -sfn "$versioned" "$link" && mv -h "$link" "$installed"; then
-      chmod +x "$installed/Contents/MacOS/Screenroom" 2>/dev/null || true
-      xattr -dr com.apple.quarantine "$installed" 2>/dev/null || true
-      took="$(( $(date +%s) - started ))"
-      record "$head_sha" built "installed in ${took}s" "$dirty"
-      printf '%s\n' "$head_sha" >"$stamp"
-      echo "rebuild-app: installed $head_sha at $installed in ${took}s"
-      ls -dt "$builds"/*.app 2>/dev/null | tail -n +3 | while IFS= read -r old; do
-        rm -rf "$old"
-      done
-    else
-      rm -f "$link"
-      rm -rf "$versioned"
-      failed="install failed; the previous build is still in place"
+  installed_ok=""
+  if [ -z "$failed" ] && [ -d "$installed" ] && [ ! -L "$installed" ]; then
+    if exchange "$installed" "$versioned"; then
+      mv "$versioned" "$builds/Screenroom-previous-$(date +%s).app" 2>/dev/null || rm -rf "$versioned"
+      installed_ok="1"
     fi
+  elif [ -z "$failed" ]; then
+    rm -f "$installed"
+    if mv "$versioned" "$installed" 2>/dev/null; then
+      installed_ok="1"
+    fi
+  fi
+
+  if [ -z "$failed" ] && [ -z "$installed_ok" ]; then
+    rm -rf "$versioned"
+    failed="install failed; the previous build is still in place"
+  fi
+
+  if [ -z "$failed" ]; then
+    chmod +x "$installed/Contents/MacOS/Screenroom" 2>/dev/null || true
+    xattr -dr com.apple.quarantine "$installed" 2>/dev/null || true
+    took="$(( $(date +%s) - started ))"
+    record "$head_sha" built "installed in ${took}s" "$dirty"
+    printf '%s\n' "$head_sha" >"$stamp"
+    echo "rebuild-app: installed $head_sha at $installed in ${took}s"
+    ls -dt "$builds"/*.app 2>/dev/null | tail -n +3 | while IFS= read -r old; do
+      rm -rf "$old"
+    done
   fi
 
   if [ -n "$failed" ]; then

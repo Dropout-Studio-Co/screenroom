@@ -31,10 +31,11 @@ nothing in it depends on which harness ran Git.
    touching no app path (`apps/`, `crates/`, `assets/`, `scripts/`, `vendor/`,
    `Cargo.*`, `.cargo/`) is recorded without a rebuild.
 5. Otherwise it runs the release build, verifies the bundle, copies it into
-   `~/Applications/.screenroom-builds/Screenroom-<sha>-<stamp>.app`, and switches
-   `~/Applications/Screenroom.app` — a symlink — with one atomic rename. A kill at
-   any point leaves the previous build in place; a missing link is repointed at
-   start-up and the two newest builds are kept.
+   `~/Applications/.screenroom-builds/Screenroom-<sha>-<stamp>.app`, and then swaps
+   it with the installed bundle in one `renamex_np(…, RENAME_SWAP)` call — a single
+   atomic exchange, so no instant exists in which `~/Applications/Screenroom.app` is
+   absent or half-written. The swapped-out build is kept as
+   `Screenroom-previous-<stamp>.app`, and only the two newest builds are retained.
 6. The installed commit, the result, the duration and whether the tree was dirty are
    written to `screenroom-build-last.json` beside the Git directory, and the
    installed SHA to `screenroom-installed.sha`. The build log stays under
@@ -53,9 +54,9 @@ nothing in it depends on which harness ran Git.
   worker — including one in the checkout that queued it.
 - **Interruptions are safe.** The lock records the owner's PID *and* its start
   time, so a dead owner is reclaimed immediately and a recycled PID is not mistaken
-  for a live one; `--unlock` clears it by hand. The install is a versioned directory
-  behind an atomically renamed symlink, so no interruption can leave the app
-  missing or half-copied.
+  for a live one; `--unlock` clears it by hand. The install is an atomic exchange of
+  two directories, so no interruption can leave the app missing or half-copied, and
+  a missing install is restored from the last build at start-up.
 - **Cheap.** An incremental rebuild of an unchanged tree takes seconds; a docs-only
   commit costs no build at all.
 - **The running app is not disturbed.** It keeps the code it started with until it

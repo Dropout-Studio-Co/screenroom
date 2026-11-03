@@ -307,11 +307,11 @@ only: Windows and the Tizen client are untouched.
   the Git directory is the arbiter: nothing is built twice, and no commit is left
   unbuilt. `--status` reports the app, the lock and the queue; `--unlock` clears a
   lock left by a killed run.
-- The worker builds `HEAD`, verifies the bundle, and only then switches the
-  installed app: builds live in `~/Applications/.screenroom-builds/` and
-  `~/Applications/Screenroom.app` is a symlink renamed into place in one step.
-  **A failed or interrupted build never leaves a missing or half-written app**; it is
-  logged under `.artifacts/builds/` and retried at the next commit.
+- The worker builds `HEAD`, verifies the bundle, and only then swaps the installed
+  app with `renamex_np(RENAME_SWAP)` — one atomic exchange with the staged build in
+  `~/Applications/.screenroom-builds/`. **A failed or interrupted build never leaves
+  a missing or half-written app**; it is logged under `.artifacts/builds/` and
+  retried at the next commit.
 - A commit touching nothing under `apps/`, `crates/`, `assets/`, `scripts/`,
   `vendor/` or `Cargo.*` is recorded without a rebuild.
 - `scripts/rebuild-app.sh --status` reports the installed commit, `HEAD` and the
