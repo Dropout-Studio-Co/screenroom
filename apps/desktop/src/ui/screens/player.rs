@@ -2,7 +2,6 @@ use crate::app::{Message, PlayAction, play_action};
 use crate::design;
 use crate::ui::components::poster;
 use crate::ui::icons::{self, Icon};
-use crate::ui::motion::reveal_scale;
 use crate::ui::route::Nav;
 use crate::ui::theme::{self, Gap};
 use crate::video_surface::VideoSurface;
@@ -225,28 +224,13 @@ impl<'a> Player<'a> {
     }
 
     pub fn view(self) -> Element<'a, Message> {
-        if !self.chrome {
-            return iced::widget::mouse_area(self.picture())
-                .on_press(Message::PlayerWake)
-                .on_move(|_| Message::PlayerWake)
-                .into();
-        }
-
         let reveal = self.reveal.clamp(0.0, 1.0);
-        let chrome: Element<'a, Message> = stack![
-            self.picture(),
-            rising(self.top_scrim(), reveal, -(1.0 - reveal) * RISE),
-            rising(self.bottom_scrim(), reveal, (1.0 - reveal) * RISE),
-        ]
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into();
-
-        let visible: Element<'a, Message> = match self.overlay {
-            Some(overlay) => {
-                let overlay = rising(overlay, reveal, (1.0 - reveal) * RISE);
-                stack![
-                    chrome,
+        let mut layers = stack![self.picture()];
+        if self.chrome {
+            layers = layers.push(self.top_scrim());
+            layers = layers.push(self.bottom_scrim());
+            if let Some(overlay) = self.overlay {
+                layers = layers.push(
                     container(column![Space::new().height(Length::Fill), overlay])
                         .width(Length::Fill)
                         .height(Length::Fill)
@@ -255,16 +239,14 @@ impl<'a> Player<'a> {
                             right: theme::PAD,
                             bottom: BOTTOM_SCRIM_HEIGHT,
                             left: theme::PAD,
-                        })
-                ]
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into()
+                        }),
+                );
             }
-            None => chrome,
-        };
+        }
+        let _ = reveal;
 
-        iced::widget::mouse_area(visible)
+        iced::widget::mouse_area(layers.width(Length::Fill).height(Length::Fill))
+            .on_press(Message::PlayerWake)
             .on_move(|_| Message::PlayerWake)
             .into()
     }
@@ -319,9 +301,14 @@ impl<'a> Player<'a> {
         let tokens = design::tokens();
 
         if self.compact {
-            return Space::new()
+            return row![icon_button(Icon::Back, ICON_SIZE, Message::BackFromPlayer)]
                 .width(Length::Fill)
-                .height(Length::Shrink)
+                .padding(Padding {
+                    top: TOP_INSET / 2.0,
+                    right: theme::PAD,
+                    bottom: 0.0,
+                    left: theme::PAD,
+                })
                 .into();
         }
 
@@ -515,6 +502,8 @@ impl<'a> Player<'a> {
         let list = pick_list(options, selected, move |option: TrackOption| {
             Message::SelectTrack(kind, option.id)
         })
+        .on_open(Message::TrackMenuOpened(kind))
+        .on_close(Message::TrackMenuClosed(kind))
         .handle(pick_list::Handle::None)
         .padding(0)
         .text_size(tokens.type_scale.caption)
@@ -576,19 +565,6 @@ fn scrim(stops: [(f32, f32); 3], from_top: bool, reveal: f32) -> container::Styl
         });
 
     surface(Background::from(linear))
-}
-
-const RISE: f32 = 14.0;
-
-fn rising<'a>(element: Element<'a, Message>, reveal: f32, offset: f32) -> Element<'a, Message> {
-    if offset.abs() < 0.01 && (reveal - 1.0).abs() < 1.0e-3 {
-        return element;
-    }
-    iced::widget::Float::new(element)
-        .scale(reveal_scale(reveal))
-        .translate(move |_bounds, _viewport| iced::Vector::new(0.0, offset))
-        .style(|_theme| iced::widget::float::Style::default())
-        .into()
 }
 
 const TOP_SCRIM: [(f32, f32); 3] = [(0.0, 0.75), (0.55, 0.28), (1.0, 0.0)];

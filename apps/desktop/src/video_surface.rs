@@ -109,10 +109,7 @@ impl Primitive for VideoPrimitive {
             0,
             bytemuck_f32(&[fit_x, fit_y, 0.0, 0.0]),
         );
-        if pipeline.uploaded_generation == Some(frame.generation)
-            && pipeline.texture_size == (frame.width, frame.height)
-            && pipeline.uploaded_surface == Some(frame_tag(frame))
-        {
+        if pipeline.can_reuse(frame) {
             return;
         }
 
@@ -267,6 +264,19 @@ impl std::fmt::Debug for ImportedSurface {
 }
 
 impl VideoPipeline {
+    fn release_sampled(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            self.sampled = None;
+        }
+    }
+
+    fn can_reuse(&self, frame: &Frame) -> bool {
+        self.bind_group.is_some()
+            && self.uploaded_generation == Some(frame.generation)
+            && self.texture_size == (frame.width, frame.height)
+            && self.uploaded_surface == Some(frame_tag(frame))
+    }
     fn bind_cpu_group(&mut self) {
         self.bind_group = self.cpu_bind_group.clone();
     }
@@ -554,13 +564,7 @@ impl shader::Pipeline for VideoPipeline {
     }
 
     fn trim(&mut self) {
-        #[cfg(target_os = "macos")]
-        self.imported.clear();
-        #[cfg(target_os = "macos")]
-        {
-            self.sampled = None;
-        }
-        self.bind_group = self.cpu_bind_group.clone();
+        self.release_sampled();
     }
 }
 
@@ -1017,6 +1021,81 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
          displayed the way iced tags the layer, got {channel}"
         );
         assert_eq!(sampled, [128, 128, 128, 255]);
+    }
+
+    #[test]
+    fn a_trim_keeps_the_picture_bindable_so_a_redraw_is_not_blank() {
+        let Some((device, queue)) = device() else {
+            return;
+        };
+        let mut pipeline = VideoPipeline::new(&device, &queue, wgpu::TextureFormat::Bgra8UnormSrgb);
+        let bytes = std::sync::Arc::new(vec![0_u8; 4 * 4 * 4]);
+        let frame = Frame::cpu(4, 4, 16, bytes, 0, 7);
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("redraw-regression"),
+            size: wgpu::Extent3d {
+                width: 4,
+                height: 4,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        pipeline.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("redraw-regression"),
+            layout: &pipeline.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&pipeline.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: pipeline.fit_buffer.as_entire_binding(),
+                },
+            ],
+        }));
+        pipeline.texture_size = (4, 4);
+        pipeline.uploaded_generation = Some(7);
+        pipeline.uploaded_surface = Some(frame_tag(&frame));
+        assert!(pipeline.can_reuse(&frame));
+
+        pipeline.trim();
+
+        assert!(
+            pipeline.bind_group.is_some(),
+            "iced trims after every draw; dropping the binding here blanks the next redraw"
+        );
+        assert!(pipeline.texture_size == (4, 4));
+        assert!(pipeline.uploaded_generation == Some(7));
+    }
+
+    #[test]
+    fn a_missing_binding_never_counts_as_reusable() {
+        let Some((device, queue)) = device() else {
+            return;
+        };
+        let mut pipeline = VideoPipeline::new(&device, &queue, wgpu::TextureFormat::Bgra8UnormSrgb);
+        let bytes = std::sync::Arc::new(vec![0_u8; 4 * 4 * 4]);
+        let frame = Frame::cpu(4, 4, 16, bytes, 0, 3);
+        pipeline.texture_size = (4, 4);
+        pipeline.uploaded_generation = Some(3);
+        pipeline.uploaded_surface = Some(99);
+        pipeline.bind_group = None;
+
+        assert!(
+            !pipeline.can_reuse(&frame),
+            "prepare must rebuild when the binding is gone, whatever the markers say"
+        );
     }
 
     #[test]

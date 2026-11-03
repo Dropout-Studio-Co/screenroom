@@ -2058,6 +2058,85 @@ fn results_that_arrive_for_another_film_are_dropped() {
 }
 
 #[test]
+fn leaving_the_window_hides_the_controls_at_once() {
+    let media = Media::new();
+    media.placeholders(&["Edge (2020)/Edge (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 52));
+    app.screen = Screen::Player;
+    app.player_chrome = true;
+
+    let _ = app.update(Message::PointerInside(false));
+    assert!(!app.player_chrome, "an exit hides the chrome immediately");
+    assert!(app.motion.chrome() <= 0.001, "the reveal snaps to zero");
+
+    let _ = app.update(Message::PointerInside(true));
+    assert!(app.player_chrome, "an entry shows it again");
+    assert!(app.motion.chrome() >= 0.999, "the reveal snaps back to one");
+}
+
+#[test]
+fn an_open_track_menu_keeps_the_controls_while_the_pointer_is_out() {
+    let media = Media::new();
+    media.placeholders(&["Menu (2020)/Menu (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 53));
+    app.screen = Screen::Player;
+    app.player_chrome = true;
+
+    let _ = app.update(Message::TrackMenuOpened(TrackKind::Subtitle));
+    let _ = app.update(Message::PointerInside(false));
+    assert!(
+        app.player_chrome,
+        "a menu being used outranks the pointer leaving"
+    );
+
+    let _ = app.update(Message::TrackMenuClosed(TrackKind::Subtitle));
+    let _ = app.update(Message::PointerInside(false));
+    assert!(!app.player_chrome, "the hold ends with the menu");
+}
+
+#[test]
+fn a_pointer_boundary_does_not_restart_when_it_repeats() {
+    let media = Media::new();
+    media.placeholders(&["Still (2020)/Still (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 54));
+    app.screen = Screen::Player;
+    app.player_chrome = true;
+
+    let _ = app.update(Message::PointerInside(true));
+    let _ = app.update(Message::PointerInside(true));
+    assert!(app.player_chrome);
+    let _ = app.update(Message::PointerInside(false));
+    let _ = app.update(Message::PointerInside(false));
+    assert!(!app.player_chrome);
+    assert!(app.motion.chrome() <= 0.001);
+}
+
+#[test]
+fn a_film_still_playing_outside_the_window_stays_hidden_on_tick() {
+    let media = Media::new();
+    media.placeholders(&["Tick (2020)/Tick (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 55));
+    app.screen = Screen::Player;
+    app.snapshot.state = screenroom_player::PlayerState::Playing;
+
+    let _ = app.update(Message::PointerInside(false));
+    let _ = app.update(Message::Tick);
+    assert!(!app.player_chrome, "a tick cannot reopen hidden controls");
+}
+
+#[test]
 fn the_subtitle_panel_sizes_its_row_count_to_the_window() {
     let mut app = fresh_app();
     app.window_height = 480.0;
@@ -2065,8 +2144,8 @@ fn the_subtitle_panel_sizes_its_row_count_to_the_window() {
     app.window_height = 800.0;
     assert_eq!(
         app.subtitle_row_budget(),
-        4,
-        "the default window shows four"
+        3,
+        "the default window shows three rows and still clears the title"
     );
     app.window_height = 1_440.0;
     assert_eq!(app.subtitle_row_budget(), 6, "a tall window stops at six");

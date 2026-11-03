@@ -542,6 +542,10 @@ impl MotionState {
         self.page.place(offset);
     }
 
+    pub fn place_chrome(&mut self, visible: bool) {
+        self.chrome.place(if visible { 1.0 } else { 0.0 });
+    }
+
     pub fn set_chrome(&mut self, visible: bool) {
         let target = if visible { 1.0 } else { 0.0 };
         if (self.chrome.target() - target).abs() > f32::EPSILON {

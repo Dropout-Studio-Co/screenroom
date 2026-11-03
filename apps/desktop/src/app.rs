@@ -546,6 +546,12 @@ pub struct App {
 
     player_chrome: bool,
 
+    pointer_inside: bool,
+
+    track_menu_open: Option<TrackKind>,
+
+    volume_dragging: bool,
+
     preferences: Preferences,
 
     profiles: Vec<Profile>,
@@ -607,6 +613,8 @@ pub struct App {
     subtitle_results: Vec<screenroom_core::SubtitleMatch>,
     subtitle_results_for: Option<String>,
     subtitle_note: Option<String>,
+
+    subtitle_note_error: bool,
     subtitle_focus: usize,
     subtitle_search: Option<Receiver<Result<Vec<screenroom_core::SubtitleMatch>, String>>>,
     subtitle_download: Option<SubtitleDownload>,
@@ -867,6 +875,12 @@ pub enum Message {
     RailScrolled { label: String, offset: f32 },
 
     PlayerWake,
+
+    PointerInside(bool),
+
+    TrackMenuOpened(TrackKind),
+
+    TrackMenuClosed(TrackKind),
 
     Keyboard(keyboard::Event),
 
@@ -1178,6 +1192,9 @@ impl App {
             window_height: verification_size().height,
             last_input: std::time::Instant::now(),
             player_chrome: true,
+            pointer_inside: true,
+            track_menu_open: None,
+            volume_dragging: false,
             preferences,
             profiles: Vec::new(),
             settings_focus: 0,
@@ -1224,6 +1241,7 @@ impl App {
             subtitle_results: Vec::new(),
             subtitle_results_for: None,
             subtitle_note: None,
+            subtitle_note_error: false,
             subtitle_focus: 0,
             subtitle_search: None,
             subtitle_download: None,
@@ -1858,6 +1876,9 @@ impl App {
             self.subtitle_results_for = None;
         }
         self.subtitle_note = None;
+        self.subtitle_note_error = false;
+        self.track_menu_open = None;
+        self.volume_dragging = false;
         let origin = match self.screen {
             Screen::Detail => Screen::Detail,
             _ => Screen::Browse,
@@ -2074,6 +2095,14 @@ impl App {
 
     fn note_subtitle(&mut self, note: impl Into<String>) {
         self.subtitle_note = Some(note.into());
+        self.subtitle_note_error = false;
+    }
+
+    fn fail_subtitle(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        self.subtitle_note = Some(message.clone());
+        self.subtitle_note_error = true;
+        self.error = Some(message);
     }
 
     fn subtitle_actions(&self) -> Vec<Message> {
@@ -2151,7 +2180,7 @@ impl App {
 
     fn subtitle_row_budget(&self) -> usize {
         const ROW_COST: f32 = 52.0;
-        const RESERVED: f32 = ui::screens::player::BOTTOM_SCRIM_HEIGHT + 30.0 + 130.0 + 72.0;
+        const RESERVED: f32 = ui::screens::player::BOTTOM_SCRIM_HEIGHT + 30.0 + 130.0 + 104.0;
         if !self.window_height.is_finite() {
             return 2;
         }
@@ -2237,7 +2266,10 @@ impl App {
                     self.note_subtitle(note);
                 }
             }
-            Err(error) => self.report(&error),
+            Err(error) => {
+                self.fail_subtitle(error.to_string());
+                self.report(&error);
+            }
         }
     }
 
@@ -2479,15 +2511,12 @@ impl App {
                 }
                 Ok(Err(message)) => {
                     self.subtitle_search = None;
-                    self.note_subtitle(message.clone());
-                    self.error = Some(message);
+                    self.fail_subtitle(message);
                 }
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => {
                     self.subtitle_search = None;
-                    let note = "The subtitle search stopped unexpectedly.".to_string();
-                    self.note_subtitle(note.clone());
-                    self.error = Some(note);
+                    self.fail_subtitle("The subtitle search stopped unexpectedly.");
                 }
             }
         }
@@ -2520,7 +2549,7 @@ impl App {
                                 let _ = self.update(Message::UseSubtitle(stored.id.clone()));
                             }
                             Err(error) => {
-                                self.note_subtitle(error.to_string());
+                                self.fail_subtitle(error.to_string());
                                 self.report(&error);
                             }
                         }
@@ -2528,8 +2557,7 @@ impl App {
                 }
                 Ok(Err(message)) => {
                     self.subtitle_download = None;
-                    self.note_subtitle(message.clone());
-                    self.error = Some(message);
+                    self.fail_subtitle(message);
                 }
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => {
@@ -2669,9 +2697,12 @@ impl App {
                 self.status = Some("Subtitle handed to the player.".to_string());
             }
             Ok(None) => {
-                self.error = Some("That stored subtitle is no longer here.".to_string());
+                self.fail_subtitle("That stored subtitle is no longer here.");
             }
-            Err(error) => self.report(&error),
+            Err(error) => {
+                self.fail_subtitle(error.to_string());
+                self.report(&error);
+            }
         }
     }
 
@@ -2921,7 +2952,10 @@ impl App {
         self.subtitle_results.clear();
         self.subtitle_results_for = None;
         self.subtitle_note = None;
+        self.subtitle_note_error = false;
         self.subtitle_focus = 0;
+        self.track_menu_open = None;
+        self.volume_dragging = false;
         self.frame = None;
         self.scrub = None;
         self.snapshot = PlayerSnapshot::default();
@@ -4508,6 +4542,19 @@ impl App {
         }
     }
 
+    fn player_chrome_held(&self) -> bool {
+        self.track_menu_open.is_some() || self.scrub.is_some() || self.volume_dragging
+    }
+
+    fn set_chrome(&mut self, visible: bool) {
+        if self.player_chrome == visible {
+            return;
+        }
+        self.player_chrome = visible;
+        self.motion
+            .place_chrome(visible && self.screen == Screen::Player);
+    }
+
     fn sync_motion(&mut self) {
         self.motion.set_reduced(self.reduced_motion());
         match self.motion_focus_index() {
@@ -4858,8 +4905,14 @@ impl App {
                 }
             }
             Message::TogglePlay => self.toggle_play(),
-            Message::Volume(percent) => self.drag_volume(percent),
-            Message::VolumeCommit => self.commit_volume(),
+            Message::Volume(percent) => {
+                self.volume_dragging = true;
+                self.drag_volume(percent)
+            }
+            Message::VolumeCommit => {
+                self.volume_dragging = false;
+                self.commit_volume()
+            }
             Message::ToggleMute => self.toggle_mute(),
             Message::ToggleFullscreen => return self.toggle_fullscreen(),
             Message::Scrub(seconds) => self.scrub = Some(seconds),
@@ -4871,7 +4924,28 @@ impl App {
                 }
             }
             Message::PlayerWake => {
-                self.player_chrome = true;
+                self.set_chrome(true);
+                return Task::none();
+            }
+            Message::PointerInside(inside) => {
+                self.pointer_inside = inside;
+                if inside {
+                    self.last_input = std::time::Instant::now();
+                    self.set_chrome(true);
+                } else if !self.player_chrome_held() {
+                    self.set_chrome(false);
+                }
+                return Task::none();
+            }
+            Message::TrackMenuOpened(kind) => {
+                self.track_menu_open = Some(kind);
+                self.set_chrome(true);
+                return Task::none();
+            }
+            Message::TrackMenuClosed(kind) => {
+                if self.track_menu_open == Some(kind) {
+                    self.track_menu_open = None;
+                }
                 return Task::none();
             }
             Message::MotionTick(now) => {
@@ -4886,8 +4960,10 @@ impl App {
                 let playing =
                     matches!(self.snapshot.state, screenroom_player::PlayerState::Playing)
                         && self.up_next.is_none();
-                self.player_chrome =
-                    ui::screens::player::chrome_visible(playing, self.last_input.elapsed());
+                let visible = self.pointer_inside
+                    && (self.player_chrome_held()
+                        || ui::screens::player::chrome_visible(playing, self.last_input.elapsed()));
+                self.set_chrome(visible);
                 if self.drive_play_check() {
                     return iced::exit();
                 }
@@ -5065,50 +5141,53 @@ impl App {
         }
 
         match self.screen {
-            Screen::Player => match key {
-                Key::Named(Named::Escape) => {
-                    if self.up_next.take().is_some() {
-                        self.status = Some("Autoplay cancelled.".to_string());
-                        return Task::none();
-                    }
+            Screen::Player => {
+                self.set_chrome(true);
+                match key {
+                    Key::Named(Named::Escape) => {
+                        if self.up_next.take().is_some() {
+                            self.status = Some("Autoplay cancelled.".to_string());
+                            return Task::none();
+                        }
 
-                    if self.fullscreen
-                        || self.pending_mode() == Some(iced::window::Mode::Fullscreen)
-                    {
-                        return self.leave_fullscreen();
+                        if self.fullscreen
+                            || self.pending_mode() == Some(iced::window::Mode::Fullscreen)
+                        {
+                            return self.leave_fullscreen();
+                        }
+                        self.leave_player();
                     }
-                    self.leave_player();
-                }
-                Key::Named(Named::Space) => self.toggle_play(),
-                Key::Named(Named::ArrowUp) if !self.subtitle_actions().is_empty() => {
-                    self.player_chrome = true;
-                    self.move_subtitle_focus(-1);
-                }
-                Key::Named(Named::ArrowDown) if !self.subtitle_actions().is_empty() => {
-                    self.player_chrome = true;
-                    self.move_subtitle_focus(1);
-                }
-                Key::Named(Named::Enter) if self.subtitle_enter_target().is_some() => {
-                    self.player_chrome = true;
-                    return self.activate_subtitle();
-                }
-                Key::Named(Named::Enter) if self.up_next.is_some() => self.play_up_next(),
-                Key::Named(Named::ArrowLeft) => self.seek_step(-SEEK_STEP),
-                Key::Named(Named::ArrowRight) => self.seek_step(SEEK_STEP),
-                Key::Character(character) => match character.as_str() {
-                    "f" => return self.toggle_fullscreen(),
-                    "m" => self.toggle_mute(),
-                    "s" => self.skip_segment(),
-                    "t" => {
+                    Key::Named(Named::Space) => self.toggle_play(),
+                    Key::Named(Named::ArrowUp) if !self.subtitle_actions().is_empty() => {
                         self.player_chrome = true;
-                        self.find_subtitles();
+                        self.move_subtitle_focus(-1);
                     }
-                    "i" => self.toggle_segment_mark("intro"),
-                    "c" => self.toggle_segment_mark("credits"),
+                    Key::Named(Named::ArrowDown) if !self.subtitle_actions().is_empty() => {
+                        self.player_chrome = true;
+                        self.move_subtitle_focus(1);
+                    }
+                    Key::Named(Named::Enter) if self.subtitle_enter_target().is_some() => {
+                        self.player_chrome = true;
+                        return self.activate_subtitle();
+                    }
+                    Key::Named(Named::Enter) if self.up_next.is_some() => self.play_up_next(),
+                    Key::Named(Named::ArrowLeft) => self.seek_step(-SEEK_STEP),
+                    Key::Named(Named::ArrowRight) => self.seek_step(SEEK_STEP),
+                    Key::Character(character) => match character.as_str() {
+                        "f" => return self.toggle_fullscreen(),
+                        "m" => self.toggle_mute(),
+                        "s" => self.skip_segment(),
+                        "t" => {
+                            self.player_chrome = true;
+                            self.find_subtitles();
+                        }
+                        "i" => self.toggle_segment_mark("intro"),
+                        "c" => self.toggle_segment_mark("credits"),
+                        _ => {}
+                    },
                     _ => {}
-                },
-                _ => {}
-            },
+                }
+            }
             Screen::Detail => match key {
                 Key::Named(Named::Escape) => self.back(),
                 Key::Named(Named::Enter) => self.activate(),
@@ -5229,6 +5308,15 @@ impl App {
             iced::keyboard::listen().map(Message::Keyboard),
             iced::window::close_requests().map(|_| Message::Close),
             iced::window::resize_events().map(|(_id, size)| Message::Resized(size)),
+            iced::event::listen_with(|event, _status, _id| match event {
+                iced::Event::Mouse(iced::mouse::Event::CursorEntered) => {
+                    Some(Message::PointerInside(true))
+                }
+                iced::Event::Mouse(iced::mouse::Event::CursorLeft) => {
+                    Some(Message::PointerInside(false))
+                }
+                _ => None,
+            }),
         ];
         let interval = if self.screen == Screen::Player || self.preview.is_some() {
             PLAYER_TICK
@@ -5630,9 +5718,8 @@ impl App {
                         .color(ink(tokens.palette.ink_muted)),
                 );
             }
-            let failure = self.error.clone();
-            if let Some(message) = failure.clone().or_else(|| self.subtitle_note.clone()) {
-                let color = if failure.is_some() {
+            if let Some(message) = self.subtitle_note.clone() {
+                let color = if self.subtitle_note_error {
                     ui::theme::danger()
                 } else {
                     tokens.palette.ink_muted
@@ -5644,12 +5731,11 @@ impl App {
                 );
             }
             let (kept_rows, result_rows) = self.subtitle_row_split();
+            let focus = self
+                .subtitle_focus
+                .min(self.subtitle_actions().len().saturating_sub(1));
             for (index, subtitle) in self.subtitles.iter().take(kept_rows).enumerate() {
-                let marker = if index == self.subtitle_focus {
-                    "› "
-                } else {
-                    "  "
-                };
+                let marker = if index == focus { "› " } else { "  " };
                 panel = panel.push(
                     row![
                         text(format!("{marker}{} · {}", subtitle.label, subtitle.format))
@@ -5681,11 +5767,7 @@ impl App {
             }
             for (offset, result) in self.subtitle_results.iter().take(result_rows).enumerate() {
                 let index = kept_rows + offset;
-                let marker = if index == self.subtitle_focus {
-                    "› "
-                } else {
-                    "  "
-                };
+                let marker = if index == focus { "› " } else { "  " };
                 let label = self.subtitle_result_label(result);
                 panel = panel.push(
                     row![
