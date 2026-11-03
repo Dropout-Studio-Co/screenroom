@@ -24,13 +24,16 @@ hand are in [`MACOS_ACCEPTANCE_CHECKLIST.md`](MACOS_ACCEPTANCE_CHECKLIST.md):
 - the case-sensitive-volume half of the path-semantics tests, which needs a
   case-sensitive APFS volume rather than this host's folding one.
 
-**PENDING, needs the owner's key and a person at the machine** (2026-11-03): the
-live subtitle provider — an anonymous lookup, a keyed catalogue search, a download
-and playback of a downloaded subtitle. The provider is The Subtitle DB
-([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)) and the four
-commands that settle each step are in
-[`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8. Until they are run, no live
-provider behaviour is counted as tested.
+**Run against the installed bundle** (2026-11-03): the live subtitle
+provider — an anonymous lookup, a keyed catalogue search, a download, playback of a
+downloaded subtitle with its cue changing with the playhead, the kept copy reused
+after a restart with the provider unreachable, and the panel at 640×480. The
+provider is The Subtitle DB ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md));
+the commands, the observations and the screenshots are in
+[`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8. Offline was simulated for the
+application alone (`SCREENROOM_TSDB_BASE_URL` pointed at a dead address), with Wi-Fi
+and every other application left connected — so this is a provider-offline receipt,
+not a machine-offline one.
 
 **Windows cannot be compiled from this Mac at all.** `cargo check --target
 x86_64-pc-windows-msvc` fails inside `libsqlite3-sys`, whose bundled SQLite needs
