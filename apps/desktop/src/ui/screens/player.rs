@@ -202,6 +202,8 @@ pub struct Player<'a> {
     pub reveal: f32,
 
     pub overlay: Option<Element<'a, Message>>,
+
+    pub compact: bool,
 }
 
 impl<'a> Player<'a> {
@@ -218,6 +220,7 @@ impl<'a> Player<'a> {
             chrome: true,
             reveal: 1.0,
             overlay: None,
+            compact: false,
         }
     }
 
@@ -314,6 +317,13 @@ impl<'a> Player<'a> {
     fn top_scrim(&self) -> Element<'a, Message> {
         let reveal = self.reveal.clamp(0.0, 1.0);
         let tokens = design::tokens();
+
+        if self.compact {
+            return Space::new()
+                .width(Length::Fill)
+                .height(Length::Shrink)
+                .into();
+        }
 
         let mut bar = row![
             icon_button(Icon::Back, ICON_SIZE, Message::BackFromPlayer),

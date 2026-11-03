@@ -9,12 +9,11 @@ mapping and the bounds. The decision is
 
 **Status (2026-11-03).** The behaviour below is the binding product behaviour.
 Imports, storage and offline reuse are implemented and covered by tests. The
-provider was replaced by TSDB under this decision, and its own code path — key
-discovery, anonymous lookup, keyed search and a cross-host download — was run once
-against the live service on this host (§8, with the output). What is still
-**PENDING** is the part that needs a visible window and a person: a downloaded
-subtitle drawn in the player, and offline reuse after a restart. No screenshot and
-no measured latency is claimed for anything that did not run.
+provider was replaced by TSDB under this decision, and every step has now been run
+on this host: its own code path against the live service, a downloaded Bengali
+subtitle drawn over the playing picture, the kept copy reused after a restart with
+the provider unreachable, and the panel at 640×480 (§8 records the commands, the
+observations and the screenshots).
 
 ## 1. The priority chain
 
@@ -210,27 +209,50 @@ language code answers `400`, a wrong media kind and a missing id answer `404`, a
 provider facts observed with `curl`; the run above is the receipt for this
 application's own transport, authentication and parsing.
 
-Two checks stay PENDING, because they need a visible window and a person:
+### Verified in the running application, 2026-11-03
 
-```bash
-# A film with no track and no sidecar, in the installed application:
-#   player → t (or the overlay's Find online) → pick a result → the text
-#   appears → quit,
-#   turn the network off, reopen, play: the kept subtitle still works and the
-#   media file's bytes and modification time are unchanged.
-scripts/package-macos.sh && open dist/Screenroom.app
-```
+Three checks that had been PENDING were then run on the owner's MacBook against the
+**installed bundle** (`scripts/package-macos.sh`, launched from
+`dist/Screenroom.app`), not the development harness. Original screenshots are in
+`.artifacts/evidence/subtitles-*.png` (local, Git-ignored).
 
-**Also not verified:** the Windows path (no build on that machine); a downloaded
-subtitle drawn inside the player window; the player's own subtitle panel as drawn
-on screen (its messages are covered by tests, its layout has not been looked at by
-a person — the panel sizes its row budget to the window height (five rows at the
-default 1280×800, at most six on a taller window, one on a short one) and shows a
-count for the rest, so it fits the default window; at the 640×480 minimum the whole
-player overlay is cramped and that size is untested); the offline-reuse step above;
-and the TV client, which has no online subtitle provider at all — it reads embedded
-tracks and the four sidecar documents its decoder accepts (`.smi`, `.srt`, `.sub`,
-`.ttxt`). Nothing here is claimed to have happened beyond the recorded run.
+**A. A downloaded subtitle is loaded, selected and drawn.** A film with no embedded
+track and no sidecar was played; *Find online* (`t`) returned 10 matches; the first
+was downloaded from `/get/{id}` through its 302 and the app applied it
+automatically. The subtitle picker then read
+`screenroom-0537e40c…​.srt · subrip`, and Bengali text was drawn over the picture at
+the bottom. Two captures three seconds apart showed **different cues**
+(`…একটা পিজা বক্স…` at 4:26, then `কি বললেন আপনি?` at 4:48), so the text follows the
+playhead rather than being a static overlay. The media file's bytes and modification
+time were unchanged; the owner's own media on the external drive was never opened
+for writing.
+
+**B. The kept copy survives a restart and needs no network.** The app was quit and
+relaunched with `SCREENROOM_TSDB_BASE_URL=https://127.0.0.1:9`, which makes every
+provider request fail while **leaving Wi-Fi and every other application's network
+untouched** — the honest way to simulate offline for one process. After the restart
+the panel still listed `Bengali · downloaded · srt`, pressing `t` reported
+`provider_transport: … Connection refused (os error 61)` in the panel (so the online
+tier really was attempted and really failed), and pressing Enter applied the kept
+copy, which then rendered Bengali text over the picture. `lsof -a -p <pid> -i`
+printed **no sockets** for the app during that playback.
+
+**C. The panel works at 640×480.** Two defects were found and fixed: the panel could
+overlap the player's own title row, and its rows were clipped off the bottom at the
+minimum window size. The fixes are a height-aware row budget, a compact player bar
+below 620 px, results taking the row budget ahead of kept copies, a short label under
+900 px, and a panel message channel of its own. At 640×480 the panel now shows its
+header, the provider message and one actionable row with a reachable *Download*; the
+controls are keyboard-operable (`↑`/`↓` pick, `Enter` takes) as well as clickable,
+and the bottom transport row is not clipped.
+
+**Also not verified:** the Windows path (no build on that machine) and the TV
+client, which has no online subtitle provider at all — it reads embedded tracks and
+the four sidecar documents its decoder accepts (`.smi`, `.srt`, `.sub`, `.ttxt`).
+The film used for A and B was a generated, rights-cleared clip carrying a real
+downloaded Bengali subtitle; a real commercial film was not used for the download
+test because every candidate on the owner's drive already carries an embedded track,
+which is the tier that correctly short-circuits the provider.
 
 ## 9. Rights and retention
 

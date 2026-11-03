@@ -1865,6 +1865,162 @@ fn the_player_resolves_a_track_before_it_looks_online() {
 }
 
 #[test]
+fn the_subtitle_panel_is_operable_without_a_pointer() {
+    let media = Media::new();
+    media.placeholders(&["Keyboard (2020)/Keyboard (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 48));
+    app.screen = Screen::Player;
+    app.player_chrome = true;
+
+    assert!(
+        app.subtitle_actions().is_empty(),
+        "an empty panel offers nothing to press"
+    );
+
+    app.subtitle_results = vec![
+        screenroom_core::SubtitleMatch {
+            id: 11,
+            language: "bn".to_string(),
+            language_name: "Bengali".to_string(),
+            release_name: "Keyboard.2020.first".to_string(),
+            format: "srt".to_string(),
+            cues: 500,
+            hearing_impaired: false,
+            ai_transcribed: false,
+            encoding: "utf-8".to_string(),
+        },
+        screenroom_core::SubtitleMatch {
+            id: 12,
+            language: "bn".to_string(),
+            language_name: "Bengali".to_string(),
+            release_name: "Keyboard.2020.second".to_string(),
+            format: "srt".to_string(),
+            cues: 480,
+            hearing_impaired: false,
+            ai_transcribed: false,
+            encoding: "utf-8".to_string(),
+        },
+    ];
+    app.subtitle_focus = 0;
+
+    let actions = app.subtitle_actions();
+    assert_eq!(actions.len(), 2);
+    assert_eq!(app.subtitle_row_split(), (0, 2));
+    assert!(matches!(
+        &actions[0],
+        Message::SubtitleDownload { id: 11, format } if format == "srt"
+    ));
+    assert!(matches!(
+        &actions[1],
+        Message::SubtitleDownload { id: 12, .. }
+    ));
+
+    app.player_chrome = false;
+    let _ = app.update(key("down"));
+    assert!(app.player_chrome, "a subtitle key wakes the panel");
+    assert_eq!(app.subtitle_focus, 1, "Down moves to the second row");
+    let _ = app.update(key("down"));
+    assert_eq!(app.subtitle_focus, 0, "Down wraps to the first row");
+    let _ = app.update(key("up"));
+    assert_eq!(app.subtitle_focus, 1, "Up wraps back to the last row");
+}
+
+#[test]
+fn a_narrow_window_shows_a_short_subtitle_label() {
+    let mut app = fresh_app();
+    let result = screenroom_core::SubtitleMatch {
+        id: 31,
+        language: "bn".to_string(),
+        language_name: "Bengali".to_string(),
+        release_name: "Parasite.2019.1080p.AMZN.WEB-DL.Dual Audio [Hin+Kor]HEVC.DDP 5.1"
+            .to_string(),
+        format: "srt".to_string(),
+        cues: 1660,
+        hearing_impaired: false,
+        ai_transcribed: false,
+        encoding: "utf-8".to_string(),
+    };
+
+    app.window_width = 640.0;
+    assert_eq!(app.subtitle_result_label(&result), "Bengali · 1660 cues");
+
+    app.window_width = 1280.0;
+    assert!(
+        app.subtitle_result_label(&result)
+            .starts_with("Parasite.2019.1080p.AMZN"),
+        "a wide window names the release"
+    );
+}
+
+#[test]
+fn the_first_key_after_the_chrome_hides_still_acts() {
+    let media = Media::new();
+    media.placeholders(&["Idle (2020)/Idle (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 51));
+    app.screen = Screen::Player;
+    app.player_chrome = false;
+    app.subtitle_results = vec![screenroom_core::SubtitleMatch {
+        id: 21,
+        language: "bn".to_string(),
+        language_name: "Bengali".to_string(),
+        release_name: "Idle.2020".to_string(),
+        format: "srt".to_string(),
+        cues: 300,
+        hearing_impaired: false,
+        ai_transcribed: false,
+        encoding: "utf-8".to_string(),
+    }];
+
+    assert!(
+        matches!(
+            app.subtitle_enter_target(),
+            Some(Message::SubtitleDownload { id: 21, .. })
+        ),
+        "Enter must target the row even while the chrome is idle"
+    );
+    let _ = app.update(key("enter"));
+    assert!(app.player_chrome, "the key wakes the panel it acts on");
+}
+
+#[test]
+fn a_kept_subtitle_is_reachable_from_the_panel_with_the_keyboard() {
+    let media = Media::new();
+    media.placeholders(&["Kept (2020)/Kept (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 49));
+    app.screen = Screen::Player;
+    app.player_chrome = true;
+
+    app.subtitles = vec![screenroom_core::StoredSubtitle {
+        id: "kept-1".to_string(),
+        file_id: id.clone(),
+        label: "Bengali · imported".to_string(),
+        language: "Bengali".to_string(),
+        format: "srt".to_string(),
+        provenance: "imported by you from a file on this machine".to_string(),
+        bytes: 120,
+        created_ms: 1,
+    }];
+
+    let actions = app.subtitle_actions();
+    assert!(
+        matches!(&actions[0], Message::UseSubtitle(id) if id == "kept-1"),
+        "a kept subtitle is the first row"
+    );
+
+    let _ = app.update(key("enter"));
+    assert!(app.subtitle_actions().len() == 1);
+}
+
+#[test]
 fn results_that_arrive_for_another_film_are_dropped() {
     let media = Media::new();
     media.placeholders(&["Arrived (2020)/Arrived (2020).mkv".to_string()]);
@@ -1909,8 +2065,8 @@ fn the_subtitle_panel_sizes_its_row_count_to_the_window() {
     app.window_height = 800.0;
     assert_eq!(
         app.subtitle_row_budget(),
-        5,
-        "the default window shows five"
+        4,
+        "the default window shows four"
     );
     app.window_height = 1_440.0;
     assert_eq!(app.subtitle_row_budget(), 6, "a tall window stops at six");

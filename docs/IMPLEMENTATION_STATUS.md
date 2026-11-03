@@ -33,6 +33,24 @@ device test. The TSDB paths need the owner's key and the commands in
 (2026-11-03), and the two steps that need a visible window and a person are still
 PENDING.
 
+### Subtitles verified in the running application, 2026-11-03
+
+The three checks that were PENDING in `SUBTITLE_PROVIDER.md` §8 were run against the
+**installed bundle**, driven through the app's own window.
+
+| Check | What ran | What was seen |
+| --- | --- | --- |
+| Downloaded subtitle playback | film with no embedded track and no sidecar played; `t` searched TSDB; the first result was downloaded through `/get/{id}` and applied | the picker read `screenroom-0537e40c…​.srt · subrip`; Bengali text was drawn over the picture at the bottom; two captures 3 s apart showed **different cues** (4:26 and 4:48), so it follows the playhead; the media file's bytes and mtime were unchanged |
+| Offline persistence | app quit and relaunched with `SCREENROOM_TSDB_BASE_URL=https://127.0.0.1:9` — provider requests fail while Wi-Fi and other applications are untouched | the kept `Bengali · downloaded · srt` row survived the restart; `t` reported `provider_transport: … Connection refused (os error 61)` in the panel; `Enter` applied the kept copy and it rendered; `lsof -a -p <pid> -i` printed **no sockets** |
+| Panel at 640×480 | window launched at the documented minimum size and the panel opened | two defects found and fixed (panel overlapped the title row; rows were clipped off the bottom); afterwards the header, message and one actionable row fit, nothing overlapped or overflowed, and `↑`/`↓` + `Enter` operate it as well as the pointer |
+
+Four app fixes came out of these runs: a keyboard path for the panel, a wake-on-key
+so the first press after the chrome hides is not swallowed, a height-aware row budget
+with a compact player bar under 620 px and a short label under 900 px, and a panel
+message channel that shows the failure rather than a stale success. Regression tests
+were added for the keyboard path, the wake, the row budget, the compact label and
+the drop-on-film-change behaviour; the suite is **771 tests, 0 failures**.
+
 ### Removals completed on this host, 2026-11-03
 
 | Removed | Evidence it is gone | What replaced it |

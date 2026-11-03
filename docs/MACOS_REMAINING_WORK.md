@@ -169,7 +169,7 @@ player's chrome receding has not been watched in a window. That is P2-06 below.
 | F12 | Watchlists and favourites | COMPLETE | toggle/filter tests | — | — |
 | F13 | Audio tracks and subtitles | COMPLETE | `step_5`, `step_21`, track tests, and a Bengali cue proved to be drawn into the picture | step 5 (that it reads correctly on screen) | — |
 | F14 | Skip intro and credits | COMPLETE (manual markers only) | marker tests, auto-skip guard tests | — | — |
-| F15 | Subtitles: file first, then The Subtitle DB | **COMPLETE (store and resolution order) / PENDING (live provider)** — the order is embedded track → sidecar → provider, and the online action returns before any network call when a track or a sidecar exists; The Subtitle DB is the only online provider ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)); no lookup, keyed search, download or downloaded-subtitle playback has a receipt | store tests, `step_21`, the resolution-order test | run the four commands in [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8 with the owner's key | owner |
+| F15 | Subtitles: file first, then The Subtitle DB | **COMPLETE and verified in the running application (2026-11-03)** — embedded track → sidecar → The Subtitle DB, the only online provider ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)). A real Bengali subtitle was downloaded, applied and drawn over the playing picture; the cue changed with the playhead; after a restart with the provider unreachable the kept copy still applied and rendered, with no socket open; the panel is operable and unclipped at 640×480 | store tests, `step_21`, resolution-order tests, plus the screenshots and run recorded in [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8 | Windows run | owner |
 | F16 | Local recommendations | COMPLETE | recommendation tests | — | — |
 | F17 | Browse previews | COMPLETE | `step_17` (dwell, one decoder, reduced motion, cleanup) | look at a card | — |
 | F18 | Picture-in-Picture | **WITHDRAWN (2026-11-02)** — not offered: no OS PiP and no mini player | — | — | not wanted |
@@ -439,11 +439,13 @@ than reclassified.
   original file untouched (`step_21`). The file-first gate is a binding rule of
   the change; proving the transport is never reached when a track or a sidecar
   exists is its acceptance condition, not a receipt that exists yet.
-- **What is PENDING:** an anonymous lookup, a keyed `/v1/by-search`, a
-  `/get/{id}` download, and playback of a downloaded subtitle after a network-off
-  restart. The four commands and the installed-app run are in
-  [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8; the key already exists at the
-  macOS config path.
+- **What was run, on this host (2026-11-03):** an anonymous lookup, a keyed
+  `/v1/by-search`, a `/get/{id}` download through its 302, the downloaded Bengali
+  subtitle drawn over the picture with the cue changing with the playhead, a
+  restart with the provider pointed at a dead address where the kept copy still
+  applied and rendered with **no socket open**, and the panel at 640×480. The
+  commands, observations and screenshots are in
+  [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8.
 - **Where:** `crates/screenroom-core/src/library/provider_subtitles.rs`,
   `provider_http.rs`, `subtitles.rs`, and the player panel in `app.rs`.
 - **Acceptance:** on a film with no track and no sidecar, a search returns matches
