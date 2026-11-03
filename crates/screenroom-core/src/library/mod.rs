@@ -47,8 +47,8 @@ pub use media_info::UnprobedFile;
 pub use metadata::EnrichmentSummary;
 pub use playback::Checkpoint;
 pub use provider_http::{
-    Clock, HttpMethod, HttpRequest, HttpResponse, HttpTransport, ProviderError, Secret, Sleeper,
-    SystemClock, TcpTransport, ThreadSleeper, TransportError,
+    Clock, HttpMethod, HttpRequest, HttpResponse, HttpTransport, MAX_TRANSFER_BYTES, ProviderError,
+    Secret, Sleeper, SystemClock, TcpTransport, ThreadSleeper, TransportError,
 };
 pub use provider_metadata::{
     ARTWORK_RETENTION_SETTING, ArtworkRetention, METADATA_ORIGIN_PROVIDER, MetadataOrigin,
@@ -60,8 +60,11 @@ pub use provider_queue::{
     describe_enrichment_target,
 };
 pub use provider_subtitles::{
-    BENGALI_CODES, DownloadedSubtitle, OpenSubtitlesProvider, SubtitleMatch, SubtitleProvider,
-    SubtitleProviderConfig, SubtitleSearch, subtitle_language_codes, subtitle_language_name,
+    BENGALI_CODES, DOWNLOAD_HOST_DOMAINS, DownloadedSubtitle, SubtitleMatch, SubtitleProvider,
+    SubtitleProviderConfig, SubtitleSearch, TSDB_API_KEY_ENVIRONMENT, TSDB_BASE_URL,
+    TSDB_BASE_URL_ENVIRONMENT, TSDB_CONFIG_DIR_ENVIRONMENT, TSDB_CONFIG_ENVIRONMENT,
+    TSDB_KEY_FILE_NAME, TSDB_PROVIDER, TSDB_USER_AGENT, TsdbProvider, subtitle_language_codes,
+    subtitle_language_name,
 };
 pub use provider_tls::{HttpsTransport, MAX_REDIRECTS};
 pub use provider_tmdb::{

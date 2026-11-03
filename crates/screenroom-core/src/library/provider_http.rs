@@ -13,6 +13,8 @@ pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub const MAX_RESPONSE_BYTES: usize = 512 * 1024;
 
+pub const MAX_TRANSFER_BYTES: usize = 8 * 1024 * 1024;
+
 pub const MAX_HEADER_BYTES: usize = 64 * 1024;
 
 pub const DEFAULT_BUDGET_PER_MINUTE: u32 = 120;
@@ -84,6 +86,8 @@ pub struct HttpRequest {
     pub timeout: Duration,
 
     pub max_bytes: usize,
+
+    pub redirect_hosts: Vec<String>,
 }
 
 impl HttpRequest {
@@ -95,6 +99,7 @@ impl HttpRequest {
             body: Vec::new(),
             timeout: DEFAULT_TIMEOUT,
             max_bytes: MAX_RESPONSE_BYTES,
+            redirect_hosts: Vec::new(),
         }
     }
 
@@ -106,6 +111,7 @@ impl HttpRequest {
             body,
             timeout: DEFAULT_TIMEOUT,
             max_bytes: MAX_RESPONSE_BYTES,
+            redirect_hosts: Vec::new(),
         }
     }
 
@@ -116,6 +122,14 @@ impl HttpRequest {
 
     pub fn with_max_bytes(mut self, max_bytes: usize) -> Self {
         self.max_bytes = max_bytes;
+        self
+    }
+
+    pub fn with_redirect_hosts(
+        mut self,
+        hosts: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.redirect_hosts = hosts.into_iter().map(Into::into).collect();
         self
     }
 
@@ -156,6 +170,7 @@ impl fmt::Debug for HttpRequest {
             .field("body", &self.body.len())
             .field("timeout", &self.timeout)
             .field("max_bytes", &self.max_bytes)
+            .field("redirect_hosts", &self.redirect_hosts)
             .finish()
     }
 }
@@ -590,7 +605,7 @@ impl HttpTransport for TcpTransport {
     fn send(&self, request: &HttpRequest) -> Result<HttpResponse, TransportError> {
         request.validate()?;
         let target = parse_target(&request.url)?;
-        let limit = request.max_bytes.min(MAX_RESPONSE_BYTES);
+        let limit = request.max_bytes.min(MAX_TRANSFER_BYTES);
         let address = (target.host.as_str(), target.port)
             .to_socket_addrs()?
             .next()

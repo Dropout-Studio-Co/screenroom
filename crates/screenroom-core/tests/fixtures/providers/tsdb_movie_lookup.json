@@ -1,0 +1,82 @@
+{
+  "title": {
+    "imdb": "tt1454468",
+    "tmdb_id": 76341,
+    "media_type": "movie",
+    "name": "Harbour Lights",
+    "year": 2014,
+    "subtitle_count": 4,
+    "subtitle_languages": ["bn", "en"]
+  },
+  "subtitles": {
+    "total": 4,
+    "limit": 100,
+    "offset": 0,
+    "items": [
+      {
+        "id": 918273,
+        "language": "bn",
+        "format": "srt",
+        "cues": 640,
+        "duration_s": 6420,
+        "bytes": 41234,
+        "encoding": "utf-8-sig",
+        "release_name": "Harbour.Lights.2014.1080p.WEB-DL",
+        "hearing_impaired": false,
+        "uploader": "fixture",
+        "ai_transcribed": false,
+        "fps": 23.976,
+        "added_at": "2026-10-01T00:00:00Z",
+        "download_url": "https://api.thesubtitledb.org/get/918273"
+      },
+      {
+        "id": 918274,
+        "language": "en",
+        "format": "zip",
+        "cues": 610,
+        "duration_s": 6420,
+        "bytes": 52000,
+        "encoding": "utf-8",
+        "release_name": "Harbour.Lights.2014.1080p.WEB-DL",
+        "hearing_impaired": false,
+        "uploader": "fixture",
+        "ai_transcribed": false,
+        "fps": 23.976,
+        "added_at": "2026-10-01T00:00:00Z",
+        "download_url": "https://api.thesubtitledb.org/get/918274"
+      },
+      {
+        "id": 918275,
+        "language": "",
+        "format": "srt",
+        "cues": 610,
+        "duration_s": 6420,
+        "bytes": 39000,
+        "encoding": "utf-8",
+        "release_name": "Harbour.Lights.2014.1080p.WEB-DL",
+        "hearing_impaired": false,
+        "uploader": "fixture",
+        "ai_transcribed": false,
+        "fps": 23.976,
+        "added_at": "2026-10-01T00:00:00Z",
+        "download_url": "https://api.thesubtitledb.org/get/918275"
+      },
+      {
+        "id": 918276,
+        "language": "en",
+        "format": "ass",
+        "cues": 588,
+        "duration_s": 6420,
+        "bytes": 45500,
+        "encoding": "utf-8",
+        "release_name": "Harbour.Lights.2014.BluRay",
+        "hearing_impaired": true,
+        "uploader": "fixture",
+        "ai_transcribed": true,
+        "fps": 24.0,
+        "added_at": "2026-10-02T00:00:00Z",
+        "download_url": "https://api.thesubtitledb.org/get/918276"
+      }
+    ]
+  }
+}
