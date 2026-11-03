@@ -18,10 +18,10 @@ stamp="$common/screenroom-installed.sha"
 last="$common/screenroom-build-last.json"
 state="$root/.artifacts/builds"
 install_dir="${SCREENROOM_INSTALL_DIR:-$HOME/Applications}"
+builds="$install_dir/.screenroom-builds"
 installed="$install_dir/Screenroom.app"
 dist="$root/dist/Screenroom.app"
 relevant='^(apps/|crates/|assets/|scripts/|vendor/|Cargo\.toml|Cargo\.lock|rust-toolchain|rust-toolchain\.toml|\.cargo/)'
-max_age_seconds=3600
 
 force=0
 unlock=0
@@ -52,10 +52,18 @@ status() {
   else
     lock_state="free"
   fi
-  if [ -f "$pending" ]; then pending_state="queued"; else pending_state="none"; fi
+  if [ -f "$pending" ]; then
+    pending_state="queued $(sed -n '1p' "$pending" 2>/dev/null)@$(sed -n '2p' "$pending" 2>/dev/null)"
+  else
+    pending_state="none"
+  fi
   printf 'installed: %s\n' "$(cat "$stamp" 2>/dev/null || echo none)"
   printf 'head:      %s\n' "$(git rev-parse HEAD 2>/dev/null || echo none)"
-  printf 'app:       %s at %s\n' "$app_state" "$installed"
+  if [ -L "$installed" ]; then
+    printf 'app:       %s at %s -> %s\n' "$app_state" "$installed" "$(readlink "$installed")"
+  else
+    printf 'app:       %s at %s\n' "$app_state" "$installed"
+  fi
   printf 'lock:      %s\n' "$lock_state"
   printf 'pending:   %s\n' "$pending_state"
   [ -f "$last" ] && cat "$last"
@@ -90,27 +98,35 @@ fi
 
 my_start="$(ps -o lstart= -p $$ 2>/dev/null | tr -s ' ' | sed 's/^ //;s/ $//')"
 
+claim() {
+  local staging
+  staging="$(mktemp "$common/.screenroom-lock.XXXXXX")" || return 1
+  if ! printf '%s|%s\n' "$$" "$my_start" >"$staging"; then
+    rm -f "$staging"
+    return 1
+  fi
+  if ln "$staging" "$lock" 2>/dev/null; then
+    rm -f "$staging"
+    return 0
+  fi
+  rm -f "$staging"
+  return 1
+}
+
 acquire() {
   local attempt
   attempt=0
   while [ "$attempt" -lt 3 ]; do
     attempt=$((attempt + 1))
-    if ( set -o noclobber; printf '%s|%s\n' "$$" "$my_start" >"$lock" ) 2>/dev/null; then
+    if claim; then
       return 0
     fi
     if live_holder; then
       return 1
     fi
-    local epoch now
-    epoch="$(stat -f %m "$lock" 2>/dev/null || echo 0)"
-    now="$(date +%s)"
-    if [ "$epoch" -gt 0 ] && [ "$((now - epoch))" -lt "$max_age_seconds" ]; then
-      sleep 1
-      continue
-    fi
-    rm -f "$lock"
+    sleep 1
   done
-  return 1
+  claim
 }
 
 release() {
@@ -129,29 +145,47 @@ if [ "$force" -eq 1 ] && [ -f "$lock" ] && ! live_holder; then
 fi
 
 if ! acquire; then
-  : >"$pending"
+  printf '%s\n%s\n' "$root" "$(git rev-parse HEAD)" >"$pending"
   echo "rebuild-app: a build is already running; queued this state behind it"
-  exit 0
+  waited=0
+  while [ "$waited" -lt 60 ]; do
+    sleep 1
+    waited=$((waited + 1))
+    if acquire; then
+      rm -f "$pending"
+      echo "rebuild-app: the previous build finished; building this checkout"
+      break
+    fi
+    if [ "$waited" -eq 60 ]; then
+      exit 0
+    fi
+  done
 fi
 
 trap release EXIT
 trap 'release; exit 130' INT TERM
 
 recover() {
-  local candidate
-  if [ ! -d "$installed" ]; then
-    for candidate in "$install_dir"/.Screenroom.app.previous.*; do
-      [ -d "$candidate" ] || continue
-      if mv "$candidate" "$installed" 2>/dev/null; then
-        echo "rebuild-app: restored a previous build that was left behind"
-        break
-      fi
-    done
+  local candidate newest
+  if [ -d "$installed" ] && [ ! -L "$installed" ]; then
+    mkdir -p "$builds"
+    candidate="$builds/Screenroom-legacy-$(date +%s).app"
+    if mv "$installed" "$candidate" 2>/dev/null; then
+      ln -sfn "$candidate" "$installed" 2>/dev/null || true
+      echo "rebuild-app: moved a directory install into the versioned layout"
+    fi
   fi
   for candidate in "$install_dir"/.Screenroom.app.previous.* "$install_dir"/.Screenroom.app.staged.*; do
     [ -e "$candidate" ] || continue
     [ -d "$installed" ] && rm -rf "$candidate"
   done
+  if [ ! -e "$installed" ] || { [ -L "$installed" ] && [ ! -e "$installed" ]; }; then
+    newest="$(ls -dt "$builds"/*.app 2>/dev/null | head -1 || true)"
+    if [ -n "$newest" ]; then
+      ln -sfn "$newest" "$installed"
+      echo "rebuild-app: repointed the install at $newest"
+    fi
+  fi
 }
 
 recover
@@ -179,7 +213,7 @@ stamp_state() {
 }
 
 rounds=0
-while [ "$rounds" -lt 6 ]; do
+while [ "$rounds" -lt 20 ]; do
   rounds=$((rounds + 1))
   head_sha="$(git rev-parse HEAD)"
   installed_sha="$(cat "$stamp" 2>/dev/null || true)"
@@ -214,39 +248,31 @@ while [ "$rounds" -lt 6 ]; do
   fi
 
   if [ -z "$failed" ]; then
-    mkdir -p "$install_dir"
-    staged="$install_dir/.Screenroom.app.staged.$$"
-    previous="$install_dir/.Screenroom.app.previous.$$"
-    rm -rf "$staged" "$previous"
-    if ! ditto "$dist" "$staged"; then
-      rm -rf "$staged"
+    mkdir -p "$builds"
+    versioned="$builds/Screenroom-${head_sha:0:12}-$(date +%s).app"
+    if ! ditto "$dist" "$versioned"; then
+      rm -rf "$versioned"
       failed="staging failed"
     fi
   fi
 
   if [ -z "$failed" ]; then
-    if [ -d "$installed" ] && ! mv "$installed" "$previous"; then
-      rm -rf "$staged"
-      failed="could not move the previous build aside"
-    fi
-  fi
-
-  if [ -z "$failed" ]; then
-    if mv "$staged" "$installed"; then
-      rm -rf "$previous"
+    link="$install_dir/.Screenroom.app.link.$$"
+    rm -f "$link"
+    if ln -sfn "$versioned" "$link" && mv -h "$link" "$installed"; then
       chmod +x "$installed/Contents/MacOS/Screenroom" 2>/dev/null || true
       xattr -dr com.apple.quarantine "$installed" 2>/dev/null || true
       took="$(( $(date +%s) - started ))"
       record "$head_sha" built "installed in ${took}s" "$dirty"
       printf '%s\n' "$head_sha" >"$stamp"
       echo "rebuild-app: installed $head_sha at $installed in ${took}s"
+      ls -dt "$builds"/*.app 2>/dev/null | tail -n +3 | while IFS= read -r old; do
+        rm -rf "$old"
+      done
     else
-      if [ -d "$previous" ] && mv "$previous" "$installed" 2>/dev/null; then
-        failed="install failed and the previous build was restored"
-      else
-        failed="install failed and no build is in place; run --force"
-      fi
-      rm -rf "$staged"
+      rm -f "$link"
+      rm -rf "$versioned"
+      failed="install failed; the previous build is still in place"
     fi
   fi
 
@@ -268,9 +294,16 @@ while [ "$rounds" -lt 6 ]; do
   break
 done
 
-if [ -f "$pending" ]; then
+if [ -f "$pending" ] && [ "$(cat "$stamp" 2>/dev/null || true)" != "$(git rev-parse HEAD)" ]; then
+  queued_root="$(sed -n '1p' "$pending" 2>/dev/null || true)"
   rm -f "$pending"
-  echo "rebuild-app: more commits arrived than could be built in one run; the next commit builds the rest" >&2
+  if [ -n "$queued_root" ] && [ "$queued_root" != "$root" ] && [ -x "$queued_root/scripts/rebuild-app.sh" ]; then
+    echo "rebuild-app: handing the queue to $queued_root"
+    ( cd "$queued_root" && nohup scripts/rebuild-app.sh --background >>"$state/hooks.log" 2>&1 & )
+  else
+    echo "rebuild-app: commits are still arriving; continuing in a fresh worker"
+    nohup "$0" --background >>"$state/hooks.log" 2>&1 &
+  fi
 fi
 
 if [ "$dirty" = "true" ]; then

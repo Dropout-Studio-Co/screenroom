@@ -354,6 +354,8 @@ fn key(press_name: &str) -> Message {
         "down" => Named::ArrowDown,
         "left" => Named::ArrowLeft,
         "right" => Named::ArrowRight,
+        "backspace" => Named::Backspace,
+        "delete" => Named::Delete,
         other => {
             return press(Key::Character(other.to_string().into()), Modifiers::empty());
         }
@@ -1731,6 +1733,7 @@ fn watching(app: &mut App, file_id: &str, load_id: u64) -> bool {
     });
     app.snapshot = screenroom_player::PlayerSnapshot {
         loaded: true,
+        tracks_ready: true,
         load_id,
         ..screenroom_player::PlayerSnapshot::default()
     };
@@ -1793,7 +1796,7 @@ fn before_the_player_reports_its_tracks_nothing_online_is_asked() {
     let id = app.browse.items[0].id.clone();
     assert!(watching(&mut app, &id, 43));
 
-    app.snapshot.loaded = false;
+    app.snapshot.tracks_ready = false;
     let _ = app.update(Message::FindSubtitles);
 
     assert!(
@@ -1804,7 +1807,7 @@ fn before_the_player_reports_its_tracks_nothing_online_is_asked() {
     assert!(app.error.is_none(), "{:?}", app.error);
     let status = app.status.clone().unwrap_or_default();
     assert!(status.contains("tracks"), "{status}");
-    assert!(status.contains("Nothing online"), "{status}");
+    assert!(status.contains("nothing was asked"), "{status}");
 }
 
 #[test]
@@ -1908,7 +1911,7 @@ fn the_subtitle_panel_is_operable_without_a_pointer() {
 
     let actions = app.subtitle_actions();
     assert_eq!(actions.len(), 2);
-    assert_eq!(app.subtitle_row_split(), (0, 2));
+    assert_eq!(app.subtitle_window(actions.len()), (0, 2));
     assert!(matches!(
         &actions[0],
         Message::SubtitleDownload { id: 11, format } if format == "srt"
@@ -1926,6 +1929,103 @@ fn the_subtitle_panel_is_operable_without_a_pointer() {
     assert_eq!(app.subtitle_focus, 0, "Down wraps to the first row");
     let _ = app.update(key("up"));
     assert_eq!(app.subtitle_focus, 1, "Up wraps back to the last row");
+}
+
+#[test]
+fn a_longer_result_list_stays_reachable_through_the_focus() {
+    let mut app = fresh_app();
+    app.window_height = 800.0;
+    app.subtitle_results = (0..6)
+        .map(|index| screenroom_core::SubtitleMatch {
+            id: 100 + index,
+            language: "bn".to_string(),
+            language_name: "Bengali".to_string(),
+            release_name: format!("Release {index}"),
+            format: "srt".to_string(),
+            cues: 400,
+            hearing_impaired: false,
+            ai_transcribed: false,
+            encoding: "utf-8".to_string(),
+        })
+        .collect();
+
+    let (start, len) = app.subtitle_window(6);
+    assert_eq!(len, app.subtitle_row_budget());
+    assert_eq!((start, len), (0, 3), "the first window shows the best rows");
+
+    app.subtitle_focus = 5;
+    let (start, len) = app.subtitle_window(6);
+    assert_eq!((start, len), (3, 3), "the window follows the focus");
+    assert_eq!(start + len, 6);
+
+    assert!(matches!(
+        app.subtitle_enter_target(),
+        Some(Message::SubtitleDownload { id: 105, .. })
+    ));
+}
+
+#[test]
+fn delete_removes_the_kept_subtitle_the_panel_points_at() {
+    let media = Media::new();
+    media.placeholders(&["Remove (2020)/Remove (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 61));
+    app.screen = Screen::Player;
+    app.player_chrome = true;
+    let cue = media.path("Remove (2020)/Remove (2020).bn.srt");
+    std::fs::write(&cue, "1\n00:00:01,000 --> 00:00:02,000\nhi\n").expect("a cue");
+    app.library
+        .import_subtitle(&id, &cue)
+        .expect("the subtitle is kept");
+    app.subtitles = app.library.subtitles_for(&id).expect("kept rows");
+    assert_eq!(app.subtitles.len(), 1);
+    app.subtitle_focus = 0;
+
+    let _ = app.update(key("backspace"));
+
+    assert!(
+        app.subtitles.is_empty(),
+        "the focused kept subtitle is the one removed"
+    );
+}
+
+#[test]
+fn a_subtitle_that_appears_after_the_search_stops_the_download() {
+    let media = Media::new();
+    media.placeholders(&["Late (2020)/Late (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 62));
+    app.screen = Screen::Player;
+    app.subtitle_results_for = Some(id.clone());
+    app.subtitle_results = vec![screenroom_core::SubtitleMatch {
+        id: 77,
+        language: "bn".to_string(),
+        language_name: "Bengali".to_string(),
+        release_name: "Late.2020".to_string(),
+        format: "srt".to_string(),
+        cues: 100,
+        hearing_impaired: false,
+        ai_transcribed: false,
+        encoding: "utf-8".to_string(),
+    }];
+    std::fs::write(
+        media.path("Late (2020)/Late (2020).bn.srt"),
+        "1\n00:00:01,000 --> 00:00:02,000\nhi\n",
+    )
+    .expect("a sidecar");
+
+    let _ = app.update(Message::SubtitleDownload {
+        id: 77,
+        format: "srt".to_string(),
+    });
+
+    assert!(app.subtitle_download.is_none(), "no download may start");
+    let note = app.subtitle_note.clone().unwrap_or_default();
+    assert!(note.contains("own subtitle"), "{note}");
 }
 
 #[test]
@@ -2284,11 +2384,11 @@ fn a_resize_releases_a_menu_hold() {
     assert!(watching(&mut app, &id, 58));
     app.screen = Screen::Player;
 
-    let _ = app.update(Message::TrackMenuOpened(TrackKind::Audio));
+    let _ = app.update(Message::TrackMenuOpened(TrackKind::Subtitle));
     let _ = app.update(Message::Resized(iced::Size::new(640.0, 480.0)));
     assert!(
         !app.player_chrome_held(),
-        "a resize can remove the control that owned the menu"
+        "a resize that hides the control which owned the menu releases the hold"
     );
 
     let _ = app.update(Message::PointerInside(false));

@@ -8,7 +8,7 @@ by this automation; they keep their own, separately invoked commands.
 | Piece | Path | Role |
 | --- | --- | --- |
 | Hook set (tracked) | `scripts/git-hooks/` | `pre-commit` keeps the no-comments gate; `post-commit`, `post-merge` and `post-rewrite` start a rebuild |
-| Worker | `scripts/rebuild-app.sh` | Build, verify, install, record; one at a time, resumable |
+| Worker | `scripts/rebuild-app.sh` | Build, verify, install, record; one at a time |
 | Installer | `scripts/install-app-hooks.sh` | Points `core.hooksPath` at `scripts/git-hooks` and makes the hooks executable |
 | Build | `scripts/package-macos.sh` | The same release build and bundle it always produced |
 | Verify | `scripts/verify-bundle.sh` | Structure, signature, bundled libmpv and its dependencies |
@@ -30,13 +30,15 @@ nothing in it depends on which harness ran Git.
 4. It compares `HEAD` with the installed commit. Equal → nothing to do. A commit
    touching no app path (`apps/`, `crates/`, `assets/`, `scripts/`, `vendor/`,
    `Cargo.*`, `.cargo/`) is recorded without a rebuild.
-5. Otherwise it runs the release build, verifies the bundle, then swaps
-   `~/Applications/Screenroom.app` for the new one through a staged copy, keeping
-   the previous bundle until the swap has succeeded and restoring it if the swap
-   fails.
-6. The installed commit, the result and a link to the log are written to
-   `.artifacts/builds/last.json`, and the installed SHA to
-   `screenroom-installed.sha` beside the Git directory.
+5. Otherwise it runs the release build, verifies the bundle, copies it into
+   `~/Applications/.screenroom-builds/Screenroom-<sha>-<stamp>.app`, and switches
+   `~/Applications/Screenroom.app` — a symlink — with one atomic rename. A kill at
+   any point leaves the previous build in place; a missing link is repointed at
+   start-up and the two newest builds are kept.
+6. The installed commit, the result, the duration and whether the tree was dirty are
+   written to `screenroom-build-last.json` beside the Git directory, and the
+   installed SHA to `screenroom-installed.sha`. The build log stays under
+   `.artifacts/builds/`, named by the same SHA.
 
 ## Properties
 
@@ -44,11 +46,16 @@ nothing in it depends on which harness ran Git.
   the build and verification succeeded; a failure is recorded, the old bundle
   stays, and the next commit retries because the installed SHA was not advanced.
 - **No duplicate work.** One build at a time, with a single queued follow-up, and
-  the installed SHA as the arbiter.
-- **No lost updates.** The worker always builds the `HEAD` it finds, and loops once
-  more if `HEAD` moved while it was building.
-- **Interruptions are safe.** A killed build leaves the lock behind; the next run
-  sees a dead PID and reclaims it. Nothing half-copied is ever moved into place.
+  the installed SHA as the arbiter. A trigger that loses the race waits for the
+  builder, then runs itself.
+- **No lost updates.** The worker builds the `HEAD` it finds, keeps going while
+  commits arrive (up to twenty in one run), and hands anything left to a fresh
+  worker — including one in the checkout that queued it.
+- **Interruptions are safe.** The lock records the owner's PID *and* its start
+  time, so a dead owner is reclaimed immediately and a recycled PID is not mistaken
+  for a live one; `--unlock` clears it by hand. The install is a versioned directory
+  behind an atomically renamed symlink, so no interruption can leave the app
+  missing or half-copied.
 - **Cheap.** An incremental rebuild of an unchanged tree takes seconds; a docs-only
   commit costs no build at all.
 - **The running app is not disturbed.** It keeps the code it started with until it
@@ -71,7 +78,8 @@ nothing in it depends on which harness ran Git.
 
 ```bash
 scripts/install-app-hooks.sh          # once per clone; idempotent
-scripts/rebuild-app.sh --status       # what is installed, what HEAD is, last result
+scripts/rebuild-app.sh --status       # installed SHA, HEAD, app, lock, queue, last result
+scripts/rebuild-app.sh --unlock       # clear a lock and queue left by a killed run
 scripts/rebuild-app.sh --force        # build and install right now
 SCREENROOM_SKIP_REBUILD=1 git commit  # skip one commit deliberately
 SCREENROOM_INSTALL_DIR=…              # install somewhere other than ~/Applications

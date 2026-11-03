@@ -103,6 +103,8 @@ pub struct PlayerSnapshot {
 
     pub loaded: bool,
 
+    pub tracks_ready: bool,
+
     pub tracks: Vec<MediaTrack>,
 
     pub audio_pts: Option<f64>,
@@ -139,6 +141,7 @@ impl Default for PlayerSnapshot {
             failure: None,
             ended: false,
             loaded: false,
+            tracks_ready: false,
             tracks: Vec::new(),
             audio_pts: None,
             avsync: None,
@@ -610,6 +613,8 @@ struct Runner {
     duration: f64,
     loaded: bool,
 
+    tracks_ready: bool,
+
     tracks: Vec<MediaTrack>,
 
     audio_pts: Option<f64>,
@@ -731,6 +736,7 @@ impl Runner {
             playback_started: false,
             suppressed: [false; 3],
             metadata_retries: 0,
+            tracks_ready: false,
             ticks,
         })
     }
@@ -1032,6 +1038,7 @@ impl Runner {
         let _ = self.core.command(&["stop"]);
         self.state = PlayerState::Idle;
         self.loaded = false;
+        self.tracks_ready = false;
         self.position_ready = false;
         self.pending_seek_serial = None;
         self.queued_seek = None;
@@ -1284,6 +1291,7 @@ impl Runner {
         } else {
             self.metadata_dirty = false;
             self.tracks = tracks;
+            self.tracks_ready = true;
         }
         if self.duration <= 0.0
             && let Ok(duration) = self.core.get_f64("duration")
@@ -1440,8 +1448,13 @@ impl Runner {
     }
 
     fn publish_snapshot(&self, shared: &Arc<Mutex<PlayerSnapshot>>) {
-        let (position, duration, state, loaded) =
-            (self.position, self.duration, self.state, self.loaded);
+        let (position, duration, state, loaded, tracks_ready) = (
+            self.position,
+            self.duration,
+            self.state,
+            self.loaded,
+            self.tracks_ready,
+        );
         let (tracks, audio_pts) = (self.tracks.clone(), self.audio_pts);
         let (avsync, total_avsync_change, mistimed_frames) =
             (self.avsync, self.total_avsync_change, self.mistimed_frames);
@@ -1459,6 +1472,7 @@ impl Runner {
             snapshot.duration = duration;
             snapshot.state = state;
             snapshot.loaded = loaded;
+            snapshot.tracks_ready = tracks_ready;
             snapshot.tracks = tracks;
             snapshot.audio_pts = audio_pts;
             snapshot.avsync = avsync;

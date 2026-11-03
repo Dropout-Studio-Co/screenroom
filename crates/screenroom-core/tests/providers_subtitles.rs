@@ -1481,6 +1481,30 @@ fn a_rejected_key_names_both_places_the_key_can_come_from() {
 }
 
 #[test]
+fn a_provider_message_can_never_echo_the_key() {
+    let shared = Shared::new(vec![Reply::Answer(refused(
+        401,
+        "{\"error\":\"bad_key\",\"message\":\"key unit-test-key was rejected\"}",
+    ))]);
+    let (provider, _time) = provider_with(keyed_config(), shared.clone());
+
+    let error = provider
+        .search(&SubtitleSearch::movie("Harbour Lights", Some(2014), "bn"))
+        .expect_err("a rejected key is an error");
+
+    assert!(
+        !error.message().contains("unit-test-key"),
+        "{}",
+        error.message()
+    );
+    assert!(
+        error.message().contains("[redacted]"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
 fn a_refused_request_keeps_the_provider_wording() {
     let shared = Shared::new(vec![
         Reply::Answer(refused(

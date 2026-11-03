@@ -2172,34 +2172,49 @@ impl App {
         Some(line)
     }
 
-    fn subtitle_actions(&self) -> Vec<Message> {
-        let (kept_rows, result_rows) = self.subtitle_row_split();
-        let mut actions: Vec<Message> = self
+    fn subtitle_entries(&self) -> Vec<(String, Message)> {
+        let mut entries: Vec<(String, Message)> = self
             .subtitles
             .iter()
-            .take(kept_rows)
-            .map(|subtitle| Message::UseSubtitle(subtitle.id.clone()))
+            .map(|subtitle| {
+                (
+                    format!("{} · {}", subtitle.label, subtitle.format),
+                    Message::UseSubtitle(subtitle.id.clone()),
+                )
+            })
             .collect();
-        actions.extend(
-            self.subtitle_results
-                .iter()
-                .take(result_rows)
-                .map(|result| Message::SubtitleDownload {
+        entries.extend(self.subtitle_results.iter().map(|result| {
+            (
+                self.subtitle_result_label(result),
+                Message::SubtitleDownload {
                     id: result.id,
                     format: result.format.clone(),
-                }),
-        );
-        actions
+                },
+            )
+        }));
+        entries
     }
 
-    fn subtitle_row_split(&self) -> (usize, usize) {
+    fn subtitle_actions(&self) -> Vec<Message> {
+        self.subtitle_entries()
+            .into_iter()
+            .map(|(_, action)| action)
+            .collect()
+    }
+
+    fn subtitle_window(&self, count: usize) -> (usize, usize) {
         let budget = self.subtitle_row_budget();
-        if self.subtitle_results.is_empty() {
-            return (self.subtitles.len().min(budget), 0);
+        if count <= budget {
+            return (0, count);
         }
-        let result_rows = budget.min(self.subtitle_results.len());
-        let kept_rows = self.subtitles.len().min(budget - result_rows);
-        (kept_rows, result_rows)
+        let focus = self.subtitle_focus.min(count - 1);
+        let start = focus.saturating_sub(budget - 1);
+        let start = start.min(count - budget);
+        (start, budget)
+    }
+
+    fn subtitle_kept_len(&self) -> usize {
+        self.subtitles.len()
     }
 
     fn move_subtitle_focus(&mut self, delta: isize) {
@@ -2222,6 +2237,13 @@ impl App {
         } else {
             result.release_name.clone()
         };
+        let room = ((self.window_width - 260.0) / 7.0).clamp(24.0, 120.0) as usize;
+        let short: String = name.chars().take(room).collect();
+        let name = if name.chars().count() > room {
+            format!("{short}…")
+        } else {
+            short
+        };
         format!("{name} · {} cues", result.cues)
     }
 
@@ -2233,6 +2255,14 @@ impl App {
         actions
             .get(self.subtitle_focus.min(actions.len().saturating_sub(1)))
             .cloned()
+    }
+
+    fn remove_focused_subtitle(&mut self) -> Task<Message> {
+        let Some(subtitle) = self.subtitles.get(self.subtitle_focus) else {
+            return Task::none();
+        };
+        let id = subtitle.id.clone();
+        self.update(Message::RemoveSubtitle(id))
     }
 
     fn activate_subtitle(&mut self) -> Task<Message> {
@@ -2266,17 +2296,11 @@ impl App {
             self.note_subtitle("Play something first, then find its subtitles.");
             return;
         };
-        if self.snapshot.load_id != active.load_id || !self.snapshot.loaded {
+        if self.snapshot.load_id != active.load_id || !self.snapshot.tracks_ready {
             self.error = None;
-            self.status = Some(
-                "The player has not reported this film's tracks yet, so a subtitle track inside \
-                 it cannot be ruled out. Nothing online was asked; try again once it is playing."
-                    .to_string(),
-            );
-            self.note_subtitle(
-                "The player has not reported this film's tracks yet, so a track inside it cannot \
-                 be ruled out. Nothing online was asked; try again once it is playing.",
-            );
+            let note = "This film's tracks are not ready yet; nothing was asked. Try again.";
+            self.status = Some(note.to_string());
+            self.note_subtitle(note);
             return;
         }
         let Some(source) = self.subtitle_source() else {
@@ -2404,6 +2428,16 @@ impl App {
         };
         let file_id = active.file_id.clone();
         let load_id = active.load_id;
+        if matches!(
+            self.subtitle_source(),
+            Some(SubtitleSource::Track { .. } | SubtitleSource::Sidecar(_))
+        ) {
+            self.error = None;
+            let note = "This film now has its own subtitle, so nothing was downloaded.";
+            self.status = Some(note.to_string());
+            self.note_subtitle(note);
+            return;
+        }
         if self.subtitle_results_for.as_deref() != Some(file_id.as_str()) {
             self.status = Some(
                 "Those results were found for a different film. Find subtitles again for this \
@@ -4870,8 +4904,14 @@ impl App {
             Message::SubtitleLanguageChanged(value) => self.subtitle_input = value,
             Message::AudioLanguageChanged(value) => self.audio_input = value,
             Message::Resized(size) => {
-                self.track_menu_open = None;
-                self.pointer_buttons.clear();
+                if self.track_menu_open == Some(TrackKind::Subtitle)
+                    && !ui::screens::player::control_visible(
+                        size.width,
+                        ui::screens::player::Control::Subtitles,
+                    )
+                {
+                    self.track_menu_open = None;
+                }
                 if size.width.is_finite() && size.width > 0.0 {
                     self.window_width = size.width;
                 }
@@ -5267,6 +5307,11 @@ impl App {
                     Key::Named(Named::Enter) if self.subtitle_enter_target().is_some() => {
                         return self.activate_subtitle();
                     }
+                    Key::Named(Named::Backspace) | Key::Named(Named::Delete)
+                        if self.subtitle_focus < self.subtitle_kept_len() =>
+                    {
+                        return self.remove_focused_subtitle();
+                    }
                     Key::Named(Named::Enter) if self.up_next.is_some() => self.play_up_next(),
                     Key::Named(Named::ArrowLeft) => self.seek_step(-SEEK_STEP),
                     Key::Named(Named::ArrowRight) => self.seek_step(SEEK_STEP),
@@ -5275,6 +5320,7 @@ impl App {
                         "m" => self.toggle_mute(),
                         "s" => self.skip_segment(),
                         "t" => self.find_subtitles(),
+                        "a" => self.import_subtitle(),
                         "i" => self.toggle_segment_mark("intro"),
                         "c" => self.toggle_segment_mark("credits"),
                         _ => {}
@@ -5825,68 +5871,56 @@ impl App {
                         .color(ink(color)),
                 );
             }
-            let (kept_rows, result_rows) = self.subtitle_row_split();
-            let focus = self
-                .subtitle_focus
-                .min(self.subtitle_actions().len().saturating_sub(1));
-            for (index, subtitle) in self.subtitles.iter().take(kept_rows).enumerate() {
+            let entries = self.subtitle_entries();
+            let (window_start, window_len) = self.subtitle_window(entries.len());
+            let focus = self.subtitle_focus.min(entries.len().saturating_sub(1));
+            let kept_len = self.subtitle_kept_len();
+            for (index, (label, message)) in entries
+                .iter()
+                .enumerate()
+                .skip(window_start)
+                .take(window_len)
+            {
                 let marker = if index == focus { "› " } else { "  " };
-                panel = panel.push(
-                    row![
-                        text(format!("{marker}{} · {}", subtitle.label, subtitle.format))
-                            .size(tokens.type_scale.micro)
-                            .color(ink(tokens.palette.foreground)),
-                        Space::new().width(Length::Fill),
+                let kept = index < kept_len;
+                let mut entry = row![
+                    text(format!("{marker}{label}"))
+                        .size(tokens.type_scale.micro)
+                        .color(ink(tokens.palette.foreground)),
+                    Space::new().width(Length::Fill),
+                ]
+                .spacing(tokens.spacing.field_x)
+                .align_y(Alignment::Center);
+                if kept {
+                    entry = entry.push(
                         button(text("Use").size(tokens.type_scale.micro))
-                            .on_press(Message::UseSubtitle(subtitle.id.clone()))
+                            .on_press(message.clone())
                             .style(quiet)
                             .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                    );
+                    entry = entry.push(
                         button(text("Remove").size(tokens.type_scale.micro))
-                            .on_press(Message::RemoveSubtitle(subtitle.id.clone()))
+                            .on_press(Message::RemoveSubtitle(self.subtitles[index].id.clone()))
                             .style(quiet)
                             .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                    ]
-                    .spacing(tokens.spacing.field_x)
-                    .align_y(Alignment::Center),
-                );
-            }
-            if budget >= 2 && self.subtitles.len() > kept_rows {
-                panel = panel.push(
-                    text(format!(
-                        "{} more kept subtitle(s) for this film",
-                        self.subtitles.len() - kept_rows
-                    ))
-                    .size(tokens.type_scale.micro)
-                    .color(ink(tokens.palette.ink_muted)),
-                );
-            }
-            for (offset, result) in self.subtitle_results.iter().take(result_rows).enumerate() {
-                let index = kept_rows + offset;
-                let marker = if index == focus { "› " } else { "  " };
-                let label = self.subtitle_result_label(result);
-                panel = panel.push(
-                    row![
-                        text(format!("{marker}{label}"))
-                            .size(tokens.type_scale.micro)
-                            .color(ink(tokens.palette.foreground)),
-                        Space::new().width(Length::Fill),
+                    );
+                } else {
+                    entry = entry.push(
                         button(text("Download").size(tokens.type_scale.micro))
-                            .on_press(Message::SubtitleDownload {
-                                id: result.id,
-                                format: result.format.clone(),
-                            })
+                            .on_press(message.clone())
                             .style(action)
                             .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                    ]
-                    .spacing(tokens.spacing.field_x)
-                    .align_y(Alignment::Center),
-                );
+                    );
+                }
+                panel = panel.push(entry);
             }
-            if budget >= 2 && self.subtitle_results.len() > result_rows {
+            if window_len > 0 && entries.len() > window_len {
                 panel = panel.push(
                     text(format!(
-                        "{} more match(es), best first",
-                        self.subtitle_results.len() - result_rows
+                        "{}–{} of {}",
+                        window_start + 1,
+                        window_start + window_len,
+                        entries.len()
                     ))
                     .size(tokens.type_scale.micro)
                     .color(ink(tokens.palette.ink_muted)),
@@ -5895,25 +5929,27 @@ impl App {
             block = block.push(panel.width(Length::Fill));
         }
 
-        block = block.push(
-            row![
-                text(
-                    self.active
-                        .as_ref()
-                        .filter(|active| active.resume_from_ms > 0 && !self.snapshot.ended)
-                        .map(|active| format!(
-                            "resumed from {}",
-                            clock(active.resume_from_ms as f64 / 1_000.0)
-                        ))
-                        .unwrap_or_default()
-                )
-                .size(tokens.type_scale.micro)
-                .color(ink(tokens.palette.ink_muted)),
-                Space::new().width(Length::Fill),
-            ]
-            .spacing(tokens.spacing.field_x)
-            .align_y(Alignment::Center),
-        );
+        if self.window_height >= 700.0 {
+            block = block.push(
+                row![
+                    text(
+                        self.active
+                            .as_ref()
+                            .filter(|active| active.resume_from_ms > 0 && !self.snapshot.ended)
+                            .map(|active| format!(
+                                "resumed from {}",
+                                clock(active.resume_from_ms as f64 / 1_000.0)
+                            ))
+                            .unwrap_or_default()
+                    )
+                    .size(tokens.type_scale.micro)
+                    .color(ink(tokens.palette.ink_muted)),
+                    Space::new().width(Length::Fill),
+                ]
+                .spacing(tokens.spacing.field_x)
+                .align_y(Alignment::Center),
+            );
+        }
 
         container(block.width(Length::Fill))
             .width(Length::Fill)

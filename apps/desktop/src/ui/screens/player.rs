@@ -64,8 +64,7 @@ const COMPACT: f32 = 900.0;
 
 pub const CHROME_IDLE_AFTER: Duration = Duration::from_millis(2_500);
 
-pub const MARK_HINT: &str =
-    "i marks an intro · c marks credits · s skips a marked segment · t finds subtitles";
+pub const MARK_HINT: &str = "i intro · c credits · s skip · t subtitles · a add a subtitle file";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Control {

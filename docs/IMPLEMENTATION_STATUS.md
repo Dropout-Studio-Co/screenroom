@@ -79,7 +79,7 @@ Regression tests: `a_trim_keeps_the_picture_bindable_so_a_redraw_is_not_blank`,
 and seven acceptance tests covering exit and entry, a repeated boundary, a tick with
 the pointer out, the menu hold and its selection, a paused key press while outside,
 a hovered slider that must not hold, and a resize that releases the hold. The suite
-is **788 tests, 0 failures**.
+is **792 tests, 0 failures**.
 
 ### Subtitles verified in the running application, 2026-11-03
 
@@ -103,7 +103,7 @@ the drop-on-film-change behaviour; the suite is **771 tests, 0 failures**.
 
 | Removed | Evidence it is gone | What replaced it |
 | --- | --- | --- |
-| `apps/desktop/src/accessibility.rs` (2,703 lines) and its call sites | the file is deleted; no `NSAccessibility` selector, `ScreenFacts`, `Role`, `Action`, `SCREENROOM_AX_CHECK` or `mod accessibility` remains, and `grep -rn "NSAccessibility" apps/desktop/src` is empty (the one surviving word is `accessibilityDisplayShouldReduceMotion`, the reduced-motion system query moved to `motion.rs`); `cargo test -p screenroom-desktop --lib` is 369 tests, the 26 AX tests gone and the keyboard/focus ones intact | `apps/desktop/src/motion.rs` keeps `system_reduce_motion` for the three callers that used it |
+| `apps/desktop/src/accessibility.rs` (2,703 lines) and its call sites | the file is deleted; no `NSAccessibility` selector, `ScreenFacts`, `Role`, `Action`, `SCREENROOM_AX_CHECK` or `mod accessibility` remains, and `grep -rn "NSAccessibility" apps/desktop/src` is empty (the one surviving word is `accessibilityDisplayShouldReduceMotion`, the reduced-motion system query moved to `motion.rs`); `cargo test -p screenroom-desktop --lib` is 372 tests, the 26 AX tests gone and the keyboard/focus ones intact | `apps/desktop/src/motion.rs` keeps `system_reduce_motion` for the three callers that used it |
 | HDR mode, extended-range output, the setting and `hdr_check` | `grep -rniE "SCREENROOM_HDR\|HdrMode\|hdr_extended\|extended_range\|Rgba16Float\|is_extended" apps crates` returns nothing; `crates/screenroom-player/src/display.rs` deleted | SDR only: libmpv still decodes 10-bit/4K and tone-maps into the eight-bit surface |
 | `vendor/iced_wgpu` and the root `[patch.crates-io]` entry | directory deleted; `Cargo.toml` has no patch section; `Cargo.lock` records `source = "registry+https://github.com/rust-lang/crates.io-index"` and checksum `ff144a99…` | crates.io `iced_wgpu` 0.14.0 |
 

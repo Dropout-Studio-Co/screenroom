@@ -758,7 +758,7 @@ impl TsdbProvider {
                 code: "provider_unavailable",
                 message: format!(
                     "The Subtitle DB still lists that subtitle, but its file is gone{}. Try another                      match.",
-                    provider_detail(body)
+                    provider_detail(body, self.config.api_key.as_ref().map(Secret::expose))
                 ),
             };
         }
@@ -770,7 +770,7 @@ impl TsdbProvider {
                 code: "provider_request_refused",
                 message: format!(
                     "The Subtitle DB refused the request{}. Find subtitles again; if it repeats, the                      title or the language is the part it could not read.",
-                    provider_detail(body)
+                    provider_detail(body, self.config.api_key.as_ref().map(Secret::expose))
                 ),
             };
         }
@@ -782,7 +782,7 @@ impl TsdbProvider {
                 code: "provider_key_rejected",
                 message: format!(
                     "The Subtitle DB rejected the subtitle key{}. Set {} or replace the key in {},                      then try again. Anonymous lookups keep working without it, which is why a                      search can fail while everything else answers.",
-                    provider_detail(body),
+                    provider_detail(body, self.config.api_key.as_ref().map(Secret::expose)),
                     TSDB_API_KEY_ENVIRONMENT,
                     key_file
                 ),
@@ -986,7 +986,7 @@ fn subtitle_match_from(item: &Value) -> Option<SubtitleMatch> {
     })
 }
 
-fn provider_detail(body: &[u8]) -> String {
+fn provider_detail(body: &[u8], secret: Option<&str>) -> String {
     let Ok(value) = serde_json::from_slice::<Value>(body) else {
         return String::new();
     };
@@ -994,7 +994,11 @@ fn provider_detail(body: &[u8]) -> String {
         .get("message")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|detail| !detail.is_empty());
+        .filter(|detail| !detail.is_empty())
+        .map(|detail| match secret {
+            Some(secret) if !secret.is_empty() => detail.replace(secret, "[redacted]"),
+            _ => detail.to_string(),
+        });
     match detail {
         Some(detail) => format!(": {detail}"),
         None => String::new(),
