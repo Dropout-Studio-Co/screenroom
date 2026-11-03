@@ -182,7 +182,12 @@ impl SubtitleProviderConfig {
             match key.trim().to_ascii_lowercase().as_str() {
                 "base_url" => config.base_url = value.to_string(),
                 "user_agent" => config.user_agent = value.to_string(),
-                "api_key" => config.api_key = Some(Secret::new(value)),
+                "api_key" => {
+                    if !key_file_is_private(&metadata) {
+                        return Err(KEY_FILE_PERMISSIONS.to_string());
+                    }
+                    config.api_key = Some(Secret::new(value));
+                }
                 _ => {}
             }
         }
@@ -645,7 +650,7 @@ impl TsdbProvider {
         http.timeout = self.config.timeout;
         let value = {
             let mut pacer = self.pacer.borrow_mut();
-            match pacer.execute(|| self.value_from(&http)) {
+            match pacer.execute(|| self.value_from(&http, false)) {
                 Ok(value) => value,
                 Err(ProviderError::NotFound) => return Ok(None),
                 Err(error) => return Err(error),
@@ -681,7 +686,7 @@ impl TsdbProvider {
         http.timeout = self.config.timeout;
         let value = {
             let mut pacer = self.pacer.borrow_mut();
-            match pacer.execute(|| self.value_from(&http)) {
+            match pacer.execute(|| self.value_from(&http, false)) {
                 Ok(value) => value,
                 Err(ProviderError::NotFound) => return Ok(None),
                 Err(error) => return Err(error),
@@ -741,10 +746,64 @@ impl TsdbProvider {
         }
     }
 
-    fn value_from(&self, request: &HttpRequest) -> std::result::Result<Value, ProviderError> {
+    fn failure(
+        &self,
+        status: u16,
+        body: &[u8],
+        download: bool,
+        retry_after: Option<i64>,
+    ) -> ProviderError {
+        if status == 404 && download {
+            return ProviderError::ProviderMessage {
+                code: "provider_unavailable",
+                message: format!(
+                    "The Subtitle DB still lists that subtitle, but its file is gone{}. Try another                      match.",
+                    provider_detail(body)
+                ),
+            };
+        }
+        if status == 404 {
+            return ProviderError::NotFound;
+        }
+        if status == 400 {
+            return ProviderError::ProviderMessage {
+                code: "provider_request_refused",
+                message: format!(
+                    "The Subtitle DB refused the request{}. Find subtitles again; if it repeats, the                      title or the language is the part it could not read.",
+                    provider_detail(body)
+                ),
+            };
+        }
+        if status == 401 || status == 403 {
+            let key_file = configuration_directory(None)
+                .map(|directory| directory.join(TSDB_KEY_FILE_NAME).display().to_string())
+                .unwrap_or_else(|| TSDB_KEY_FILE_NAME.to_string());
+            return ProviderError::ProviderMessage {
+                code: "provider_key_rejected",
+                message: format!(
+                    "The Subtitle DB rejected the subtitle key{}. Set {} or replace the key in {},                      then try again. Anonymous lookups keep working without it, which is why a                      search can fail while everything else answers.",
+                    provider_detail(body),
+                    TSDB_API_KEY_ENVIRONMENT,
+                    key_file
+                ),
+            };
+        }
+        status_error(status, retry_after)
+    }
+
+    fn value_from(
+        &self,
+        request: &HttpRequest,
+        download: bool,
+    ) -> std::result::Result<Value, ProviderError> {
         let response = self.transport.send(request)?;
         if !(200..300).contains(&response.status) {
-            return Err(status_error(response.status, response.retry_after_ms()));
+            return Err(self.failure(
+                response.status,
+                &response.body,
+                download,
+                response.retry_after_ms(),
+            ));
         }
         serde_json::from_slice(&response.body)
             .map_err(|_| ProviderError::InvalidResponse("the body was not JSON"))
@@ -927,6 +986,21 @@ fn subtitle_match_from(item: &Value) -> Option<SubtitleMatch> {
     })
 }
 
+fn provider_detail(body: &[u8]) -> String {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return String::new();
+    };
+    let detail = value
+        .get("message")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|detail| !detail.is_empty());
+    match detail {
+        Some(detail) => format!(": {detail}"),
+        None => String::new(),
+    }
+}
+
 fn status_error(status: u16, retry_after_ms: Option<i64>) -> ProviderError {
     if status == 503 && retry_after_ms.is_some() {
         return ProviderError::RateLimited { retry_after_ms };
@@ -1027,10 +1101,22 @@ impl SubtitleProvider for TsdbProvider {
         if languages.is_empty() || kind_parameter(request.kind).is_none() {
             return Ok(Vec::new());
         }
+        let mut refusal: Option<ProviderError> = None;
         for url in self.lookup_urls(request, &languages) {
-            if let Some(matches) = self.lookup(&url, request)? {
-                return Ok(matches);
+            match self.lookup(&url, request) {
+                Ok(Some(matches)) => return Ok(matches),
+                Ok(None) => {}
+                Err(
+                    error @ ProviderError::ProviderMessage {
+                        code: "provider_request_refused",
+                        ..
+                    },
+                ) => refusal = Some(error),
+                Err(error) => return Err(error),
             }
+        }
+        if let Some(error) = refusal {
+            return Err(error);
         }
         if self.search_is_keyed()
             && let Some(matches) = self.search_by_title(request, &languages)?
@@ -1070,7 +1156,12 @@ impl SubtitleProvider for TsdbProvider {
             pacer.execute(|| {
                 let response = self.transport.send(&request)?;
                 if !(200..300).contains(&response.status) {
-                    return Err(status_error(response.status, response.retry_after_ms()));
+                    return Err(self.failure(
+                        response.status,
+                        &response.body,
+                        true,
+                        response.retry_after_ms(),
+                    ));
                 }
                 Ok(response)
             })?

@@ -897,6 +897,8 @@ pub enum Message {
         pressed: bool,
     },
 
+    WindowUnfocused,
+
     Keyboard(keyboard::Event),
 
     RequestTerminate,
@@ -1003,6 +1005,7 @@ fn ticks(
 
 pub fn pointer_event(event: &iced::Event) -> Option<Message> {
     match event {
+        iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::WindowUnfocused),
         iced::Event::Mouse(iced::mouse::Event::CursorEntered) => Some(Message::PointerInside(true)),
         iced::Event::Mouse(iced::mouse::Event::CursorLeft) => Some(Message::PointerInside(false)),
         iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
@@ -1922,6 +1925,7 @@ impl App {
         }
         self.subtitle_note = None;
         self.subtitle_note_error = false;
+        self.error = None;
         self.track_menu_open = None;
         self.pointer_buttons.clear();
         self.keyboard_reveal_at = None;
@@ -2151,6 +2155,23 @@ impl App {
         self.error = Some(message);
     }
 
+    fn subtitle_line(&self) -> Option<String> {
+        let note = self.subtitle_note.clone()?;
+        if self.window_height >= 700.0 {
+            return Some(note);
+        }
+        let first = note
+            .split(['.', '\n'])
+            .map(str::trim)
+            .find(|part| !part.is_empty())
+            .unwrap_or(note.as_str());
+        let mut line: String = first.chars().take(64).collect();
+        if first.chars().count() > 64 {
+            line.push('…');
+        }
+        Some(line)
+    }
+
     fn subtitle_actions(&self) -> Vec<Message> {
         let (kept_rows, result_rows) = self.subtitle_row_split();
         let mut actions: Vec<Message> = self
@@ -2312,10 +2333,7 @@ impl App {
                     self.note_subtitle(note);
                 }
             }
-            Err(error) => {
-                self.fail_subtitle(error.to_string());
-                self.report(&error);
-            }
+            Err(error) => self.fail_subtitle(error.to_string()),
         }
     }
 
@@ -2745,10 +2763,7 @@ impl App {
             Ok(None) => {
                 self.fail_subtitle("That stored subtitle is no longer here.");
             }
-            Err(error) => {
-                self.fail_subtitle(error.to_string());
-                self.report(&error);
-            }
+            Err(error) => self.fail_subtitle(error.to_string()),
         }
     }
 
@@ -5012,6 +5027,13 @@ impl App {
                 }
                 return Task::none();
             }
+            Message::WindowUnfocused => {
+                self.pointer_buttons.clear();
+                self.track_menu_open = None;
+                self.pointer_inside = false;
+                self.set_chrome(false);
+                return Task::none();
+            }
             Message::PointerButton { button, pressed } => {
                 if pressed {
                     self.pointer_buttons.insert(button);
@@ -5791,7 +5813,7 @@ impl App {
                         .color(ink(ui::theme::danger())),
                 );
             }
-            if let Some(message) = self.subtitle_note.clone() {
+            if let Some(message) = self.subtitle_line() {
                 let color = if self.subtitle_note_error {
                     ui::theme::danger()
                 } else {

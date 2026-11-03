@@ -2177,6 +2177,53 @@ fn a_key_board_input_keeps_the_controls_while_the_pointer_is_out() {
 }
 
 #[test]
+fn losing_focus_releases_a_mouse_up_that_never_arrived() {
+    let media = Media::new();
+    media.placeholders(&["Focus (2020)/Focus (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 60));
+    app.screen = Screen::Player;
+
+    let _ = app.update(Message::PointerButton {
+        button: iced::mouse::Button::Left,
+        pressed: true,
+    });
+    assert!(app.player_chrome_held());
+
+    let _ = app.update(Message::WindowUnfocused);
+    assert!(
+        !app.player_chrome_held(),
+        "deactivating the app must release a press whose mouse-up went elsewhere"
+    );
+    assert!(!app.player_chrome);
+
+    let _ = app.update(Message::Tick);
+    assert!(!app.player_chrome, "and the tick cannot bring it back");
+}
+
+#[test]
+fn a_short_window_keeps_the_subtitle_note_on_one_line() {
+    let mut app = fresh_app();
+    app.subtitle_note = Some(
+        "The player has not reported this film's tracks yet, so a subtitle track inside it \
+         cannot be ruled out. Nothing online was asked; try again once it is playing."
+            .to_string(),
+    );
+    app.window_height = 480.0;
+    let line = app.subtitle_line().expect("a note");
+    assert!(!line.contains('\n'), "{line}");
+    assert!(line.chars().count() <= 65, "{line}");
+
+    app.window_height = 800.0;
+    assert!(
+        app.subtitle_line().expect("a note").chars().count() > 65,
+        "a tall window keeps the whole note"
+    );
+}
+
+#[test]
 fn hovering_the_volume_slider_does_not_latch_the_controls() {
     let media = Media::new();
     media.placeholders(&["Hover (2020)/Hover (2020).mkv".to_string()]);

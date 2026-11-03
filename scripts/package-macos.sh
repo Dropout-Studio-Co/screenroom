@@ -125,9 +125,30 @@ du -sh "$app" | sed 's/^/    size: /'
 
 if [ -n "$install_into" ]; then
   mkdir -p "$install_into"
-  rm -rf "$install_into/Screenroom.app"
-  cp -R "$app" "$install_into/Screenroom.app"
-  echo "==> installed $install_into/Screenroom.app"
+  staged="$install_into/.Screenroom.app.staged.$$"
+  previous="$install_into/.Screenroom.app.previous.$$"
+  rm -rf "$staged" "$previous"
+  if ! ditto "$app" "$staged"; then
+    rm -rf "$staged"
+    echo "!! could not stage the bundle into $install_into; nothing was replaced" >&2
+    exit 1
+  fi
+  if [ -d "$install_into/Screenroom.app" ] && ! mv "$install_into/Screenroom.app" "$previous"; then
+    rm -rf "$staged"
+    echo "!! could not move the installed app aside; nothing was replaced" >&2
+    exit 1
+  fi
+  if mv "$staged" "$install_into/Screenroom.app"; then
+    rm -rf "$previous"
+    echo "==> installed $install_into/Screenroom.app"
+  else
+    if [ -d "$previous" ]; then
+      mv "$previous" "$install_into/Screenroom.app" || true
+    fi
+    rm -rf "$staged"
+    echo "!! could not install; the previous app was restored if it existed" >&2
+    exit 1
+  fi
 fi
 
 cat <<'NOTE'

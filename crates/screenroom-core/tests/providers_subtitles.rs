@@ -121,6 +121,10 @@ fn missing() -> HttpResponse {
     HttpResponse::new(404, Vec::new())
 }
 
+fn refused(status: u16, body: &str) -> HttpResponse {
+    HttpResponse::new(status, body.as_bytes().to_vec())
+}
+
 fn config() -> SubtitleProviderConfig {
     SubtitleProviderConfig::unconfigured()
         .with_base_url("http://api.invalid")
@@ -693,10 +697,14 @@ fn an_unauthorized_or_rejected_answer_is_returned_rather_than_skipped() {
                 .with_imdb("tt1454468"),
         )
         .expect_err("an unauthorized answer is an error");
-    assert_eq!(error.code(), "provider_unauthorized");
+    assert_eq!(error.code(), "provider_key_rejected");
     assert_eq!(shared.request_count(), 1);
 
-    let shared = Shared::new(vec![Reply::Answer(HttpResponse::new(400, Vec::new()))]);
+    let shared = Shared::new(vec![
+        Reply::Answer(HttpResponse::new(400, Vec::new())),
+        Reply::Answer(HttpResponse::new(400, Vec::new())),
+        Reply::Answer(HttpResponse::new(400, Vec::new())),
+    ]);
     let (provider, _time) = provider_with(config(), shared.clone());
     let error = provider
         .search(
@@ -705,8 +713,8 @@ fn an_unauthorized_or_rejected_answer_is_returned_rather_than_skipped() {
                 .with_imdb("tt1454468"),
         )
         .expect_err("a bad request is an error");
-    assert_eq!(error.code(), "provider_rejected");
-    assert_eq!(shared.request_count(), 1);
+    assert_eq!(error.code(), "provider_request_refused");
+    assert_eq!(shared.request_count(), 3);
 }
 
 #[test]
@@ -1231,6 +1239,7 @@ fn open_to_other_accounts(_path: &Path) {}
 fn write_config_file(directory: &Path, body: &str) -> std::path::PathBuf {
     let path = directory.join("subtitles.conf");
     std::fs::write(&path, body).expect("a config file");
+    restrict_to_owner(&path);
     path
 }
 
@@ -1441,6 +1450,101 @@ fn a_hostile_year_does_not_overflow_the_match_check() {
         .expect("a hostile year is a miss, not a panic");
 
     assert!(matches.is_empty());
+}
+
+#[test]
+fn a_rejected_key_names_both_places_the_key_can_come_from() {
+    let shared = Shared::new(vec![Reply::Answer(refused(
+        401,
+        "{\"error\":\"bad_key\",\"message\":\"the key is not valid or was revoked\"}",
+    ))]);
+    let (provider, _time) = provider_with(keyed_config(), shared.clone());
+
+    let error = provider
+        .search(&SubtitleSearch::movie("Harbour Lights", Some(2014), "bn"))
+        .expect_err("a rejected key is an error");
+
+    assert_eq!(error.code(), "provider_key_rejected");
+    let message = error.message();
+    assert!(
+        message.contains(TSDB_API_KEY_ENVIRONMENT),
+        "the message must name the environment variable: {message}"
+    );
+    assert!(
+        message.contains(TSDB_KEY_FILE_NAME),
+        "the message must name the key file: {message}"
+    );
+    assert!(
+        message.contains("not valid or was revoked"),
+        "the provider's own wording must survive: {message}"
+    );
+}
+
+#[test]
+fn a_refused_request_keeps_the_provider_wording() {
+    let shared = Shared::new(vec![
+        Reply::Answer(refused(
+            400,
+            "{\"error\":\"bad_request\",\"message\":\"lang takes at most 16 codes\"}",
+        )),
+        Reply::Answer(missing()),
+    ]);
+    let (provider, _time) = provider_with(config(), shared.clone());
+
+    let error = provider
+        .search(&SubtitleSearch::movie("Harbour Lights", Some(2014), "bn").with_tmdb(76341))
+        .expect_err("a refused request is an error");
+
+    assert_eq!(error.code(), "provider_request_refused");
+    assert!(
+        error.message().contains("lang takes at most 16 codes"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
+fn a_missing_download_file_reads_as_unavailable() {
+    let shared = Shared::new(vec![Reply::Answer(refused(
+        404,
+        "{\"error\":\"not_found\",\"message\":\"no subtitle with id 5\"}",
+    ))]);
+    let (provider, _time) = provider_with(keyed_config(), shared.clone());
+
+    let error = provider
+        .download(5, "bn", "srt")
+        .expect_err("a missing file is an error");
+
+    assert_eq!(error.code(), "provider_unavailable");
+    assert!(
+        error.message().contains("file is gone"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
+fn a_refused_lookup_falls_through_to_the_next_strategy() {
+    let shared = Shared::new(vec![
+        Reply::Answer(refused(
+            400,
+            "{\"error\":\"bad_request\",\"message\":\"release cannot be read\"}",
+        )),
+        Reply::Answer(json(include_str!(
+            "fixtures/providers/tsdb_movie_lookup.json"
+        ))),
+    ]);
+    let (provider, _time) = provider_with(config(), shared.clone());
+
+    let matches = provider
+        .search(
+            &SubtitleSearch::movie("Harbour Lights", Some(2014), "bn")
+                .with_release("Odd.Release.Name"),
+        )
+        .expect("a refused release lookup must not stop the title lookup");
+
+    assert!(!matches.is_empty());
+    assert_eq!(shared.request_count(), 2);
 }
 
 #[test]

@@ -25,7 +25,7 @@ pub const BASE_BACKOFF_MS: i64 = 500;
 
 pub const MAX_BACKOFF_MS: i64 = 30_000;
 
-pub const MAX_RETRY_AFTER_MS: i64 = 60_000;
+pub const MAX_RETRY_AFTER_MS: i64 = 300_000;
 
 pub const RATE_WINDOW_MS: i64 = 60_000;
 
@@ -659,6 +659,8 @@ pub enum ProviderError {
 
     InvalidResponse(&'static str),
 
+    ProviderMessage { code: &'static str, message: String },
+
     Transport(TransportError),
 }
 
@@ -687,6 +689,7 @@ impl ProviderError {
             Self::Rejected { .. } => "provider_rejected",
             Self::Server { .. } => "provider_server",
             Self::InvalidResponse(_) => "provider_invalid_response",
+            Self::ProviderMessage { code, .. } => code,
             Self::Transport(_) => "provider_transport",
         }
     }
@@ -714,6 +717,7 @@ impl ProviderError {
             Self::InvalidResponse(reason) => {
                 format!("The provider sent an unexpected answer: {reason}.")
             }
+            Self::ProviderMessage { message, .. } => message.clone(),
             Self::Transport(error) => format!("The request could not be made: {error}."),
         }
     }

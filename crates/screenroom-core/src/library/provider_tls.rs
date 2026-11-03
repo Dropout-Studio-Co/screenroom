@@ -145,7 +145,7 @@ impl HttpTransport for HttpsTransport {
         let mut url = request.url.clone();
         let mut followed = 0_usize;
         loop {
-            let hop = request_for_hop(request, &start.host, &url)?;
+            let hop = request_for_hop(request, &start.host, start.port, &url)?;
             let response = self
                 .exchange(&url, &hop, &deadline)
                 .map_err(classify)
@@ -294,10 +294,11 @@ fn redirect_host_allowed(host: &str, allow_hosts: &[String]) -> bool {
 fn request_for_hop(
     request: &HttpRequest,
     start_host: &str,
+    start_port: u16,
     url: &str,
 ) -> Result<HttpRequest, TransportError> {
     let target = parse_target_with(url, "https", HTTPS_PORT)?;
-    if target.host.eq_ignore_ascii_case(start_host) {
+    if target.host.eq_ignore_ascii_case(start_host) && target.port == start_port {
         return Ok(request.clone());
     }
     let mut hop = request.clone();
