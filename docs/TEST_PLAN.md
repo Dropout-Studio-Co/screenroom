@@ -35,6 +35,21 @@ application alone (`SCREENROOM_TSDB_BASE_URL` pointed at a dead address), with W
 and every other application left connected — so this is a provider-offline receipt,
 not a machine-offline one.
 
+**Playback rendering and pointer presence (2026-11-03).** Two window checks were run
+against the installed bundle with a generated 1080p pattern:
+
+- *Flicker:* the window was recorded for 7 s (`screencapture -v -l<window>`) while a
+  synthetic pointer sweep crossed the video, and the video region's per-frame luma
+  was compared against its median. Before the redraw fix, 117 of 347 frames had no
+  video (luma ≈ 24 against a median of 107); after it, 0 of 321. The command shape is
+  `ffprobe -f lavfi "movie=<file>,crop=iw:600:0:300,signalstats"`.
+- *Pointer presence:* window screenshots taken 150 ms after each boundary crossing,
+  scored by the bottom-band luma (29 with the chrome up, 83–86 with it gone), across
+  three rapid crossings, paused and playing, windowed and fullscreen.
+
+Both are window checks: they need a visible window and synthetic pointer events, so
+they are run on demand with `SCREENROOM_ALLOW_FOREGROUND=1`, not in `cargo test`.
+
 **Windows cannot be compiled from this Mac at all.** `cargo check --target
 x86_64-pc-windows-msvc` fails inside `libsqlite3-sys`, whose bundled SQLite needs
 the MSVC SDK headers (`fatal error: 'stdlib.h' file not found`). So every
