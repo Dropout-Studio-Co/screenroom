@@ -2098,6 +2098,15 @@ fn an_open_track_menu_keeps_the_controls_while_the_pointer_is_out() {
     let _ = app.update(Message::TrackMenuClosed(TrackKind::Subtitle));
     let _ = app.update(Message::PointerInside(false));
     assert!(!app.player_chrome, "the hold ends with the menu");
+
+    let _ = app.update(Message::PointerInside(true));
+    let _ = app.update(Message::TrackMenuOpened(TrackKind::Audio));
+    let _ = app.update(Message::SelectTrack(TrackKind::Audio, 1));
+    let _ = app.update(Message::PointerInside(false));
+    assert!(
+        !app.player_chrome,
+        "choosing from the menu also ends the hold that selection does not report"
+    );
 }
 
 #[test]

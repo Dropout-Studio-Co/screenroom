@@ -70,8 +70,8 @@ pointer is out. The mean luma of the bottom band was 29 with the chrome up and 8
 across three crossings: the scrim appears and disappears exactly with presence.
 
 Regression tests: `a_trim_keeps_the_picture_bindable_so_a_redraw_is_not_blank`,
-`a_missing_binding_never_counts_as_reusable`, and four acceptance tests for exit,
-entry, repeated boundaries, tick-without-pointer and the menu hold. The suite is
+`a_missing_binding_never_counts_as_reusable`, and four acceptance tests covering exit and entry, a repeated boundary, a tick with
+the pointer out, and the menu hold including selection. The suite is
 **777 tests, 0 failures**.
 
 ### Subtitles verified in the running application, 2026-11-03
