@@ -20,11 +20,10 @@ install_dir="${SCREENROOM_INSTALL_DIR:-$HOME/Applications}"
 installed="$install_dir/Screenroom.app"
 dist="$root/dist/Screenroom.app"
 
-mode="foreground"
 force=0
 for argument in "$@"; do
   case "$argument" in
-    --background) mode="background" ;;
+    --background) ;;
     --force) force=1 ;;
     --status)
       printf 'installed: %s\n' "$(cat "$stamp" 2>/dev/null || echo none)"
@@ -68,7 +67,7 @@ if ! acquire; then
   exit 0
 fi
 
-trap 'release' EXIT
+trap release EXIT
 trap 'release; exit 130' INT TERM
 
 head_sha="$(git rev-parse HEAD)"
