@@ -11,11 +11,11 @@ use iced::widget::{
 use iced::{Alignment, Element, Length, Subscription, Task, keyboard};
 use screenroom_core::{
     ArtworkCandidate, ArtworkRetention, CatalogueMetadataProvider, ConversionJob,
-    ConversionProfile, ConversionStatus, CoreError, EnrichmentDrainReport, Library, LibraryItem,
-    LibraryQuery, LibraryScanner, MediaKind, OpenSubtitlesProvider, OutputFacts, Preferences,
+    ConversionProfile, ConversionStatus, CoreError, DownloadedSubtitle, EnrichmentDrainReport,
+    Library, LibraryItem, LibraryQuery, LibraryScanner, MediaKind, OutputFacts, Preferences,
     Profile, ProviderCapability, ProviderConfig, Recommendation, ScanToken, SegmentMarker, Sort,
     Source, SourceState, StoredSubtitle, SubtitleProvider, SubtitleProviderConfig, SubtitleSearch,
-    TmdbProvider, verify_output,
+    TmdbProvider, TsdbProvider, verify_output,
 };
 use screenroom_player::{
     MediaTrack, NO_TRACK, Player, PlayerCapability, PlayerSnapshot, TrackKind,
@@ -63,6 +63,11 @@ const QUIT_ROUTING_BUDGET: u8 = 40;
 const MODE_SETTLE: Duration = Duration::from_millis(1_500);
 
 const TERMINATE_CHECK_DELAY: Duration = Duration::from_millis(1_800);
+
+const SUBTITLE_PRIORITY_NOTE: &str = "A subtitle track inside the film always comes first, and a \
+                                      subtitle file sitting beside the film comes next. The \
+                                      Subtitle DB is asked only when the film has neither, so \
+                                      nothing online is consulted for a film that already has one.";
 
 fn hides_its_window() -> bool {
     crate::play_check::requests_hidden_window()
@@ -430,6 +435,19 @@ struct UpNext {
     starts_at: std::time::Instant,
 }
 
+struct SubtitleDownload {
+    receiver: Receiver<Result<DownloadedSubtitle, String>>,
+    file_id: String,
+    load_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SubtitleSource {
+    Track { label: String, external: bool },
+    Sidecar(PathBuf),
+    Online,
+}
+
 #[derive(Debug, Clone)]
 struct ConversionRun {
     job_id: String,
@@ -522,7 +540,7 @@ pub struct App {
     up_next: Option<UpNext>,
 
     markers: Vec<SegmentMarker>,
-    subtitles: Vec<screenroom_core::StoredSubtitle>,
+    subtitles: Vec<StoredSubtitle>,
 
     receivers: Vec<crate::casting::Receiver>,
     cast_search: Option<std::sync::mpsc::Receiver<Result<Vec<crate::casting::Receiver>, String>>>,
@@ -606,12 +624,13 @@ pub struct App {
 
     metadata_capability: ProviderCapability,
     subtitle_capability: ProviderCapability,
+    subtitle_keyed: bool,
     artwork_retention: ArtworkRetention,
     enrichment: Option<Receiver<Result<EnrichmentDrainReport, String>>>,
     subtitle_query: String,
     subtitle_results: Vec<screenroom_core::SubtitleMatch>,
     subtitle_search: Option<Receiver<Result<Vec<screenroom_core::SubtitleMatch>, String>>>,
-    subtitle_download: Option<Receiver<Result<StoredSubtitle, String>>>,
+    subtitle_download: Option<SubtitleDownload>,
     cast_session: Option<crate::cast_session::CastSession>,
     cast_connect: Option<Receiver<Result<crate::cast_session::CastSession, String>>>,
     cast_note: Option<String>,
@@ -886,9 +905,9 @@ pub enum Message {
 
     SubtitleQueryChanged(String),
 
-    SubtitleSearchNow,
+    FindSubtitles,
 
-    SubtitleDownload(i64),
+    SubtitleDownload { id: i64, format: String },
 
     CastTo(String),
 
@@ -1128,8 +1147,9 @@ impl App {
         let preferences = library.preferences().unwrap_or_default();
         let metadata_capability =
             TmdbProvider::new(ProviderConfig::from_environment()).capability();
-        let subtitle_capability =
-            OpenSubtitlesProvider::new(SubtitleProviderConfig::from_environment()).capability();
+        let subtitle_provider = TsdbProvider::new(SubtitleProviderConfig::from_environment());
+        let subtitle_keyed = subtitle_provider.search_is_keyed();
+        let subtitle_capability = subtitle_provider.capability();
         let artwork_retention = library
             .artwork_retention()
             .unwrap_or(ArtworkRetention::DoNotStore);
@@ -1228,6 +1248,7 @@ impl App {
 
             metadata_capability,
             subtitle_capability,
+            subtitle_keyed,
             artwork_retention,
             enrichment: None,
             subtitle_query: String::new(),
@@ -2081,42 +2102,171 @@ impl App {
             .unwrap_or_else(|| "bn".to_string())
     }
 
-    fn subtitle_search_now(&mut self) {
+    fn subtitle_provider_hint(&self) -> &'static str {
+        if self.subtitle_keyed {
+            "By TMDb id, release name and title, plus The Subtitle DB's own keyed search."
+        } else {
+            "By TMDb id, release name and title. A key adds The Subtitle DB's own keyed search."
+        }
+    }
+
+    fn tmdb_identity(&self, work_id: &str) -> Option<i64> {
+        self.library
+            .provider_identity(work_id, "tmdb")
+            .ok()
+            .flatten()
+            .and_then(|id| id.trim().parse::<i64>().ok())
+    }
+
+    fn release_name_for(&self, item: &LibraryItem) -> Option<String> {
+        let stem = self
+            .media_path(item)
+            .and_then(|path| {
+                path.file_stem()
+                    .map(|stem| stem.to_string_lossy().to_string())
+            })
+            .or_else(|| {
+                Path::new(&item.filename)
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().to_string())
+            })?;
+        let trimmed = stem.trim().to_string();
+        (!trimmed.is_empty()).then_some(trimmed)
+    }
+
+    fn subtitle_source(&self) -> Option<SubtitleSource> {
+        let active = self.active.as_ref()?;
+        if self.snapshot.load_id == active.load_id
+            && let Some(track) = self
+                .snapshot
+                .tracks
+                .iter()
+                .find(|track| track.kind == TrackKind::Subtitle)
+        {
+            return Some(SubtitleSource::Track {
+                label: track.label(),
+                external: track.external,
+            });
+        }
+        Some(
+            self.subtitle_sidecar(active)
+                .map_or(SubtitleSource::Online, SubtitleSource::Sidecar),
+        )
+    }
+
+    fn subtitle_sidecar(&self, active: &Active) -> Option<PathBuf> {
+        let item = self
+            .library
+            .item(&active.file_id, Some(&self.profile_id))
+            .ok()
+            .flatten()?;
+        let path = self.media_path(&item)?;
+        crate::sidecar::subtitle_beside(&path)
+    }
+
+    fn find_subtitles(&mut self) {
         if self.subtitle_search.is_some() {
             self.status = Some("A subtitle search is already running.".to_string());
             return;
         }
+        let Some(source) = self.subtitle_source() else {
+            self.status = Some("Play something first, then find its subtitles.".to_string());
+            return;
+        };
+        match source {
+            SubtitleSource::Track { label, external } => {
+                self.report_existing_track(&label, external)
+            }
+            SubtitleSource::Sidecar(path) => self.use_sidecar(&path),
+            SubtitleSource::Online => self.find_subtitles_online(),
+        }
+    }
+
+    fn report_existing_track(&mut self, label: &str, external: bool) {
+        self.error = None;
+        self.subtitle_results.clear();
+        self.status = Some(if external {
+            format!(
+                "A kept subtitle ({label}) is already showing for this film, so nothing online was \
+                 asked."
+            )
+        } else {
+            format!(
+                "This file carries its own subtitle track ({label}). Nothing online was asked, \
+                 because a track inside the file always comes first."
+            )
+        });
+    }
+
+    fn use_sidecar(&mut self, path: &Path) {
+        let Some(file_id) = self.active.as_ref().map(|active| active.file_id.clone()) else {
+            return;
+        };
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string_lossy().to_string());
+        match self.library.import_subtitle(&file_id, path) {
+            Ok(stored) => {
+                self.reload_subtitles(&file_id);
+                self.subtitle_results.clear();
+                self.error = None;
+                self.use_subtitle(&stored.id);
+                if self.error.is_none() {
+                    self.status = Some(format!(
+                        "Chose {name}, the subtitle file beside this film. Nothing online was asked."
+                    ));
+                }
+            }
+            Err(error) => self.report(&error),
+        }
+    }
+
+    fn find_subtitles_online(&mut self) {
         if !self.subtitle_capability.is_configured() {
             self.error = None;
             self.status = Some(self.subtitle_capability.detail.clone());
             return;
         }
         let Some(active) = self.active.as_ref() else {
-            self.status = Some("Play something first, then search for its subtitles.".to_string());
+            self.status = Some("Play something first, then find its subtitles.".to_string());
             return;
         };
-        let typed = self.subtitle_query.trim().to_string();
-        let title = if typed.is_empty() {
-            active.title.clone()
-        } else {
-            typed
-        };
+        let query = self.subtitle_query.trim().to_string();
+        let typed = !query.is_empty();
+        let title = if typed { query } else { active.title.clone() };
         let year = active.year;
         let season = active.season;
         let episode = active.episode;
+        let file_id = active.file_id.clone();
         let language = self.subtitle_language();
-        let request = match (season, episode) {
+        let mut request = match (season, episode) {
             (Some(season), Some(episode)) => {
                 SubtitleSearch::episode(&title, year, season, episode, &language)
             }
             _ => SubtitleSearch::movie(&title, year, &language),
         };
+        let item = self
+            .library
+            .item(&file_id, Some(&self.profile_id))
+            .ok()
+            .flatten();
+        if let Some(item) = &item
+            && let Some(tmdb) = self.tmdb_identity(&item.work_id)
+        {
+            request = request.with_tmdb(tmdb);
+        }
+        if let Some(item) = &item
+            && let Some(release) = self.release_name_for(item)
+        {
+            request = request.with_release(release);
+        }
         self.error = None;
         self.subtitle_results.clear();
-        self.status = Some("Asking the subtitle provider…".to_string());
+        self.status = Some("Asking The Subtitle DB…".to_string());
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let provider = OpenSubtitlesProvider::new(SubtitleProviderConfig::from_environment());
+            let provider = TsdbProvider::new(SubtitleProviderConfig::from_environment());
             let result = provider
                 .search(&request)
                 .map_err(|error| format!("{}: {}", error.code(), error.message()));
@@ -2125,7 +2275,7 @@ impl App {
         self.subtitle_search = Some(receiver);
     }
 
-    fn subtitle_download(&mut self, file_id: i64) {
+    fn subtitle_download(&mut self, id: i64, format: &str) {
         if self.subtitle_download.is_some() {
             self.status = Some("A subtitle download is already running.".to_string());
             return;
@@ -2134,25 +2284,25 @@ impl App {
             self.status = Some("Play something first.".to_string());
             return;
         };
-        let target = active.file_id.clone();
+        let file_id = active.file_id.clone();
+        let load_id = active.load_id;
         let language = self.subtitle_language();
-        let library = Arc::clone(&self.library);
+        let format = format.to_string();
         self.error = None;
         self.status = Some("Downloading the subtitle…".to_string());
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let provider = OpenSubtitlesProvider::new(SubtitleProviderConfig::from_environment());
+            let provider = TsdbProvider::new(SubtitleProviderConfig::from_environment());
             let result = provider
-                .download(file_id, &language, "")
-                .map_err(|error| format!("{}: {}", error.code(), error.message()))
-                .and_then(|downloaded| {
-                    library
-                        .import_downloaded_subtitle(&target, &downloaded)
-                        .map_err(|error| format!("{}: {error}", error.code()))
-                });
+                .download(id, &language, &format)
+                .map_err(|error| format!("{}: {}", error.code(), error.message()));
             let _ = sender.send(result);
         });
-        self.subtitle_download = Some(receiver);
+        self.subtitle_download = Some(SubtitleDownload {
+            receiver,
+            file_id,
+            load_id,
+        });
     }
 
     fn cast_to(&mut self, receiver_id: &str) {
@@ -2274,8 +2424,8 @@ impl App {
                     self.subtitle_search = None;
                     self.error = None;
                     self.status = Some(match results.len() {
-                        0 => "No subtitle matched that search.".to_string(),
-                        count => format!("{count} subtitles matched."),
+                        0 => "No subtitle on The Subtitle DB matched this file.".to_string(),
+                        count => format!("{count} subtitles matched on The Subtitle DB."),
                     });
                     self.subtitle_results = results;
                 }
@@ -2290,14 +2440,36 @@ impl App {
                 }
             }
         }
-        if let Some(receiver) = &self.subtitle_download {
-            match receiver.try_recv() {
-                Ok(Ok(stored)) => {
+        if let Some(pending) = &self.subtitle_download {
+            match pending.receiver.try_recv() {
+                Ok(Ok(downloaded)) => {
+                    let file_id = pending.file_id.clone();
+                    let load_id = pending.load_id;
                     self.subtitle_download = None;
-                    self.error = None;
-                    self.status = Some(format!("Downloaded {}.", stored.language));
-                    self.reload_subtitles(&stored.file_id.clone());
-                    let _ = self.update(Message::UseSubtitle(stored.id.clone()));
+                    let still_watching = self.active.as_ref().is_some_and(|active| {
+                        active.file_id == file_id && active.load_id == load_id
+                    });
+                    if !still_watching {
+                        self.error = None;
+                        self.status = Some(
+                            "That subtitle finished downloading after the film changed, so it was \
+                             not kept or shown."
+                                .to_string(),
+                        );
+                    } else {
+                        match self
+                            .library
+                            .import_downloaded_subtitle(&file_id, &downloaded)
+                        {
+                            Ok(stored) => {
+                                self.error = None;
+                                self.status = Some(format!("Downloaded {}.", stored.language));
+                                self.reload_subtitles(&file_id);
+                                let _ = self.update(Message::UseSubtitle(stored.id.clone()));
+                            }
+                            Err(error) => self.report(&error),
+                        }
+                    }
                 }
                 Ok(Err(message)) => {
                     self.subtitle_download = None;
@@ -4613,8 +4785,8 @@ impl App {
             Message::ToggleArtworkRetention => self.toggle_artwork_retention(),
             Message::ToggleHdrExtended(on) => self.toggle_hdr_extended(on),
             Message::SubtitleQueryChanged(value) => self.subtitle_query = value,
-            Message::SubtitleSearchNow => self.subtitle_search_now(),
-            Message::SubtitleDownload(file_id) => self.subtitle_download(file_id),
+            Message::FindSubtitles => self.find_subtitles(),
+            Message::SubtitleDownload { id, format } => self.subtitle_download(id, &format),
             Message::CastTo(id) => self.cast_to(&id),
             Message::CastPause => self.cast_action(CastAction::Pause),
             Message::CastStop => self.cast_action(CastAction::Stop),
@@ -5745,22 +5917,21 @@ impl App {
                 );
             }
             Section::Subtitles => {
+                extras.text(
+                    "settings:subtitle-provider",
+                    self.subtitle_capability.detail.clone(),
+                );
                 extras.field(
                     "settings:subtitle-query",
-                    "Title to search for",
+                    "Title to find subtitles for",
                     &self.subtitle_query,
                 );
                 extras.press(
                     "settings:subtitle-search",
-                    "Search",
-                    Some(Message::SubtitleSearchNow),
+                    "Find subtitles online",
+                    Some(Message::FindSubtitles),
                 );
-                extras.text(
-                    "settings:subtitle-note",
-                    "Searching a provider online needs an authorised account of your own, for \
-                     example OpenSubtitles with your API key. A kept subtitle is copied into the \
-                     library; the file on disk is never modified or moved.",
-                );
+                extras.text("settings:subtitle-note", SUBTITLE_PRIORITY_NOTE);
             }
             Section::Accessibility => extras.text(
                 "settings:reduce-motion-note",
@@ -6548,14 +6719,14 @@ impl App {
             }
             ui::screens::settings::Section::Subtitles => {
                 rows.push(Row::Value {
-                    label: "Provider",
+                    label: "Online provider",
                     value: self.subtitle_capability.detail.clone(),
                 });
                 rows.push(Row::Action {
-                    label: "Search the subtitle provider",
-                    hint: Some("Uses the film that is playing when the query is empty."),
-                    action: "Search",
-                    on_press: Some(Message::SubtitleSearchNow),
+                    label: "Find subtitles online",
+                    hint: Some(self.subtitle_provider_hint()),
+                    action: "Find",
+                    on_press: Some(Message::FindSubtitles),
                 });
                 rows.push(Row::Value {
                     label: "Kept subtitle files",
@@ -6583,12 +6754,12 @@ impl App {
                 });
                 if self.subtitle_search.is_some() {
                     rows.push(Row::Value {
-                        label: "Search",
-                        value: "Searching…".to_string(),
+                        label: "Online search",
+                        value: "Asking The Subtitle DB…".to_string(),
                     });
                 } else if !self.subtitle_results.is_empty() {
                     rows.push(Row::Value {
-                        label: "Search",
+                        label: "Online search",
                         value: format!("{} match(es)", self.subtitle_results.len()),
                     });
                 }
@@ -6597,7 +6768,10 @@ impl App {
                         label: result.release_name.as_str(),
                         hint: Some(result.format.as_str()),
                         action: "Download",
-                        on_press: Some(Message::SubtitleDownload(result.file_id)),
+                        on_press: Some(Message::SubtitleDownload {
+                            id: result.id,
+                            format: result.format.clone(),
+                        }),
                     });
                 }
             }
@@ -6863,16 +7037,16 @@ impl App {
                 let mut body = column![
                     row![
                         text_input(
-                            "Title to search for, or leave empty to use the film playing",
+                            "Title to find subtitles for, or leave empty to use the film playing",
                             &self.subtitle_query,
                         )
                         .on_input(Message::SubtitleQueryChanged)
-                        .on_submit(Message::SubtitleSearchNow)
+                        .on_submit(Message::FindSubtitles)
                         .style(design::input_style())
                         .padding(tokens.spacing.field_y)
                         .width(Length::Fill),
-                        button(text("Search").size(tokens.type_scale.label))
-                            .on_press(Message::SubtitleSearchNow)
+                        button(text("Find subtitles online").size(tokens.type_scale.label))
+                            .on_press(Message::FindSubtitles)
                             .style(design::action_style(false))
                             .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
                     ]
@@ -6882,10 +7056,11 @@ impl App {
                 .spacing(tokens.spacing.field_y)
                 .width(Length::Fill);
 
+                body = body.push(note(self.subtitle_capability.detail.clone()));
+                body = body.push(note(SUBTITLE_PRIORITY_NOTE.to_string()));
                 body = body.push(note(
-                    "Searching a provider online needs an authorised account of your own, for \
-                     example OpenSubtitles with your API key. A kept subtitle is copied into the \
-                     library; the file on disk is never modified or moved."
+                    "A kept subtitle is copied into the library; the file on disk is never \
+                     modified or moved."
                         .to_string(),
                 ));
 
