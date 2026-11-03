@@ -292,6 +292,30 @@ cargo run -p screenroom-core --example prepare_library -- LIB.DB MEDIA_ROOT
 python3 scripts/no_comments.py check         # the no-comments rule, lexed per language
 ```
 
+## The installed macOS app rebuilds itself
+
+On this MacBook every relevant commit rebuilds and reinstalls the application at
+`~/Applications/Screenroom.app`, with no build command to remember. This is macOS
+only: Windows and the Tizen client are untouched.
+
+- `scripts/git-hooks/` holds the tracked hooks, and `scripts/install-app-hooks.sh`
+  points `core.hooksPath` at it (idempotent; run it once per clone).
+- `post-commit`, `post-merge` and `post-rewrite` start `scripts/rebuild-app.sh`
+  detached, so Git never waits and never fails because of a build.
+- One build runs at a time. A trigger that arrives mid-build queues a single
+  follow-up, and the installed commit recorded beside the Git directory is the
+  arbiter: nothing is built twice, and no commit is left unbuilt.
+- The worker builds `HEAD`, verifies the bundle, and only then swaps the installed
+  app, keeping the previous bundle until the swap succeeds. **A failed build never
+  replaces a working app**; it is logged under `.artifacts/builds/` and retried at
+  the next commit.
+- A commit touching nothing under `apps/`, `crates/`, `assets/`, `scripts/`,
+  `vendor/` or `Cargo.*` is recorded without a rebuild.
+- `scripts/rebuild-app.sh --status` reports the installed commit, `HEAD` and the
+  last result; `--force` rebuilds anyway. `SCREENROOM_SKIP_REBUILD=1` skips one
+  commit deliberately (a bisect, say).
+- A running Screenroom keeps its old code until relaunched.
+
 ## Gotchas
 
 Full context for each is in `.trail/learnings/`.

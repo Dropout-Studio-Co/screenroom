@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+if [ "$(uname -s)" != "Darwin" ]; then
+	exit 0
+fi
+root=$(git rev-parse --show-toplevel)
+cd "$root" || exit 0
+if [ "${SCREENROOM_SKIP_REBUILD:-0}" = "1" ]; then
+	exit 0
+fi
+mkdir -p .artifacts/builds
+nohup scripts/rebuild-app.sh --background >>.artifacts/builds/hooks.log 2>&1 &
+exit 0
