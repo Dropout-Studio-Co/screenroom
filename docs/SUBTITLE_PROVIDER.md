@@ -220,7 +220,9 @@ scripts/package-macos.sh && open dist/Screenroom.app
 ```
 
 **Also not verified:** the Windows path (no build on that machine); a downloaded
-subtitle drawn inside the player window; the offline-reuse step above; and the TV
+subtitle drawn inside the player window; the player's own subtitle panel as drawn
+on screen (its messages are covered by tests, its layout has not been looked at by
+a person); the offline-reuse step above; and the TV
 client, which has no online subtitle provider at all — it reads embedded tracks
 and the four sidecar documents its decoder accepts (`.smi`, `.srt`, `.sub`,
 `.ttxt`). Nothing here is claimed to have happened beyond the recorded run.
