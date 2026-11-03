@@ -688,13 +688,15 @@ fn step_5_the_audio_and_subtitle_pickers_change_the_tracks() {
     );
 
     for kind in [TrackKind::Audio, TrackKind::Subtitle] {
-        let (choices, selected) = app.track_chooser(kind);
-        let offered: Vec<String> = choices.iter().map(|choice| choice.to_string()).collect();
+        let options = ui::screens::player::track_options(&app.snapshot, kind);
+        let offered: Vec<String> = options.iter().map(|option| option.to_string()).collect();
         assert!(
             offered.iter().any(|label| label.contains("fre")),
             "{kind:?} picker must offer the French track, offered {offered:?}"
         );
-        let current = selected.expect("the picker starts on a track").id;
+        let current = ui::screens::player::selected_track(&app.snapshot, kind, &options)
+            .expect("the picker starts on a track")
+            .id;
 
         let other = app
             .snapshot

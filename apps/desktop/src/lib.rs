@@ -1,4 +1,3 @@
-pub mod accessibility;
 pub mod app;
 pub mod artwork;
 pub mod backup_job;
@@ -8,6 +7,7 @@ pub mod casting;
 pub mod conversion;
 pub mod design;
 pub mod external;
+pub mod motion;
 pub mod picker;
 pub mod play_check;
 pub mod playback;
