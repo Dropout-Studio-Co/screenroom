@@ -33,6 +33,47 @@ device test. The TSDB paths need the owner's key and the commands in
 (2026-11-03), and the two steps that need a visible window and a person are still
 PENDING.
 
+### Playback: flicker and pointer-driven chrome, 2026-11-03
+
+Two defects were fixed and measured on the installed bundle playing a generated
+1080p test pattern.
+
+**A. The video disappeared for redraws between frames.** iced trims every shader
+pipeline after each draw (`iced_wgpu-0.14.0`), and `VideoPipeline::trim` dropped the
+imported surface, the bind group and the sampling record but left the
+`uploaded_generation`/`uploaded_surface` markers intact. The next redraw of the same
+frame therefore took `prepare`'s unchanged-frame shortcut and then found no bind
+group, so it drew no video at all; the picture returned only when a new frame
+arrived. Pointer motion adds exactly those between-frame redraws.
+
+| Recording, pointer sweeping the window for 7 s | Frames | Blank video region |
+| --- | --- | --- |
+| Before the fix | 347 | **117 (33.7 %)**, luma ≈ 24 against a median of 107 |
+| After the fix | 321 | **0**, minimum luma 106 against a median of 107 |
+
+`trim` now keeps what the next draw needs, `prepare` only reuses a frame when the
+binding is present, and the player builds one stable tree with the picture as its
+first child. The chrome no longer uses `Float` scaling, which had also been changing
+the picture's layout bounds during the reveal — a second visible jump on every wake.
+
+**B. Overlays now follow the pointer's presence, not a timer.** The app listens for
+the native `mouse::Event::CursorEntered`/`CursorLeft` boundary events, keeps a
+`pointer_inside` latch, and snaps the reveal with `MotionState::place_chrome` instead
+of waiting for the idle spring.
+
+Measured on the running app (window screenshots, 150 ms after each transition):
+entry shows the full chrome and subtitle panel; exit removes every overlay —
+title, scrub bar, controls, panel — while playback continues; three rapid crossings
+each produced the expected state with no oscillation; the same holds while paused.
+A track menu held open, or an active scrub/volume drag, keeps the chrome while the
+pointer is out. The mean luma of the bottom band was 29 with the chrome up and 83–86 with it gone,
+across three crossings: the scrim appears and disappears exactly with presence.
+
+Regression tests: `a_trim_keeps_the_picture_bindable_so_a_redraw_is_not_blank`,
+`a_missing_binding_never_counts_as_reusable`, and four acceptance tests for exit,
+entry, repeated boundaries, tick-without-pointer and the menu hold. The suite is
+**777 tests, 0 failures**.
+
 ### Subtitles verified in the running application, 2026-11-03
 
 The three checks that were PENDING in `SUBTITLE_PROVIDER.md` §8 were run against the
