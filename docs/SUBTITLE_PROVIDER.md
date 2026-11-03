@@ -212,20 +212,18 @@ Two checks stay PENDING, because they need a visible window and a person:
 
 ```bash
 # A film with no track and no sidecar, in the installed application:
-#   player → Find subtitles online → pick a result → the text appears → quit,
+#   player → t (or the overlay's Find online) → pick a result → the text
+#   appears → quit,
 #   turn the network off, reopen, play: the kept subtitle still works and the
 #   media file's bytes and modification time are unchanged.
 scripts/package-macos.sh && open dist/Screenroom.app
 ```
 
-**Also not verified:** the Windows path (no build on that machine), a downloaded
-subtitle drawn inside the player window, and the offline-reuse step above. Nothing
-here is claimed to have happened beyond the recorded run.
-
-**Also not verified:** the Windows path (no build on that machine), and the TV
+**Also not verified:** the Windows path (no build on that machine); a downloaded
+subtitle drawn inside the player window; the offline-reuse step above; and the TV
 client, which has no online subtitle provider at all — it reads embedded tracks
 and the four sidecar documents its decoder accepts (`.smi`, `.srt`, `.sub`,
-`.ttxt`).
+`.ttxt`). Nothing here is claimed to have happened beyond the recorded run.
 
 ## 9. Rights and retention
 
