@@ -17,7 +17,7 @@ use std::time::Duration;
 
 const TOP_SCRIM_HEIGHT: f32 = 200.0;
 
-const BOTTOM_SCRIM_HEIGHT: f32 = 330.0;
+pub const BOTTOM_SCRIM_HEIGHT: f32 = 330.0;
 
 const TOP_INSET: f32 = 32.0;
 

@@ -58,8 +58,6 @@ const SUGGESTIONS: i64 = 8;
 
 const QUIT_ROUTING_BUDGET: u8 = 40;
 
-const MAX_SUBTITLE_ROWS: usize = 4;
-
 const MODE_SETTLE: Duration = Duration::from_millis(1_500);
 
 const TERMINATE_CHECK_DELAY: Duration = Duration::from_millis(1_800);
@@ -542,6 +540,8 @@ pub struct App {
 
     window_width: f32,
 
+    window_height: f32,
+
     last_input: std::time::Instant,
 
     player_chrome: bool,
@@ -606,6 +606,7 @@ pub struct App {
     enrichment: Option<Receiver<Result<EnrichmentDrainReport, String>>>,
     subtitle_results: Vec<screenroom_core::SubtitleMatch>,
     subtitle_results_for: Option<String>,
+    subtitle_note: Option<String>,
     subtitle_search: Option<Receiver<Result<Vec<screenroom_core::SubtitleMatch>, String>>>,
     subtitle_download: Option<SubtitleDownload>,
     cast_session: Option<crate::cast_session::CastSession>,
@@ -852,7 +853,7 @@ pub enum Message {
 
     SelectTrack(TrackKind, i64),
 
-    Resized(f32),
+    Resized(iced::Size),
 
     SubtitleScale(f64),
 
@@ -1173,6 +1174,7 @@ impl App {
                 preferences.reduced_motion || crate::motion::system_reduce_motion(),
             ),
             window_width: verification_size().width,
+            window_height: verification_size().height,
             last_input: std::time::Instant::now(),
             player_chrome: true,
             preferences,
@@ -1220,6 +1222,7 @@ impl App {
             enrichment: None,
             subtitle_results: Vec::new(),
             subtitle_results_for: None,
+            subtitle_note: None,
             subtitle_search: None,
             subtitle_download: None,
             cast_session: None,
@@ -1852,6 +1855,7 @@ impl App {
             self.subtitle_results.clear();
             self.subtitle_results_for = None;
         }
+        self.subtitle_note = None;
         let origin = match self.screen {
             Screen::Detail => Screen::Detail,
             _ => Screen::Browse,
@@ -2066,17 +2070,29 @@ impl App {
         crate::sidecar::subtitle_beside(&path)
     }
 
-    fn subtitle_message(&self) -> Option<String> {
-        self.error.clone().or_else(|| self.status.clone())
+    fn note_subtitle(&mut self, note: impl Into<String>) {
+        self.subtitle_note = Some(note.into());
+    }
+
+    fn subtitle_row_budget(&self) -> usize {
+        const ROW_COST: f32 = 52.0;
+        const RESERVED: f32 = ui::screens::player::BOTTOM_SCRIM_HEIGHT + 30.0 + 130.0;
+        if !self.window_height.is_finite() {
+            return 2;
+        }
+        let free = (self.window_height - RESERVED).max(ROW_COST);
+        ((free / ROW_COST).floor() as i64).clamp(1, 6) as usize
     }
 
     fn find_subtitles(&mut self) {
         if self.subtitle_search.is_some() {
             self.status = Some("A subtitle search is already running.".to_string());
+            self.note_subtitle("A subtitle search is already running.");
             return;
         }
         let Some(active) = self.active.as_ref() else {
             self.status = Some("Play something first, then find its subtitles.".to_string());
+            self.note_subtitle("Play something first, then find its subtitles.");
             return;
         };
         if self.snapshot.load_id != active.load_id || !self.snapshot.loaded {
@@ -2086,10 +2102,15 @@ impl App {
                  it cannot be ruled out. Nothing online was asked; try again once it is playing."
                     .to_string(),
             );
+            self.note_subtitle(
+                "The player has not reported this film's tracks yet, so a track inside it cannot \
+                 be ruled out. Nothing online was asked; try again once it is playing.",
+            );
             return;
         }
         let Some(source) = self.subtitle_source() else {
             self.status = Some("Play something first, then find its subtitles.".to_string());
+            self.note_subtitle("Play something first, then find its subtitles.");
             return;
         };
         match source {
@@ -2104,7 +2125,7 @@ impl App {
     fn report_existing_track(&mut self, label: &str, external: bool) {
         self.error = None;
         self.subtitle_results.clear();
-        self.status = Some(if external {
+        let note = if external {
             format!(
                 "A kept subtitle ({label}) is already showing for this film, so nothing online was \
                  asked."
@@ -2114,7 +2135,9 @@ impl App {
                 "This file carries its own subtitle track ({label}). Nothing online was asked, \
                  because a track inside the file always comes first."
             )
-        });
+        };
+        self.status = Some(note.clone());
+        self.note_subtitle(note);
     }
 
     fn use_sidecar(&mut self, path: &Path) {
@@ -2132,9 +2155,11 @@ impl App {
                 self.error = None;
                 self.use_subtitle(&stored.id);
                 if self.error.is_none() {
-                    self.status = Some(format!(
+                    let note = format!(
                         "Chose {name}, the subtitle file beside this film. Nothing online was asked."
-                    ));
+                    );
+                    self.status = Some(note.clone());
+                    self.note_subtitle(note);
                 }
             }
             Err(error) => self.report(&error),
@@ -2145,10 +2170,12 @@ impl App {
         if !self.subtitle_capability.is_configured() {
             self.error = None;
             self.status = Some(self.subtitle_capability.detail.clone());
+            self.note_subtitle(self.subtitle_capability.detail.clone());
             return;
         }
         let Some(active) = self.active.as_ref() else {
             self.status = Some("Play something first, then find its subtitles.".to_string());
+            self.note_subtitle("Play something first, then find its subtitles.");
             return;
         };
         let title = active.title.clone();
@@ -2182,6 +2209,7 @@ impl App {
         self.subtitle_results.clear();
         self.subtitle_results_for = Some(file_id.clone());
         self.status = Some("Asking The Subtitle DB…".to_string());
+        self.note_subtitle("Asking The Subtitle DB…");
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let provider = TsdbProvider::new(SubtitleProviderConfig::from_environment());
@@ -2210,12 +2238,16 @@ impl App {
                  one."
                     .to_string(),
             );
+            self.note_subtitle(
+                "Those results were found for a different film. Find subtitles again for this one.",
+            );
             return;
         }
         let language = self.subtitle_language();
         let format = format.to_string();
         self.error = None;
         self.status = Some("Downloading the subtitle…".to_string());
+        self.note_subtitle("Downloading the subtitle…");
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let provider = TsdbProvider::new(SubtitleProviderConfig::from_environment());
@@ -2353,28 +2385,32 @@ impl App {
                         self.subtitle_results_for.as_deref() == Some(active.file_id.as_str())
                     });
                     if still_watching {
-                        self.status = Some(match results.len() {
+                        let note = match results.len() {
                             0 => "No subtitle on The Subtitle DB matched this file.".to_string(),
                             count => format!("{count} subtitles matched on The Subtitle DB."),
-                        });
+                        };
+                        self.status = Some(note.clone());
+                        self.note_subtitle(note);
                         self.subtitle_results = results;
                     } else {
                         self.subtitle_results_for = None;
-                        self.status = Some(
-                            "Those results arrived for a different film, so they were dropped. \
-                             Find subtitles again for this one."
-                                .to_string(),
-                        );
+                        let note = "Those results were for a film that is no longer playing, so \
+                                    they were dropped. Find subtitles again for this one.";
+                        self.status = Some(note.to_string());
+                        self.note_subtitle(note);
                     }
                 }
                 Ok(Err(message)) => {
                     self.subtitle_search = None;
+                    self.note_subtitle(message.clone());
                     self.error = Some(message);
                 }
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => {
                     self.subtitle_search = None;
-                    self.error = Some("The subtitle search stopped unexpectedly.".to_string());
+                    let note = "The subtitle search stopped unexpectedly.".to_string();
+                    self.note_subtitle(note.clone());
+                    self.error = Some(note);
                 }
             }
         }
@@ -2389,11 +2425,10 @@ impl App {
                     });
                     if !still_watching {
                         self.error = None;
-                        self.status = Some(
-                            "That subtitle finished downloading after the film changed, so it was \
-                             not kept or shown."
-                                .to_string(),
-                        );
+                        let note = "That subtitle finished downloading after the film changed, so \
+                                    it was not kept or shown.";
+                        self.status = Some(note.to_string());
+                        self.note_subtitle(note);
                     } else {
                         match self
                             .library
@@ -2401,16 +2436,22 @@ impl App {
                         {
                             Ok(stored) => {
                                 self.error = None;
-                                self.status = Some(format!("Downloaded {}.", stored.language));
+                                let note = format!("Downloaded {}.", stored.language);
+                                self.status = Some(note.clone());
+                                self.note_subtitle(note);
                                 self.reload_subtitles(&file_id);
                                 let _ = self.update(Message::UseSubtitle(stored.id.clone()));
                             }
-                            Err(error) => self.report(&error),
+                            Err(error) => {
+                                self.note_subtitle(error.to_string());
+                                self.report(&error);
+                            }
                         }
                     }
                 }
                 Ok(Err(message)) => {
                     self.subtitle_download = None;
+                    self.note_subtitle(message.clone());
                     self.error = Some(message);
                 }
                 Err(TryRecvError::Empty) => {}
@@ -2802,6 +2843,7 @@ impl App {
         self.subtitles.clear();
         self.subtitle_results.clear();
         self.subtitle_results_for = None;
+        self.subtitle_note = None;
         self.frame = None;
         self.scrub = None;
         self.snapshot = PlayerSnapshot::default();
@@ -4640,9 +4682,12 @@ impl App {
             Message::SkipSegment => self.skip_segment(),
             Message::SubtitleLanguageChanged(value) => self.subtitle_input = value,
             Message::AudioLanguageChanged(value) => self.audio_input = value,
-            Message::Resized(width) => {
-                if width.is_finite() && width > 0.0 {
-                    self.window_width = width;
+            Message::Resized(size) => {
+                if size.width.is_finite() && size.width > 0.0 {
+                    self.window_width = size.width;
+                }
+                if size.height.is_finite() && size.height > 0.0 {
+                    self.window_height = size.height;
                 }
 
                 return iced::window::latest()
@@ -5093,7 +5138,7 @@ impl App {
         let mut subscriptions = vec![
             iced::keyboard::listen().map(Message::Keyboard),
             iced::window::close_requests().map(|_| Message::Close),
-            iced::window::resize_events().map(|(_id, size)| Message::Resized(size.width)),
+            iced::window::resize_events().map(|(_id, size)| Message::Resized(size)),
         ];
         let interval = if self.screen == Screen::Player || self.preview.is_some() {
             PLAYER_TICK
@@ -5486,7 +5531,7 @@ impl App {
                 .spacing(tokens.spacing.field_x)
                 .align_y(Alignment::Center),
             );
-            if let Some(message) = self.subtitle_message() {
+            if let Some(message) = self.subtitle_note.clone() {
                 let color = if self.error.is_some() {
                     ui::theme::danger()
                 } else {
@@ -5498,7 +5543,10 @@ impl App {
                         .color(ink(color)),
                 );
             }
-            for subtitle in self.subtitles.iter().take(MAX_SUBTITLE_ROWS) {
+            let budget = self.subtitle_row_budget();
+            let kept_rows = self.subtitles.len().min(budget);
+            let result_rows = budget.saturating_sub(kept_rows);
+            for subtitle in self.subtitles.iter().take(kept_rows) {
                 panel = panel.push(
                     row![
                         text(format!("{} · {}", subtitle.label, subtitle.format))
@@ -5518,17 +5566,17 @@ impl App {
                     .align_y(Alignment::Center),
                 );
             }
-            if self.subtitles.len() > MAX_SUBTITLE_ROWS {
+            if self.subtitles.len() > kept_rows {
                 panel = panel.push(
                     text(format!(
                         "{} more kept subtitle(s) for this film",
-                        self.subtitles.len() - MAX_SUBTITLE_ROWS
+                        self.subtitles.len() - kept_rows
                     ))
                     .size(tokens.type_scale.micro)
                     .color(ink(tokens.palette.ink_muted)),
                 );
             }
-            for result in self.subtitle_results.iter().take(MAX_SUBTITLE_ROWS) {
+            for result in self.subtitle_results.iter().take(result_rows) {
                 let name = if result.release_name.trim().is_empty() {
                     result.language_name.clone()
                 } else {
@@ -5552,11 +5600,11 @@ impl App {
                     .align_y(Alignment::Center),
                 );
             }
-            if self.subtitle_results.len() > MAX_SUBTITLE_ROWS {
+            if self.subtitle_results.len() > result_rows {
                 panel = panel.push(
                     text(format!(
                         "{} more match(es), best first",
-                        self.subtitle_results.len() - MAX_SUBTITLE_ROWS
+                        self.subtitle_results.len() - result_rows
                     ))
                     .size(tokens.type_scale.micro)
                     .color(ink(tokens.palette.ink_muted)),
@@ -6646,13 +6694,13 @@ mod tests {
         let (mut app, _directory) = app_with(4);
         app.window_width = 1920.0;
         for width in [0.0_f32, -1.0, f32::NAN, f32::INFINITY] {
-            let _ = app.update(Message::Resized(width));
+            let _ = app.update(Message::Resized(iced::Size::new(width, 800.0)));
             assert_eq!(
                 app.window_width, 1920.0,
                 "a width of {width} must not replace a usable one"
             );
         }
-        let _ = app.update(Message::Resized(3440.0));
+        let _ = app.update(Message::Resized(iced::Size::new(3440.0, 1440.0)));
         assert_eq!(app.window_width, 3440.0);
     }
 

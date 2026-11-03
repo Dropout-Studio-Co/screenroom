@@ -224,11 +224,12 @@ scripts/package-macos.sh && open dist/Screenroom.app
 **Also not verified:** the Windows path (no build on that machine); a downloaded
 subtitle drawn inside the player window; the player's own subtitle panel as drawn
 on screen (its messages are covered by tests, its layout has not been looked at by
-a person, and at the 640×480 minimum window the whole player overlay is cramped —
-the panel caps itself at four kept rows and four matches so it fits the default
-window, but that minimum size is untested); the offline-reuse step above; and the TV
-client, which has no online subtitle provider at all — it reads embedded tracks
-and the four sidecar documents its decoder accepts (`.smi`, `.srt`, `.sub`,
+a person — the panel sizes its row budget to the window height (five rows at the
+default 1280×800, at most six on a taller window, one on a short one) and shows a
+count for the rest, so it fits the default window; at the 640×480 minimum the whole
+player overlay is cramped and that size is untested); the offline-reuse step above;
+and the TV client, which has no online subtitle provider at all — it reads embedded
+tracks and the four sidecar documents its decoder accepts (`.smi`, `.srt`, `.sub`,
 `.ttxt`). Nothing here is claimed to have happened beyond the recorded run.
 
 ## 9. Rights and retention

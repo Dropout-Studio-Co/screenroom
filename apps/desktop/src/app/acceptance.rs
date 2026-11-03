@@ -1835,7 +1835,7 @@ fn a_subtitle_file_beside_the_film_is_used_without_asking_online() {
 }
 
 #[test]
-fn the_player_can_find_subtitles_while_the_film_is_playing() {
+fn the_player_resolves_a_track_before_it_looks_online() {
     let media = Media::new();
     media.placeholders(&["Reachable (2020)/Reachable (2020).mkv".to_string()]);
     let mut app = fresh_app();
@@ -1857,7 +1857,7 @@ fn the_player_can_find_subtitles_while_the_film_is_playing() {
 
     let _ = app.update(Message::FindSubtitles);
     assert!(app.subtitle_search.is_none(), "no lookup may start");
-    let shown = app.subtitle_message().unwrap_or_default();
+    let shown = app.subtitle_note.clone().unwrap_or_default();
     assert!(
         shown.contains("subtitle track"),
         "the panel must draw the reason it did nothing: {shown}"
@@ -1897,8 +1897,23 @@ fn results_that_arrive_for_another_film_are_dropped() {
         "results for another film must not be listed"
     );
     assert!(app.subtitle_results_for.is_none());
-    let shown = app.subtitle_message().unwrap_or_default();
-    assert!(shown.contains("different film"), "{shown}");
+    let shown = app.subtitle_note.clone().unwrap_or_default();
+    assert!(shown.contains("no longer playing"), "{shown}");
+}
+
+#[test]
+fn the_subtitle_panel_sizes_its_row_count_to_the_window() {
+    let mut app = fresh_app();
+    app.window_height = 480.0;
+    assert_eq!(app.subtitle_row_budget(), 1, "a short window shows one row");
+    app.window_height = 800.0;
+    assert_eq!(
+        app.subtitle_row_budget(),
+        5,
+        "the default window shows five"
+    );
+    app.window_height = 1_440.0;
+    assert_eq!(app.subtitle_row_budget(), 6, "a tall window stops at six");
 }
 
 #[test]
