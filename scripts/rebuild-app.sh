@@ -42,6 +42,15 @@ release_of() {
   fi
 }
 
+gate_is_live() {
+  local holder start current
+  holder="$(cut -d'|' -f1 "$gate" 2>/dev/null || true)"
+  start="$(cut -d'|' -f2- "$gate" 2>/dev/null || true)"
+  [ -n "$holder" ] || return 1
+  current="$(ps -o lstart= -p "$holder" 2>/dev/null | tr -s ' ' | sed 's/^ //;s/ $//')"
+  [ -n "$current" ] && [ "$current" = "$start" ]
+}
+
 live_holder() {
   local pid start current
   pid="$(holder_pid)"
@@ -65,6 +74,11 @@ status() {
   else
     pending_state="none"
   fi
+  if [ -f "$gate" ]; then
+    if gate_is_live; then gate_state="held by $(cut -d'|' -f1 "$gate")"; else gate_state="stale (run --unlock)"; fi
+  else
+    gate_state="free"
+  fi
   printf 'installed: %s\n' "$(cat "$stamp" 2>/dev/null || echo none)"
   printf 'head:      %s\n' "$(git rev-parse HEAD 2>/dev/null || echo none)"
   if [ -L "$installed" ]; then
@@ -73,6 +87,7 @@ status() {
     printf 'app:       %s at %s\n' "$app_state" "$installed"
   fi
   printf 'lock:      %s\n' "$lock_state"
+  printf 'gate:      %s\n' "$gate_state"
   printf 'pending:   %s\n' "$pending_state"
   [ -f "$last" ] && cat "$last"
   return 0
@@ -123,25 +138,14 @@ claim() {
 }
 
 gate_enter() {
-  local attempt quarantine holder start current
+  local attempt
   attempt=0
   while [ "$attempt" -lt 20 ]; do
     attempt=$((attempt + 1))
     if claim "$gate"; then
       return 0
     fi
-    quarantine="$common/.screenroom-gate.$$"
-    if mv "$gate" "$quarantine" 2>/dev/null; then
-      holder="$(cut -d'|' -f1 "$quarantine" 2>/dev/null || true)"
-      start="$(cut -d'|' -f2- "$quarantine" 2>/dev/null || true)"
-      current="$(ps -o lstart= -p "$holder" 2>/dev/null | tr -s ' ' | sed 's/^ //;s/ $//')"
-      if [ -n "$current" ] && [ "$current" = "$start" ]; then
-        mv "$quarantine" "$gate" 2>/dev/null || rm -f "$quarantine"
-      else
-        rm -f "$quarantine"
-      fi
-    fi
-    sleep 0.2
+    sleep 0.1
   done
   return 1
 }
