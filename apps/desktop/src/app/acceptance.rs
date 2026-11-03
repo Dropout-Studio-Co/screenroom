@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::*;
+use crate::playback::PlaybackTracker;
 use crate::ui::screens::settings::Section;
 
 const TICK: Duration = Duration::from_millis(10);
@@ -1704,6 +1705,189 @@ fn step_21_a_subtitle_is_kept_and_handed_to_the_player_without_touching_the_orig
     let _ = app.update(Message::BackFromPlayer);
 }
 
+fn watching(app: &mut App, file_id: &str, load_id: u64) -> bool {
+    let Ok(opened) = PlaybackTracker::open(&app.library, &app.profile_id, file_id) else {
+        return false;
+    };
+    let Some(item) = app
+        .library
+        .item(file_id, Some(&app.profile_id))
+        .ok()
+        .flatten()
+    else {
+        return false;
+    };
+    app.active = Some(Active {
+        tracker: opened.tracker,
+        file_id: item.id.clone(),
+        title: item.title.clone(),
+        year: item.year,
+        season: item.season,
+        episode: item.episode,
+        resume_from_ms: opened.resume_from_ms,
+        origin: Screen::Browse,
+        load_id,
+        seek_serial: 0,
+    });
+    app.snapshot = screenroom_player::PlayerSnapshot {
+        loaded: true,
+        load_id,
+        ..screenroom_player::PlayerSnapshot::default()
+    };
+    true
+}
+
+fn subtitle_track(label: &str) -> screenroom_player::MediaTrack {
+    screenroom_player::MediaTrack {
+        id: 2,
+        kind: TrackKind::Subtitle,
+        title: Some(label.to_string()),
+        language: Some("eng".to_string()),
+        codec: Some("subrip".to_string()),
+        selected: true,
+        external: false,
+    }
+}
+
+fn downloaded_cue() -> DownloadedSubtitle {
+    DownloadedSubtitle {
+        id: 7,
+        language: "bn".to_string(),
+        language_name: "Bengali".to_string(),
+        release_name: "Tiered.2020.1080p".to_string(),
+        format: "srt".to_string(),
+        bytes: b"1\n00:00:01,000 --> 00:00:02,000\nHello\n".to_vec(),
+    }
+}
+
+#[test]
+fn a_film_with_its_own_subtitle_track_is_never_sent_online() {
+    let media = Media::new();
+    media.placeholders(&["Tiered (2020)/Tiered (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 41));
+
+    app.snapshot.tracks = vec![subtitle_track("English")];
+    let _ = app.update(Message::FindSubtitles);
+
+    assert!(
+        app.subtitle_search.is_none(),
+        "a track inside the file must not start a lookup"
+    );
+    assert!(app.subtitle_results.is_empty());
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let status = app.status.clone().unwrap_or_default();
+    assert!(status.contains("subtitle track"), "{status}");
+    assert!(status.contains("English"), "{status}");
+    assert!(status.contains("Nothing online"), "{status}");
+}
+
+#[test]
+fn a_subtitle_file_beside_the_film_is_used_without_asking_online() {
+    let media = Media::new();
+    media.placeholders(&["Beside (2020)/Beside (2020).mkv".to_string()]);
+    let cue = media.path("Beside (2020)/Beside (2020).bn.srt");
+    std::fs::write(&cue, "1\n00:00:01,000 --> 00:00:02,000\nআমি বাংলায়\n").expect("cue");
+
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 42));
+    let _ = app.update(Message::FindSubtitles);
+
+    assert!(
+        app.subtitle_search.is_none(),
+        "a subtitle file beside the film must not start a lookup"
+    );
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert_eq!(app.subtitles.len(), 1, "the sidecar was not kept");
+    assert_eq!(app.subtitles[0].language, "Bengali");
+    assert_eq!(app.subtitles[0].format, "srt");
+    let status = app.status.clone().unwrap_or_default();
+    assert!(status.contains("Beside (2020).bn.srt"), "{status}");
+    assert!(status.contains("Nothing online"), "{status}");
+    assert!(cue.is_file(), "the file on disk is untouched");
+}
+
+#[test]
+fn an_empty_answer_from_the_subtitle_db_is_reported_as_a_miss() {
+    let mut app = fresh_app();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    app.subtitle_search = Some(receiver);
+    sender.send(Ok(Vec::new())).expect("send");
+    let _ = app.update(Message::Tick);
+
+    assert!(app.subtitle_search.is_none());
+    assert!(app.subtitle_results.is_empty());
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let status = app.status.clone().unwrap_or_default();
+    assert!(status.contains("No subtitle"), "{status}");
+    assert!(!status.contains("0 subtitles"), "{status}");
+}
+
+#[test]
+fn a_download_that_finishes_after_the_film_changed_is_not_kept_or_shown() {
+    let media = Media::new();
+    media.placeholders(&["Changed (2020)/Changed (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 50));
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    app.subtitle_download = Some(SubtitleDownload {
+        receiver,
+        file_id: id.clone(),
+        load_id: 50,
+    });
+    assert!(watching(&mut app, &id, 51));
+
+    sender.send(Ok(downloaded_cue())).expect("send");
+    let _ = app.update(Message::Tick);
+
+    assert!(app.subtitle_download.is_none(), "the download is settled");
+    assert!(
+        app.subtitles.is_empty(),
+        "a stale download must not be kept"
+    );
+    assert!(
+        app.subtitle_results.is_empty(),
+        "a stale download must not be reported as a match"
+    );
+    let status = app.status.clone().unwrap_or_default();
+    assert!(status.contains("not kept"), "{status}");
+}
+
+#[test]
+fn a_download_for_the_film_still_playing_is_kept_and_used() {
+    let media = Media::new();
+    media.placeholders(&["Kept (2020)/Kept (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 60));
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    app.subtitle_download = Some(SubtitleDownload {
+        receiver,
+        file_id: id,
+        load_id: 60,
+    });
+    sender.send(Ok(downloaded_cue())).expect("send");
+    let _ = app.update(Message::Tick);
+
+    assert!(app.subtitle_download.is_none(), "the download is settled");
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert_eq!(app.subtitles.len(), 1, "the download was not kept");
+    assert_eq!(app.subtitles[0].language, "Bengali");
+    assert!(
+        !app.subtitles[0].provenance.trim().is_empty(),
+        "a kept download must say where it came from"
+    );
+}
+
 #[test]
 fn step_22_receiver_discovery_is_your_choice_and_never_claims_that_casting_works() {
     let mut app = fresh_app();
@@ -1767,7 +1951,7 @@ fn the_online_panels_explain_themselves_and_never_start_a_call_they_cannot_make(
     }
 
     if !app.subtitle_capability.is_configured() {
-        let _ = app.update(Message::SubtitleSearchNow);
+        let _ = app.update(Message::FindSubtitles);
         assert!(
             app.subtitle_search.is_none(),
             "no subtitle search may start without a provider"
