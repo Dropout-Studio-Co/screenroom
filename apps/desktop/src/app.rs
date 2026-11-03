@@ -4919,6 +4919,9 @@ impl App {
             Message::SeekCommit => self.commit_seek(),
             Message::SeekStep(delta) => self.seek_step(delta),
             Message::SelectTrack(kind, id) => {
+                if self.track_menu_open == Some(kind) {
+                    self.track_menu_open = None;
+                }
                 if let Some(player) = &self.player {
                     player.select_track(kind, id);
                 }
@@ -5314,6 +5317,9 @@ impl App {
                 }
                 iced::Event::Mouse(iced::mouse::Event::CursorLeft) => {
                     Some(Message::PointerInside(false))
+                }
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { .. }) => {
+                    Some(Message::PointerInside(true))
                 }
                 _ => None,
             }),

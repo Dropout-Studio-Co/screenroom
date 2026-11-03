@@ -224,7 +224,6 @@ impl<'a> Player<'a> {
     }
 
     pub fn view(self) -> Element<'a, Message> {
-        let reveal = self.reveal.clamp(0.0, 1.0);
         let mut layers = stack![self.picture()];
         if self.chrome {
             layers = layers.push(self.top_scrim());
@@ -243,11 +242,8 @@ impl<'a> Player<'a> {
                 );
             }
         }
-        let _ = reveal;
-
         iced::widget::mouse_area(layers.width(Length::Fill).height(Length::Fill))
             .on_press(Message::PlayerWake)
-            .on_move(|_| Message::PlayerWake)
             .into()
     }
 
