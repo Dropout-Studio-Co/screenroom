@@ -37,7 +37,7 @@ here because it is a deliberate divergence.
 | `media_tools.dart` (FFprobe/FFmpeg argument arrays, remux, audio-only) | **deferred** to M6 | the argument-array discipline (no shell interpolation) is the part to keep |
 | `artwork.dart` / `artwork_cache.dart` (permitted byte storage, provenance, hashing) | **deferred** to M6 | the validated-artwork bundle belongs in `screenroom-core` + adapter |
 | `metadata.dart` (TMDB client, quota, provenance) | **deferred** to M6 | logic is reusable; must be rewritten against a Rust HTTP client with the same consent boundary |
-| `subtitles.dart` (OpenSubtitles search/hash/quota) | **deferred** to M6 | same |
+| `subtitles.dart` (provider subtitle search/hash/quota) | **deferred** to M6, then **superseded** | the provider it targeted (OpenSubtitles) was removed on 2026-11-03; what is left to build is the TSDB client described in [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md), behind the file-first order |
 | `network.dart` (bounded fetch, allowlists) | **deferred** to M6 | security rules carry over verbatim |
 | `directory.dart` (source bookmarks with provenance/rights) | **deferred** to M6 | `DirectoryEntry` is already an entity in the schema |
 | `casting.dart` (opt-in session-scoped DLNA) | **deferred** to M6 | the "off by default, session-scoped, token-bound" model is kept |
@@ -86,11 +86,12 @@ Carrying the code over does not carry the evidence over. These were only ever
 "automated" or "host" results, and the rewrite invalidates even the host ones until
 re-run in Rust:
 
-- physical Windows playback, GPU decode, 4K/HDR, audio-device switching;
+- physical Windows playback, GPU decode, 4K, audio-device switching;
 - Samsung install/USB/AVPlay/lifecycle/durable artwork;
 - Tizen SQLite availability and app-private storage quotas;
 - 10k-item library performance;
-- provider terms, quotas and offline-retention rights;
+- provider terms, quotas and offline-retention rights (now The Subtitle DB,
+  [ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md));
 - any libmpv rendering path.
 
 M0/M1 receipts in [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) are the new

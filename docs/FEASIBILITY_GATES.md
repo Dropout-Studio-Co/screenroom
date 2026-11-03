@@ -148,7 +148,7 @@ Steps:
    flat ~255 MB RSS during playback, falling to ~3 % CPU / 108 MB after it ends.
 3. macOS: OpenGL render context → IOSurface/readback → wgpu. Evaluate only if the
    software bridge cannot keep up or hardware decoding requires it.
-4. Windows: D3D11 texture → wgpu shared import. Required for 4K/HDR parity.
+4. Windows: D3D11 texture → wgpu shared import. Required for 4K parity.
 
 Pass condition: ≥ 30 fps sustained on the target device with correct aspect, no
 tearing or colour inversion, and audio/video sync within a documented tolerance.
@@ -184,8 +184,10 @@ numbers are not a listening test, so G3b stays **PARTIAL**, not passed.
 
 On the owner's Windows machine: hardware decode for H.264/HEVC/AV1 where the GPU
 supports it, MKV/MP4/M2TS containers, multiple audio tracks, internal and external
-subtitles, 10-bit and HDR signalling, 4K, ultrawide window behaviour, fullscreen and
-DPI changes, device switching mid-playback, and a 30-minute soak without leaks.
+subtitles, 10-bit and 4K, ultrawide window behaviour, fullscreen and DPI changes,
+device switching mid-playback, and a 30-minute soak without leaks. **HDR is not part
+of this gate:** it was removed on 2026-11-03 ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md))
+and SDR is the only output on every platform.
 
 Until that machine is available: **BLOCKED**. Do not infer it from macOS results.
 

@@ -24,6 +24,14 @@ hand are in [`MACOS_ACCEPTANCE_CHECKLIST.md`](MACOS_ACCEPTANCE_CHECKLIST.md):
 - the case-sensitive-volume half of the path-semantics tests, which needs a
   case-sensitive APFS volume rather than this host's folding one.
 
+**PENDING, needs the owner's key and a person at the machine** (2026-11-03): the
+live subtitle provider — an anonymous lookup, a keyed catalogue search, a download
+and playback of a downloaded subtitle. The provider is The Subtitle DB
+([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)) and the four
+commands that settle each step are in
+[`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8. Until they are run, no live
+provider behaviour is counted as tested.
+
 **Windows cannot be compiled from this Mac at all.** `cargo check --target
 x86_64-pc-windows-msvc` fails inside `libsqlite3-sys`, whose bundled SQLite needs
 the MSVC SDK headers (`fatal error: 'stdlib.h' file not found`). So every
@@ -180,7 +188,7 @@ All test media must be **generated or rights-cleared**, tiny except bounded stre
 | Bad index, partial download, corrupted/wrong extension | actionable errors/retry/no crash/data loss | Windows/TV |
 | Alternate cuts and 2 episodes/file | edition/gap ordering/progress identity | Shared domain + both |
 | Files with whitespace/Unicode/long paths | secure real read and no command interpolation | Windows/TV file systems |
-| Conditional AV1/HDR/HFR | strictly capability-reported based on actual device | Windows/TV only if relevant |
+| Conditional AV1/HFR | strictly capability-reported based on actual device | Windows/TV only if relevant |
 
 **Observed compatibility ≠ file extension compatibility.** Record video codec level/profile, audio and subtitle individually.
 
@@ -194,7 +202,7 @@ All test media must be **generated or rights-cleared**, tiny except bounded stre
 | F07 | genuine Windows libmpv and TV AVPlay decoding; aspect, pause/seek/fullscreen, tracks, hardware support, TV USB local URI; headset/speaker state where relevant. |
 | F08–F10 | distinct profile progress, stale session event/seek race, periodic checkpoint/crash/reboot, Continue Watching order and marked watched behavior, end/gaps/cross-season rules. |
 | F11–F12 | all 10k fixtures reachable via search/filter/sort/virtualized scroll, scroll restoration, watchlist survives relink/rename/match correction. |
-| F13–F15 | audio/embedded/adjacent subtitle and timing variants, malformed subtitle, quota/provider outage, downloaded subtitle license and reuse, edition-specific manual and provider skip markers. |
+| F13–F15 | audio/embedded/adjacent subtitle and timing variants, malformed subtitle, **the resolution order itself** (a file with an embedded track never reaches the transport, a file with only a sidecar never reaches it, a file with neither does), provider outage, quota/`Retry-After`, downloaded subtitle retention and offline reuse, edition-specific manual and provider skip markers. The live provider calls (F15) are PENDING with their commands in [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8. |
 | F16–F19 | cold-start/no-genre recommendations, missing-file exclusion, preview one-decoder/reduced-motion, receiver accessibility + opt-in LAN session stop. F18 PiP is withdrawn (2026-11-02) and has no acceptance step. |
 | F20–F22 | versioned import/export, corrupt/malicious backup, migration rollback, source/codec/permission/provider errors and safe credential exclusion. |
 | F23–F24 | source accuracy/provenance/protocol and `NOT_CHECKED` state; exact endpoint + ISP reach only if legitimately tested, no illegal/unauthorized automation. |
@@ -225,7 +233,7 @@ All test media must be **generated or rights-cleared**, tiny except bounded stre
 
 ## 6. Accessibility, privacy and software quality
 
-Keyboard/remote-only across key journeys; visible focus, contrast, reduced motion, screen reader names where platform supports, Unicode subtitles, preservation of focus after metadata updates. Security review: media-root auth, path traversal/symlinks, provider redirect/URL allowlist, subtitle/import XSS, untrusted NFO parsing, native IPC bad values, FFmpeg command argument safety, API credential redaction; no accidental Git check-in of videos/logs/private device files.
+Keyboard/remote-only across key journeys; visible focus, contrast, reduced motion, Unicode subtitles, preservation of focus after metadata updates. Screen-reader output is **not** tested because it is not offered: VoiceOver-specific support was removed on 2026-11-03 ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)), and the accessibility evidence is the keyboard journey, the focus rules and the subtitle-styling read-back. Security review: media-root auth, path traversal/symlinks, provider redirect/URL allowlist, subtitle/import XSS, untrusted NFO parsing, native IPC bad values, FFmpeg command argument safety, API credential redaction; no accidental Git check-in of videos/logs/private device files.
 
 Run local checks (strict $0): formatting, lint, Svelte/TS diagnostics, Rust format/clippy/tests, unit+contract tests, browser Playwright/axe as appropriate, integration jobs, device-specific checks and `python3 scripts/no_comments.py check`
 (the repo-wide no-comments rule; see `AGENTS.md`). No mandatory paid CI runner. Keep commands in root package scripts once introduced.

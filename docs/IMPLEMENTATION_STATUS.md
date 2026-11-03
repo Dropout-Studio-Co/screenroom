@@ -3,7 +3,7 @@
 Live record of what exists, what was actually verified, and what is blocked.
 Future sessions resume from here instead of repeating completed work.
 
-Last updated: **2026-11-02**, host **macOS ARM64 (Apple silicon), Command Line
+Last updated: **2026-11-03**, host **macOS ARM64 (Apple silicon), Command Line
 Tools only, no full Xcode**.
 
 **Scope (2026-10-26, [ADR-003](ADR-003_DESKTOP_AND_TV_SCOPE.md)):** desktop/laptop
@@ -11,6 +11,25 @@ and smart TVs only, with equal priority. iOS/Android phone and tablet apps, UniF
 and the Flutter fallback are out of scope; none had been built, so no code was
 removed. The development host's Flutter, flutter-tizen and .NET toolchains were
 removed. The Flutter candidate's `archive/*` branches were deleted on 2026-10-29.
+
+---
+
+## Owner decisions, 2026-11-03
+
+Recorded in [`ADR-005`](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md). These
+supersede the current-behaviour statements below them; every dated receipt further
+down is kept as written, because it records something that really ran.
+
+| Decision | What it changes here | Detail |
+| --- | --- | --- |
+| **The Subtitle DB is the only online subtitle provider**; OpenSubtitles is removed | F15's provider is TSDB, not OpenSubtitles. No live lookup, keyed search or download has a receipt, so it is **PENDING**, not passed | [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) |
+| **Subtitles resolve file-first**: embedded track, then sidecar, then the provider | F13/F15 acceptance includes the order itself: the online action returns before any network call when a track or a sidecar exists, and there is no second service or fallback chain | [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §1 |
+| **VoiceOver-specific functionality removed** — the `NSAccessibility` bridge, its announcements and its `SCREENROOM_AX_CHECK` receipt | Q07's screen-reader half is **removed**, not complete. The keyboard, focus, reduced-motion and subtitle-styling requirements are unchanged | [`VOICEOVER_PASS.md`](VOICEOVER_PASS.md) (retired) |
+| **HDR removed completely** — no mode, no extended-range output, no setting, no receipt; SDR is the only output | F07's HDR half and the P1-03 HDR task are **removed**, not complete. The HDR measurements of 2026-11-01/02 stay as history | [`HDR_VERIFICATION.md`](HDR_VERIFICATION.md), [`ADR-019`](ADR-019_HDR_PRESENTATION.md) (both retired) |
+
+What this does **not** claim: that any of it has run. Removing a feature needs no
+device test. The TSDB paths need the owner's key and the four commands in
+`SUBTITLE_PROVIDER.md` §8, and until they are run the provider is unverified.
 
 ---
 
@@ -1127,13 +1146,16 @@ a file if libmpv sends no change after load.
   through the routed menu item, so the open session is not closed cleanly. The
   position loss is bounded by the 1 s checkpoint interval, and the stale session
   is closed on the next open.
-- **Accessibility:** iced 0.14 exposes no accessibility tree to VoiceOver. Until
-  2026-11-01 buttons took no keyboard focus, so Settings was mouse-only; it now
-  carries a focused action strip — one ordered list drives what is drawn, where
-  the cursor is and what Enter runs — so every Settings action is reachable by
-  Up/Down and Enter. Typed fields (profile name, language codes, paths) and the
-  two sliders still need the pointer or typing, and the missing accessibility
-  tree is unchanged. Browse, Detail and the player stay fully keyboard-driven.
+- **Accessibility:** VoiceOver-specific support was removed on 2026-11-03
+  ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)); the
+  `NSAccessibility` bridge, its announcements and its `SCREENROOM_AX_CHECK`
+  receipt no longer exist, so the desktop publishes no accessibility tree and no
+  screen-reader pass is run. Everything else stays: since 2026-11-01 every
+  Settings action is reachable with Up/Down and Enter through the focused action
+  strip, Browse, Detail and the player are fully keyboard-driven, focus order and
+  restoration are asserted, Reduce motion is honoured, and subtitle size and
+  position are read back from libmpv. Typed fields (profile name, language codes,
+  paths) and the two sliders still need the pointer or typing.
 - **Backup and restore run on the UI thread.** The real catalogue's backup is
   1.5 MB, so the pause is short; a far larger library would need them moved off
   it.
@@ -1145,7 +1167,7 @@ a file if libmpv sends no change after load.
 | Gate | Status | Reason |
 | --- | --- | --- |
 | Desktop frame presentation on real Windows GPU | BLOCKED | no Windows hardware/Visual Studio on this host; every `cfg!(windows)` branch is unbuilt as well as unrun. The exact handoff — commands, expectations, acceptance checks and named falsifications — is `WINDOWS_VALIDATION.md` |
-| Windows 4K/HDR/hardware decode | BLOCKED | same |
+| Windows 4K/hardware decode (SDR) | BLOCKED | same. HDR is not part of this row: HDR was removed on 2026-11-03 (ADR-005), so no Windows HDR evidence is owed |
 | Physical Samsung UA50AU8000RXER — install | **PASS** (2026-10-28) | connected at `192.168.0.172:26101`; `sdb capability` reports `vendor_name:Samsung`, `profile_name:tv`, `platform_version:6.0`, `cpu_arch:armv7`. The distributor chain is Samsung-issued with exactly one `deviceid` binding, and the DUID the set reports matches it (compared by hash; neither value printed). `vd_appinstall` reached `install completed` and `vd_applist` lists `PlYByk3psw.ScreenroomTV` 0.1.0 |
 | Physical Samsung UA50AU8000RXER — playback, USB, durability | NOT YET RUN | needs a person with the remote: this firmware accepts no synthetic key press, exposes no screenshot, no `dlog` over TCP and no inspector port. Items 3–7 of G5 |
 | Lightning 3 on the Tizen 6.0 engine | **PASS on the engine, PARTIAL on measurement** (2026-10-29) | the set's own record: `host=tizen avplay=1 filesystem=1 inputdevice=1 storage=1 keys=9/refused=0 model=UAU8000 firmware=T-NKLAUABC-2310.0` and `canvases=1 size=1920x1080 css=1920px/1080px client=1920x1080 viewport=1920x1080 dpr=1 mounted=1`, no `error` or `rejection` entries, engine `76.0.3809.146`. The bundle executes, Lightning mounts a full-size surface, and the **owner has seen the home screen with readable text and cards**. WebGL capability and frame pacing are still not measured |
@@ -1256,7 +1278,7 @@ What is left before macOS acceptance, exactly (updated 2026-10-29, after the aud
 | 2 | Real-time 4K above ~3K wide | needs a GPU (zero-copy) render bridge; copy-back decode alone reaches ~19 of 24 fps on the hardest file |
 | 3 | The genre filter on real data | no genres until enrichment exists; the control is hidden rather than dead |
 | 4 | An offline check with networking actually off, and a battery measurement | changes this Mac's network and power state, which this session should not do unasked |
-| 5 | VoiceOver and keyboard focus in Settings | iced 0.14 exposes no accessibility tree |
+| 5 | Keyboard focus in Settings | removed from this list on 2026-11-03: the Settings action strip closed it, and the VoiceOver half it used to wait on was removed (ADR-005). A pointer is still needed for typed fields and the two sliders |
 
 Closed by the audit: runtimes before first play, embedded cover art, anamorphic
 sizing, copy-back hardware decoding (measured), and every finding in "macOS audit
@@ -1352,9 +1374,11 @@ done.
   refusals, bounds, preference order, oversize), six enrichment tests
   (film, series plus episode, manual match untouched, idempotence, schema 5 → 6
   with a kept row), and `step_18`.
-- **BLOCKED, not faked:** online enrichment (F05's provider half) and the
-  subtitle provider (F15) have no account, key or chosen service, and nothing
-  here invents one. No network request is made anywhere in this change.
+- **BLOCKED, not faked (state at 2026-11-01; superseded on 2026-11-03):** online
+  enrichment (F05's provider half) and the subtitle provider (F15) had no account,
+  key or chosen service, and nothing here invented one. The subtitle provider was
+  then chosen — The Subtitle DB, [ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)
+  — and its live calls are still PENDING; see F15 above.
 - **Not proven:** no sidecar has been read from the owner's own library, because
   none of its files has an NFO beside it yet; the genre dropdown has not been
   looked at in a window.
@@ -1411,33 +1435,48 @@ done.
   pausing, seeking, the next episode, fullscreen, casting, chrome auto-hide and
   back navigation.
 
-## F15 — imported subtitles kept and reused offline (2026-11-01)
+## F15 — subtitles: file first, then The Subtitle DB (updated 2026-11-03)
 
-**The offline half is complete on macOS. Online search stays BLOCKED, without a
-fake control.**
+**The offline half is complete on macOS and unchanged. The online half is one
+provider — The Subtitle DB — behind a file-first gate, and its live calls are
+PENDING.**
 
-- Provider search needs an OpenSubtitles-compatible account and key plus a
-  licensing decision (ADR-010 remains PROPOSED). None exists, so no search box,
-  no disabled button and no placeholder result is shown: the player panel says
-  what would be needed and offers only what actually works.
-- `crates/screenroom-core/src/library/subtitles.rs` imports a subtitle the owner
-  picks **into the library** — bytes in the `subtitles` table (schema 8,
-  additive, guarded) — so it survives the file moving and is available with the
-  network off. Bounds: 4 MiB, text-only (a NUL in the first 8 KiB is refused),
-  eight known extensions, and the picked file is read once, never written,
-  moved or renamed. Language comes from a filename token (`en`, `bn`, `[bn]`) or
-  a `lang=` tag and is otherwise reported as *Unknown* rather than guessed.
+- **Resolution order (binding, [ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)):**
+  an embedded subtitle track in the file, then a sidecar beside the media
+  (`.srt`, `.smi`, `.vtt`, `.ass`, `.ssa`, `.sub`, `.ttml`, `.dfxp`) or a kept
+  copy in the library, and only when neither exists may the app ask The Subtitle
+  DB. The control is *Find subtitles online* and it returns before any network
+  call when a track or a sidecar is present. There is no second online service
+  and no fallback chain; OpenSubtitles is removed.
+- **The store is unchanged.** `crates/screenroom-core/src/library/subtitles.rs`
+  keeps the bytes the owner chose **in the library** — the `subtitles` table
+  (schema 8, additive, guarded) — so a subtitle survives the file moving and works
+  with the network off. Bounds: 4 MiB, text-only (a NUL in the first 8 KiB is
+  refused), eight known extensions, and the source file is read once, never
+  written, moved or renamed. Language comes from the provider's own record for a
+  download, or a filename token / `lang=` tag for an import, and is otherwise
+  reported as *Unknown* rather than guessed.
 - The player gained `Player::sub_add` → `PlayerCommand::SubAdd` → mpv
-  `sub-add`, then re-reads the track list, so an imported file appears in the
+  `sub-add`, then re-reads the track list, so a kept subtitle appears in the
   existing subtitle picker. Removal deletes only the stored copy.
-- **Tests added:** five core tests (round trip with language/format/provenance,
-  Bengali and unknown languages, refused binaries/wrong extension/empty/oversize,
-  removal leaving the original file, schema 7 → 8 with a kept row) and `step_21`
-  (real clip, import, hand to the player, remove, original bytes compared before
-  and after).
-- **Not proven:** nothing was searched online, because nothing may be; the
-  panel has not been looked at in a window; no provider-downloaded subtitle has
-  been retained or tested for reuse.
+- **Provider key:** `SCREENROOM_TSDB_API_KEY`, then `SCREENROOM_TSDB_CONFIG`, then
+  `subtitles.key` in the platform config directory, honouring
+  `SCREENROOM_CONFIG_DIR`. The owner's key exists at the macOS path; its value is
+  not recorded anywhere in this repository.
+- **Tests that exist:** the five store tests above (round trip with
+  language/format/provenance, Bengali and unknown languages, refused
+  binaries/wrong extension/empty/oversize, removal leaving the original file,
+  schema 7 → 8 with a kept row) and `step_21` (real clip, import, hand to the
+  player, remove, original bytes compared before and after).
+- **PENDING, and the reason the row is not green:** no anonymous lookup, keyed
+  search, download or playback of a downloaded subtitle has a receipt. The four
+  commands that settle it, and the installed-app run, are in
+  [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8. A planning pass on
+  2026-11-03 recorded live lookups answering and a `302` to the file host; a
+  transcript is not a receipt for this application.
+- **Also not proven:** the panel has not been looked at in a window, and the TV
+  client has no online subtitle provider at all — it reads embedded tracks and the
+  four sidecar documents its decoder accepts.
 
 ## F19 — receiver discovery, with casting itself refused (2026-11-01)
 
@@ -1847,24 +1886,29 @@ fixed:
 
 Settings gained *Online metadata* (the provider's own capability, an *Enrich the
 library* action, and an artwork-retention switch that defaults to **do not store**),
-*Subtitle search* (query, results with language/release/format, and *Download and
-use*), and *Casting* now lists receivers with *Cast the playing film* plus
+*Find subtitles online* (the panel that lists matches with language/release/format
+and offers to keep one; renamed from *Subtitle search* on 2026-11-03, and it now
+returns before any network call when the file already has a track or a sidecar),
+and *Casting* now lists receivers with *Cast the playing film* plus
 pause/stop/disconnect. Every one of those is also in the keyboard action strip, and
 an acceptance test asserts that the panels describe themselves honestly and that no
 pass starts without a provider.
 
 ### What is still not true
 
-HDR now reaches an extended-range swapchain behind `SCREENROOM_HDR=extended`
-(ADR-019, [`HWDEC_EVIDENCE.md`](../crates/screenroom-player/HWDEC_EVIDENCE.md)),
-but nobody has looked at it on the panel yet and the switch is still off by
-default. Picture-in-Picture is not offered at all — neither OS-wide nor as an
-in-app mini player (withdrawn 2026-11-02). No live
-provider call has been made, because no key is configured and the std-only transport
-cannot carry https. No media has been played on a real cast receiver. No VoiceOver
-pass is possible on iced 0.14, which ships no accessibility tree at all — recorded
-as ADR-017 with the exact evidence. And the owner's own 4K sample and five-minute
-battery observation still need the external SSD and the owner.
+HDR was removed on 2026-11-03 ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)):
+SDR is the only output, the extended-range path described in the 2026-11-02
+sections above is retired, and no HDR receipt will be produced again. That earlier
+text stands as the record of what was built and measured
+([`HDR_VERIFICATION.md`](HDR_VERIFICATION.md)). Picture-in-Picture is not offered
+at all — neither OS-wide nor as an in-app mini player (withdrawn 2026-11-02). The
+live subtitle provider is PENDING (above, F15): TSDB is the provider and no lookup,
+keyed search or download has a receipt. No media has been played on a real cast
+receiver. The `NSAccessibility` bridge recorded as ADR-017 was removed on
+2026-11-03, so no VoiceOver pass is run and no screen-reader tree is published;
+keyboard navigation, focus, reduced motion and subtitle styling remain. And the
+owner's own 4K sample and five-minute battery observation still need the external
+SSD and the owner.
 
 ## The owner's real library, and the real media measurements (2026-11-02)
 
@@ -1939,11 +1983,15 @@ https://api.opensubtitles.com/api/v1/subtitles    -> 403  "The provider rejected
 
 A 401/403 from the real host is the handshake, the request and the response all
 working, with the provider correctly refusing an unauthenticated call. What remains
-is only a key.
+is only a key. **Historical since 2026-11-03:** that second host is the provider
+that was removed, and this dated receipt is kept as evidence about the TLS
+transport, not as current behaviour. The transport is now proved separately against
+TSDB in the commands recorded in
+[`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8 — which have not been run yet.
 
-**Consequence.** `capability()` now reports *configured* for both providers when a
-key is present, instead of failing closed on a scheme it could not carry. Settings →
-*Online metadata* and *Subtitle search* are live the moment a key exists.
+**Consequence.** `capability()` reports *configured* for a provider when a key is
+present, instead of failing closed on a scheme it could not carry. Settings →
+*Online metadata* and *Find subtitles online* are live the moment a key exists.
 
 **Licensing.** `webpki-roots` is the first CDLA-Permissive-2.0 component in this
 graph — a data licence over a certificate list, permissive, recorded in
@@ -2005,7 +2053,10 @@ tests. The rebuild session recorded `cargo test --workspace`, `cargo fmt --all
 --check`, `cargo clippy --workspace --all-targets -- -D warnings` and
 `python3 scripts/no_comments.py check` clean, and four hidden-window
 `SCREENROOM_AX_CHECK` runs — Home, Library, Detail and Settings — with labels and
-focus matching the app's own snapshot.
+focus matching the app's own snapshot. **That receipt no longer exists**: the
+`NSAccessibility` bridge and the `SCREENROOM_AX_CHECK` check were removed on
+2026-11-03 (ADR-005), and the runs above are recorded as history, not as a check
+anyone can repeat.
 
 ### Defects found by the rebuild, and fixed
 

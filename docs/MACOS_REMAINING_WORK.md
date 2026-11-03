@@ -53,10 +53,11 @@ film on the owner's lap. Those are the owner's steps and they are named as such.
 Counted from the 25 product requirements (F01–F25), the 10 quality requirements
 (Q00, Q00B, Q01–Q08) and the 15 macOS acceptance steps: **50 tracked rows**.
 
-**Updated 2026-11-01, second session.** The GPU render path is integrated and
-measured; the online halves of F05 and F15, casting, backup threading, the
-scanner transaction, fullscreen Escape and Dock Quit are implemented and tested;
-accessibility is documented as blocked upstream with evidence.
+**Updated 2026-11-01, second session; amended 2026-11-03.** The GPU render path is
+integrated and measured; the online halves of F05 and F15, casting, backup
+threading, the scanner transaction, fullscreen Escape and Dock Quit are implemented
+and tested; the HDR path and the VoiceOver bridge were removed on 2026-11-03
+([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)).
 
 | Measure | Result |
 | --- | --- |
@@ -66,9 +67,9 @@ accessibility is documented as blocked upstream with evidence.
 | Missing | **0** |
 | Broken | **0** |
 | Unverified | **1** (acceptance step 8: 4K on battery) |
-| Blocked | **3 rows carry a named blocker** (F05 live, F15 live, F23) |
+| Blocked | **2 rows carry a named blocker** (F05 live, F23), plus F15's live half, which is PENDING on a run with the owner's key |
 | Not applicable to macOS | **0** of these 50 |
-| Outstanding implementation tasks | **1 P1** (P1-09 accessibility) and **0 P2**; P1-03 is implemented and needs one owner look; P1-12 closed 2026-11-03: the owner played titles with Wi-Fi off and it behaved |
+| Outstanding implementation tasks | **1 open P1** (P1-02's fence — a correctness margin, not a defect) and **0 P2**; P1-03 (HDR) and P1-09 (VoiceOver) were removed on 2026-11-03; P1-07's live calls are PENDING on a run with the owner's key; P1-12 closed 2026-11-03: the owner played titles with Wi-Fi off and it behaved |
 | Outstanding human/device tasks | **9** (8 owner observations + 1 owner hardware run) |
 
 The four measures the brief asks to keep apart:
@@ -78,7 +79,7 @@ The four measures the brief asks to keep apart:
 | **Implementation** | 31 of 34 product/quality areas implemented in full (91 %), 3 partial (9 %), 0 absent | every feature area has working code behind it |
 | **Automated verification** | 33 of 34 areas have an automated check that ran | the exception is the live provider calls (F05, F15), which need an owner key |
 | **Human/device acceptance** | 7 of 15 checklist steps closed; 7 half-closed; 1 needs the owner and the hardware | see §5 |
-| **Everyday readiness** | **usable now** for 1080p and 4K at the source frame rate: 24.4 fps at 13.95 % mean CPU on 4K HEVC Main10 through the OpenGL path, against 24.2 fps at 89.8 % on the old one | HDR10 reaches an extended-range swapchain and needs one owner look; no PiP at all (withdrawn 2026-11-02); no online enrichment or subtitle search without an owner key |
+| **Everyday readiness** | **usable now** for 1080p and 4K at the source frame rate: 24.4 fps at 13.95 % mean CPU on 4K HEVC Main10 through the OpenGL path, against 24.2 fps at 89.8 % on the old one | SDR is the only output (HDR removed 2026-11-03); no PiP at all (withdrawn 2026-11-02); no online enrichment without an owner key, and the live subtitle provider is PENDING its four commands |
 
 **What changed in the second session, measured rather than asserted.** The
 application's own `SCREENROOM_PLAY_CHECK`, same 4K HEVC Main10 fixture, 24 fps
@@ -117,9 +118,8 @@ OpenGL path meets all three on this machine.
    saved sources with an honest external handoff, receiver discovery, and an action
    strip that runs every one of those from the keyboard.
 
-The three things that keep it from being *finished* are the 4K cost, an HDR
-switch that has not yet been looked at on the panel, and the advanced features
-that need something the machine does not have.
+The two things that keep it from being *finished* are the 4K cost and the advanced
+features that need something the machine does not have.
 
 ### The interface rebuild (2026-11-02)
 
@@ -161,7 +161,7 @@ player's chrome receding has not been watched in a window. That is P2-06 below.
 | F04 | Identity matching: filename/folder, local NFO, manual match, protected override | COMPLETE (local only) | parsing tests, `step_18` (NFO), manual-match tests | step 2 | online IDs absent (F05) |
 | F05 | Whole-library enrichment | **COMPLETE (core) / BLOCKED (live)** — TMDB-shaped provider, durable queue, rate limits, backoff, reconciliation precedence, artwork retention gate; nothing is fetched until a key is configured | `tests/providers.rs` (28), `tests/providers_http.rs` (5), drain tests | step 2 | owner key + TLS transport + retention decision |
 | F06 | Offline artwork bytes | COMPLETE | 21 posters re-decoded by ffprobe, 200 candidates readable, `a_retained_poster_is_cached_for_its_card` | step 2 | — |
-| F07 | Video playback | **COMPLETE (SDR) / HDR complete and opt-in** — 1080p and 4K at the source frame rate (24.4 fps, 13.95 % CPU, zero uploads); with `SCREENROOM_HDR=extended` a PQ file is tone mapped to the measured display peak (2.0 × 203 nits) and presented through a `Rgba16Float` swapchain on an extended-range layer (24.5 fps, 14.3 % mean CPU, zero uploads, hidden-window run) | `SCREENROOM_PLAY_CHECK`, `gl_render_check`, `hdr_check`, `metal_extended_range` | step 4 and the owner's look (P1-03) | wide-gamut saturation is BT.709; the switch stays off until the owner looks |
+| F07 | Video playback | **COMPLETE (SDR)** — 1080p and 4K at the source frame rate (24.4 fps, 13.95 % CPU, zero uploads). **HDR was removed on 2026-11-03** ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)): SDR is the only output, so there is no HDR row, setting or receipt, and the 2026-11-02 extended-range measurements stand only as history | `SCREENROOM_PLAY_CHECK`, `gl_render_check` | — | — |
 | F08 | Profiles and progress | COMPLETE | `step_10`, `step_14`, checkpoint tests | steps 10, 14 | — |
 | F09 | Home and Continue Watching | COMPLETE | `step_11`, `step_13` | step 11 | — |
 | F10 | Next-episode autoplay | COMPLETE | `step_9`, gap/season tests | step 9 | — |
@@ -169,7 +169,7 @@ player's chrome receding has not been watched in a window. That is P2-06 below.
 | F12 | Watchlists and favourites | COMPLETE | toggle/filter tests | — | — |
 | F13 | Audio tracks and subtitles | COMPLETE | `step_5`, `step_21`, track tests, and a Bengali cue proved to be drawn into the picture | step 5 (that it reads correctly on screen) | — |
 | F14 | Skip intro and credits | COMPLETE (manual markers only) | marker tests, auto-skip guard tests | — | — |
-| F15 | Subtitle search and management | **COMPLETE (core) / BLOCKED (live)** — OpenSubtitles-shaped provider with Bengali, quota/login/rate-limit states and a host allowlist on downloads; import, reuse and removal unchanged | `tests/providers_subtitles.rs` (19), `step_21` | step 5 | owner key + TLS transport + offline-retention decision |
+| F15 | Subtitles: file first, then The Subtitle DB | **COMPLETE (store and resolution order) / PENDING (live provider)** — the order is embedded track → sidecar → provider, and the online action returns before any network call when a track or a sidecar exists; The Subtitle DB is the only online provider ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)); no lookup, keyed search, download or downloaded-subtitle playback has a receipt | store tests, `step_21`, the resolution-order test | run the four commands in [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8 with the owner's key | owner |
 | F16 | Local recommendations | COMPLETE | recommendation tests | — | — |
 | F17 | Browse previews | COMPLETE | `step_17` (dwell, one decoder, reduced motion, cleanup) | look at a card | — |
 | F18 | Picture-in-Picture | **WITHDRAWN (2026-11-02)** — not offered: no OS PiP and no mini player | — | — | not wanted |
@@ -188,12 +188,12 @@ player's chrome receding has not been watched in a window. That is P2-06 below.
 | Q00 | Installed local app, no browser, no server, no localhost runtime | COMPLETE | bundle walked end to end; `verify-bundle.sh` | — |
 | Q00B | Dropout Design System, pinned, private | COMPLETE | `ds_pinned.rs` generated at a pinned commit; theme string visible; neutral fallback | the DS sync is machine-local; a clean checkout builds without it |
 | Q01 | Offline: library, profiles, artwork, resume, playback with the network off | COMPLETE by construction (no network code at all; only the browser handoff and an opt-in SSDP probe) | executed with Wi-Fi off on 2026-11-03; playback, rail scrolling and embedded subtitle switching all worked | PASS (owner) |
-| Q02 | Performance: startup, first frame, 4K, memory, no runaway jobs | **COMPLETE (SDR and HDR)** | startup ~1.2 s; 4K 24.4 fps at 13.95 % mean CPU with zero uploads; the extended-range path measured 24.51 fps at 14.27 % in the same hidden-window check; paging 13.7 ms first page and 78 ms grouped last page at 10k rows; backups and restores run off the UI thread | single-run CPU samples; the 16F swapchain costs GPU memory (P1-03) |
+| Q02 | Performance: startup, first frame, 4K, memory, no runaway jobs | **COMPLETE (SDR)** | startup ~1.2 s; 4K 24.4 fps at 13.95 % mean CPU with zero uploads; paging 13.7 ms first page and 78 ms grouped last page at 10k rows; backups and restores run off the UI thread. HDR was removed on 2026-11-03, so its 2026-11-02 figures are history only | single-run CPU samples |
 | Q03 | Fidelity: aspect, anamorphic, timebase, honest codec claims | COMPLETE | `step_7`, `anamorphic_video_renders_at_its_display_aspect_without_letterbox_rows` | the *look* of step 7 is the owner's |
 | Q04 | Portability: one monorepo, isolated platform adapters | COMPLETE | layout, `cfg` boundaries | — |
 | Q05 | Security and privacy | COMPLETE | argument vectors (no shell), root canonicalisation, `contained_media_path` tests, no credentials anywhere | — |
 | Q06 | Durability: migrations, transactions, no silent resets | COMPLETE | migration tests, integrity check after migrate, backup/restore | — |
-| Q07 | Accessibility and design quality | **COMPLETE (bridge) / PENDING (VoiceOver pass)** | keyboard journey, Settings action strip, contrast tokens, and a real `NSAccessibility` tree — verified headlessly on all five surfaces (19/23/30/33/15 controls) with labels, values, enabled state, `AXPress`, slider adjustments and focus matching the app, and no control the screen does not draw | the owner's ten-minute pass in [`VOICEOVER_PASS.md`](VOICEOVER_PASS.md); per-widget frames need layout geometry iced does not expose (ADR-017) |
+| Q07 | Accessibility and design quality | **COMPLETE for keyboard and focus; screen-reader support removed** | keyboard journey, Settings action strip, contrast tokens, reduced motion, subtitle scale/position read-back. The `NSAccessibility` bridge and its headless receipts were removed on 2026-11-03 ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)); no VoiceOver pass is run | — |
 | Q08 | Honest reporting | COMPLETE | this document set; `preferred_bridge()` corrected this session | — |
 
 ### 4.3 macOS acceptance steps (1–15)
@@ -265,8 +265,8 @@ than reclassified.
      with the existing fit shader.
   4. Keep the software renderer as the fallback and as `SCREENROOM_RENDER=software`,
      selected when the GL context or `IOSurface` cannot be created.
-- **Depends on:** P1-02 (synchronisation and lifetime) for correctness; P1-03 for
-  HDR.
+- **Depends on:** P1-02 (synchronisation and lifetime) for correctness. The old
+  HDR dependency is gone: HDR was removed on 2026-11-03 (ADR-005).
 - **Acceptance:** `SCREENROOM_PLAY_CHECK` on the four generated 4K fixtures reports
   `delivered_fps ≥ 23.0` for a 24 fps source, `uploaded_fps = 0` (no texture
   write), CPU mean at or below 60 %, and the probe's frame still matches the
@@ -304,15 +304,23 @@ than reclassified.
 
 ---
 
-#### P1-03 · Show HDR10 at its mastered luminance — **IMPLEMENTED; owner look PENDING**
+#### P1-03 · Show HDR10 at its mastered luminance — **REMOVED (2026-11-03)**
 
-- **Requirement:** F07, Q03, Q02.
-- **Status:** IMPLEMENTED and measured headlessly, opt-in. The 16-bit surface, the
-  extended-range swapchain and the extended-range layer now exist, and a PQ file is
-  tone mapped into the panel's measured peak instead of into SDR. What is left is
-  the one thing no agent may do: look at an HDR film on the built-in panel and say
-  it is right. Decision and alternatives:
-  [`ADR-019_HDR_PRESENTATION.md`](ADR-019_HDR_PRESENTATION.md).
+- **Requirement:** none. HDR was removed completely on 2026-11-03: no HDR mode, no
+  extended-range output, no preference or setting, no HDR receipt. **SDR is the
+  only desktop output.** See
+  [ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md).
+- **Status:** removed, not deferred. Nothing here is owed, and the owner's look at
+  an HDR film is no longer wanted.
+- **Left as history:** the 2026-11-01 and 2026-11-02 measurements — the 16-bit PQ
+  surface, the `Rgba16Float` swapchain, the extended sRGB layer, the 406-nit target
+  and the hidden-window runs — are kept as written in
+  [`HDR_VERIFICATION.md`](HDR_VERIFICATION.md) and
+  [`ADR-019_HDR_PRESENTATION.md`](ADR-019_HDR_PRESENTATION.md), both retired in
+  place. They record what existed until this date, not what ships.
+- **Everything below in this section is the original 2026-11-02 record, kept
+  verbatim.** Read it in the past tense: it is why the path existed and what it
+  measured, not a description of the application today.
 - **What the panel reports** (Swift probe, no window): macOS 27.0.1 on Apple M4,
   built-in display in a 2940×1912 mode at scale 2.0,
   `maximumPotentialExtendedDynamicRangeColorComponentValue` **2.0**,
@@ -393,7 +401,7 @@ than reclassified.
 #### P1-06 · Whole-library online metadata enrichment (F05) — **core CLOSED, live blocked**
 
 - **Requirement:** F05.
-- **Status:** COMPLETE (core and transport) / BLOCKED only on an owner key. A TMDB-shaped provider, a durable `enrichment_queue` on schema 9, per-minute rate limiting, `Retry-After` handling, exponential backoff, a bounded transport with an overall deadline and a hostile-chunk guard, reconciliation precedence (manual beats NFO beats provider, and NFO only yields when the owner asks), and an artwork-retention gate that defaults to *do not store*. An unconfigured provider reports itself as not configured and makes zero requests. 33 integration tests, plus a real TLS transport (`rustls` + `webpki-roots`) that was proved against the live hosts without a key: `https://api.themoviedb.org/3/movie/550` answered **401** and `https://api.opensubtitles.com/api/v1/subtitles` answered **403**, which is the handshake, the request and the response all working and the provider correctly refusing an unauthenticated call. Redirects are capped at 3, only same-scheme same-host same-port, and an `https`→`http` redirect is refused. Settings has an *Online metadata* panel and a keyboard action for it.
+- **Status:** COMPLETE (core and transport) / BLOCKED only on an owner key. A TMDB-shaped provider, a durable `enrichment_queue` on schema 9, per-minute rate limiting, `Retry-After` handling, exponential backoff, a bounded transport with an overall deadline and a hostile-chunk guard, reconciliation precedence (manual beats NFO beats provider, and NFO only yields when the owner asks), and an artwork-retention gate that defaults to *do not store*. An unconfigured provider reports itself as not configured and makes zero requests. 33 integration tests, plus a real TLS transport (`rustls` + `webpki-roots`) that was proved against the live hosts without a key: `https://api.themoviedb.org/3/movie/550` answered **401** and `https://api.opensubtitles.com/api/v1/subtitles` answered **403** — the handshake, the request and the response all working and the provider correctly refusing an unauthenticated call. (The second host is the provider that was removed on 2026-11-03; that half of the receipt is history and is kept as evidence about the transport.) Redirects are capped at 3, only same-scheme same-host same-port, and an `https`→`http` redirect is refused. Settings has an *Online metadata* panel and a keyboard action for it.
 - **What is missing:** the online half. The offline half (local NFO) is complete.
 - **Where:** `crates/screenroom-core/src/nfo.rs` (the origin column and
   `metadata_origin` are where a provider lands), `apps/desktop/src/app.rs` Settings.
@@ -414,25 +422,36 @@ than reclassified.
 
 ---
 
-#### P1-07 · Online subtitle search and download (F15) — **core CLOSED, live blocked**
+#### P1-07 · Subtitles: resolve from the file, then The Subtitle DB (F15) — **store and order complete, live PENDING**
 
 - **Requirement:** F15.
-- **Status:** COMPLETE (provider-independent core) / BLOCKED (live calls). OpenSubtitles-shaped search and download with Bengali (`bn`/`ben`), distinct quota (406), login (407) and rate-limit (429) states, a host allowlist that refuses a download link to loopback or an unrelated host, and an import into the existing bounded subtitle store that never touches the media file. 19 integration tests, and the same TLS transport; the live endpoint answered **403** without a key. Settings has a *Subtitle search* panel that lists language, release and format and a *Download and use* action; both are also in the keyboard action strip.
-- **What is missing:** search by title/release/hash/language, quota handling, and a
-  user-triggered save into the existing imported-subtitle store.
-- **Where:** the `subtitles` table and `use_subtitle` path already accept a stored
-  file; the panel is in `app.rs` (player screen).
-- **Why it matters:** imported files are already supported; finding one is the part
-  that is missing.
-- **Work:** owner registers and accepts the API terms; then a keyed client with
-  quota/backoff, results showing language/release/format, and a *Download and use*
-  action that writes into the existing bounded store.
-- **Depends on:** **owner action** — an OpenSubtitles key.
-- **Acceptance:** search returns matches for a known film, a chosen subtitle is
-  stored, handed to libmpv and reused offline; a quota error is reported, not
-  swallowed.
-- **Automated verification:** parser/fixture tests; the network call is manual.
-- **Human verification:** the subtitle text appears and matches the dialogue.
+- **Status:** COMPLETE for the resolution order and the store. **PENDING for every
+  live call.** The provider is The Subtitle DB and only that
+  ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md),
+  [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md)); OpenSubtitles is removed.
+- **The order, which is the requirement:** an embedded track in the file, then a
+  sidecar beside the media, and only when neither exists may the app ask TSDB. The
+  control is *Find subtitles online* and it returns before any network call when a
+  track or a sidecar is present. There is no second online service and no fallback
+  chain.
+- **What is implemented and tested:** the bounded store (4 MiB, text-only, eight
+  formats, provenance), import, *Use* through `sub-add`, removal that leaves the
+  original file untouched (`step_21`). The file-first gate is a binding rule of
+  the change; proving the transport is never reached when a track or a sidecar
+  exists is its acceptance condition, not a receipt that exists yet.
+- **What is PENDING:** an anonymous lookup, a keyed `/v1/by-search`, a
+  `/get/{id}` download, and playback of a downloaded subtitle after a network-off
+  restart. The four commands and the installed-app run are in
+  [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8; the key already exists at the
+  macOS config path.
+- **Where:** `crates/screenroom-core/src/library/provider_subtitles.rs`,
+  `provider_http.rs`, `subtitles.rs`, and the player panel in `app.rs`.
+- **Acceptance:** on a film with no track and no sidecar, a search returns matches
+  with language, release and format; keeping one stores it, hands it to libmpv and
+  reuses it offline; a 404 lookup reads as no match, a 404 download as unavailable,
+  and a 401 says which key file is missing — never which key.
+- **Automated verification:** store and order tests, plus parsers over synthetic
+  fixtures. The live calls stay manual and explicitly invoked.
 
 ---
 
@@ -469,48 +488,28 @@ than reclassified.
 
 ---
 
-#### P1-09 · Accessibility beyond the keyboard (Q07) — **CLOSED, awaiting a VoiceOver pass**
+#### P1-09 · Accessibility beyond the keyboard (Q07) — **REMOVED (2026-11-03)**
 
-- **Requirement:** Q07.
-- **Status:** IMPLEMENTED and verified headlessly; the only thing left is the owner
-  listening to it. It was recorded as blocked because iced exposes nothing; it is
-  not blocked, because AppKit can be answered without iced's help.
-- **What was built.** `apps/desktop/src/accessibility.rs` publishes an immutable
-  snapshot of the current screen — role, label, value, enabled, focused and the
-  action each control performs — once per `view()`, and serves `NSAccessibility`
-  from it by setting `accessibilityChildren` on the window's content view. No class
-  swizzling, nothing winit owns is mutated, and `AXPress` pushes exactly one action
-  onto a bounded queue that the app drains into the same `Message` the pointer and
-  keyboard produce, so an accessibility press can never do something a click cannot.
-- **Verified, headlessly, window never shown, on a populated library**
-  (`SCREENROOM_AX_CHECK`): the tree read back from AppKit matches the application's
-  own snapshot control by control — `labels_match`, `values_match`,
-  `enabled_match`, `press_actions_match`, `adjust_actions_match` and `focus_match`
-  all `true`, with one focused element on Home, Library, Detail and Settings and
-  none on the Player. **0 controls before the bridge attaches**; 19 on Home, 23 on
-  Library, 30 on Detail, 33 on Settings (Playback) and 16 on the Player after; 8
-  and 22 on an empty library's Home and Library; an empty tree after shutdown.
-- **What the tree now carries** (it used to carry far less): the Home hero and one
-  heading per rail; the Library's count, search value, sort and genre options and
-  every filter chip as a radio button or checkbox with its state; the Detail's back
-  affordance, eyebrow, title, metadata, synopsis, each reported fact, season
-  selector and the convert controls; the Settings section rail, section heading,
-  toggle states, slider values and 5%-per-step adjustments, and each section's own
-  action strip; the Player's position and volume as sliders with
-  `AXIncrement`/`AXDecrement`, and no shell controls it does not draw. Phantom
-  controls were removed: a Close button the shell never draws, volume up/down
-  buttons the player never draws, a pager on a one-page library, the film itself in
-  a movie's episode list, and the whole navigation on the player screen.
-- **What is not covered, stated rather than faked:** elements carry the window's
-  frame, not per-widget geometry, because iced gives the application no layout
-  geometry — so the VoiceOver cursor highlights the window rather than one card.
-  A picker is bridged as the options it opens onto, and a text field as text
-  carrying its value: typing and the drop-down itself stay with the pointer and
-  keyboard. Settings rows carry no drawn focus ring although the tree publishes the
-  row the keyboard is on.
-- **Owner step (ten minutes, scripted):** follow
-  [`VOICEOVER_PASS.md`](VOICEOVER_PASS.md) — ⌘F5, then the five surfaces in order,
-  ending with whether the status line is announced on its own when it changes.
+- **Requirement:** Q07, keyboard/focus/reduced-motion/subtitle-styling half only.
+- **Status:** the VoiceOver-specific work is removed, not deferred. The
+  `NSAccessibility` tree bridge (`apps/desktop/src/accessibility.rs`), its
+  announcements and its `SCREENROOM_AX_CHECK` receipt were deleted on 2026-11-03
+  ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)). The
+  [`VOICEOVER_PASS.md`](VOICEOVER_PASS.md) procedure is retired and no further
+  VoiceOver receipt is produced.
+- **What still stands, unchanged:** keyboard navigation on every screen, the
+  Settings action strip, a deterministic focus order with restoration, the
+  reduced-motion setting, and subtitle size and position read back from libmpv.
+- **What is not offered, stated rather than implied:** the application publishes no
+  screen-reader tree, so VoiceOver sees what AppKit infers from a window with no
+  accessibility children — nothing it can drive.
+- **Left as history:** the bridge was verified headlessly on all five surfaces before
+it was removed — 0 controls before it attached, then 19 on Home, 23 on Library, 30
+on Detail, 33 on Settings and 16 on the Player, with labels, values, enabled state,
+`AXPress`, slider adjustments and focus matching the application's own snapshot,
+and the known gap that every element carried the window's frame rather than
+per-widget geometry. Those numbers describe a tree that no longer exists; the dated
+receipts stay in [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md).
 
 #### P1-10 · Prove Unicode and Bengali subtitles render — **CLOSED 2026-11-01**
 
@@ -561,25 +560,24 @@ than reclassified.
   4K file this library does not contain. If a 4K sample is wanted, it has to be
   provided.
 
-#### P1-12 · Prove offline behaviour — **CLOSED (owner, 2026-11-03)** — **mechanism proven, Wi-Fi-off run deferred by the owner**
+#### P1-12 · Prove offline behaviour — **CLOSED (owner, 2026-11-03)**
 
 - **Requirement:** Q01, PRD acceptance criterion G.
-- **Status:** PARTIAL. The owner asked that Wi-Fi stay up while other work runs, so
-  the switch-off run is **deferred to the owner and still open**. What replaced the
-  old "there is no network code" argument is a measurement:
+- **Status:** CLOSED. The owner turned the radio off on 2026-11-03 and reports that
+  playback, rail scrolling and switching embedded subtitles all worked. That is the
+  owner's own observation, recorded here; the exact steps are the ones this section
+  used to list — packaged app, an existing library, Wi-Fi off, browse, play, quit,
+  reopen, resume — and the behaviour was as expected.
+- **The independent mechanism check, which still runs on demand:**
   `scripts/check-no-network.sh` plays a file for eight seconds and samples every
   socket the process holds, 5 times a second. Result: **37 samples, 0 samples
   holding any socket at all** — no TCP, no UDP, not even a listener — while the
-  report confirms frames were delivered. Every network call the app can make
-  (an enrichment pass, a subtitle search, a cast session, receiver discovery) is
-  behind an explicit press, and 33 provider tests assert that an unconfigured
-  provider issues zero requests.
-- **What this does not prove:** behaviour when the *system* is offline, which is
-  what the PRD asks for. That remains the owner's run.
-- **The owner's step:** with the app packaged and a library already built, turn
-  Wi-Fi off, browse, play, quit, reopen and resume; nothing should hang, spin or
-  show an error. Record the result under "Owner session" in
-  `IMPLEMENTATION_STATUS.md`.
+  report confirms frames were delivered. Every network call the app can make (an
+  enrichment pass, a subtitle lookup, a cast session, receiver discovery) is behind
+  an explicit press, and the provider tests assert that an unconfigured provider
+  issues zero requests.
+- **What is still not proven:** offline behaviour on Windows and on the TV, which
+  need those devices. The macOS half is closed.
 
 #### P1-13 · A verified source directory (F23)
 
@@ -771,7 +769,7 @@ check that actually ran; `Action` is what is still owed and by whom.
 | F12 | Watchlists and favourites | COMPLETE | toggle/filter tests | — | — |
 | F13 | Audio tracks and subtitles | COMPLETE | `step_5`, `step_21`, Bengali pixel test | on-screen legibility | owner |
 | F14 | Skip intro and credits | COMPLETE (manual) | marker and guard tests | — | — |
-| F15 | Subtitle search | COMPLETE core / BLOCKED live | `providers_subtitles.rs` (19) | key, TLS transport, offline-retention decision | owner |
+| F15 | Subtitles: file first, then The Subtitle DB | COMPLETE store + order / PENDING live | store tests, `step_21` | run `SUBTITLE_PROVIDER.md` §8 with the owner's key | owner |
 | F16 | Local recommendations | COMPLETE | recommendation tests | — | — |
 | F17 | Browse previews | COMPLETE | `step_17` | — | — |
 | F18 | Picture-in-Picture | WITHDRAWN (2026-11-02) | — | not wanted; ADR-016 withdrawn | — |
@@ -785,12 +783,12 @@ check that actually ran; `Action` is what is still owed and by whom.
 | Q00 | Installed local app | COMPLETE | bundle walk, `verify-bundle.sh` | — | — |
 | Q00B | Design system | COMPLETE | `ds_pinned.rs` at a pinned commit, visible theme string | machine-local sync | — |
 | Q01 | Offline | COMPLETE by construction | 33 provider tests assert zero requests when unconfigured | execute with Wi-Fi off | owner |
-| Q02 | Performance | COMPLETE (SDR and HDR) | 4K 24.39 fps / 13.95 % CPU; extended range 24.51 fps / 14.27 %; paging; startup ~1.2 s | the owner's look at HDR (P1-03) | owner |
+| Q02 | Performance | COMPLETE (SDR) | 4K 24.39 fps / 13.95 % CPU; paging; startup ~1.2 s. HDR removed 2026-11-03; its figures are history | — | — |
 | Q03 | Fidelity | COMPLETE | `step_7`, anamorphic test | the look | owner |
 | Q04 | Portability | COMPLETE | layout, `cfg` boundaries, `cargo check` for the Windows target | real Windows build | owner |
 | Q05 | Security and privacy | COMPLETE | argument vectors, root canonicalisation, credential redaction tests, cast host allowlist | — | — |
 | Q06 | Durability | COMPLETE | migration tests (v2–v9), restore atomicity, byte-identical failure test | — | — |
-| Q07 | Accessibility | PARTIAL / BLOCKED | ADR-017 with the exact grep and lockfile evidence | upstream `accesskit`, or an authorised `NSAccessibility` project | owner decision |
+| Q07 | Accessibility | COMPLETE for keyboard and focus; screen-reader bridge removed 2026-11-03 (ADR-005) | keyboard journey, action strip, focus tests, subtitle styling | — | — |
 | Q08 | Honest reporting | COMPLETE | this document set | — | — |
 
 Acceptance steps 1–15 keep their status in `MACOS_ACCEPTANCE_CHECKLIST.md`; the
@@ -822,13 +820,11 @@ cd crates/screenroom-player/examples/gl-path-probe && \
 
 ## 8. Continuation point
 
-**Updated 2026-11-02.** The second session's note below is kept as written; the
-HDR half of item 1 has since been implemented (ADR-019): the swapchain is
-`Rgba16Float` behind a vendored `iced_wgpu`, the layer is tagged extended sRGB and
-asks for extended range, libmpv tone maps into the measured 406-nit display peak,
-and the application reports 24.51 fps at 14.27 % mean CPU with zero uploads on
-the HDR10 fixture. The remaining HDR step is the owner's look, and the switch is
-still off by default.
+**Updated 2026-11-03.** HDR and the VoiceOver bridge are removed
+([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)), so the two items
+this section used to open with are gone: SDR is the only output and no screen-reader
+tree is published. The notes below are kept as written, because they record what
+was done and when.
 
 **2026-11-02, the interface and the pipeline.** The desktop's five screens are
 rebuilt as a view-layer change ([`UI_REBUILD.md`](UI_REBUILD.md)), and the
@@ -847,21 +843,16 @@ clean, 521 tests passed (three consecutive full runs), and `cargo fmt --check`,
 
 What a next session should pick up, in this order:
 
-1. **P1-03's display half — done 2026-11-02, one look outstanding.** A vendored
-   `iced_wgpu` selects `Rgba16Float` and tags the layer `kCGColorSpaceExtendedSRGB`;
-   libmpv tone maps into the measured display peak. What remains is
-   `SCREENROOM_HDR=extended` plus an owner look at a film, then flipping the
-   default. See ADR-019 for why a PQ-coloured layer and a shared drawable cannot
-   both be right.
-2. **P1-09 accessibility.** Blocked on iced shipping `accesskit` (ADR-017). If that
-   is not acceptable, the out-of-tree `NSAccessibility` bridge is the only honest
-   route and needs an explicit owner decision.
-3. **P2-05's spirit, not its letter:** paging is measured at 10k and 50k; re-run
+1. **P1-07's live calls.** TSDB is the provider; run the four commands in
+   [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8 with the owner's existing key,
+   record the receipts, and then close F15's live half. Nothing there is claimed
+   until it runs.
+2. **P1-02's fence**, which is a correctness margin rather than a defect, and
+   **P2-05's spirit, not its letter:** paging is measured at 10k and 50k; re-run
    `library_bench` after any query change and keep the numbers in this document.
-4. **Owner-gated, and only the owner can close them:** P1-04 (the eight
-   observations), P1-11 (the SSD and the real 3240×2160 Main10 file), P1-12 (Wi-Fi
-   off), P2-06 (the rebuilt interface at five widths), and the live provider calls
-   in P1-06/P1-07.
+3. **Owner-gated, and only the owner can close them:** P1-04 (the eight
+   observations), P1-11 (the SSD and the real 3240×2160 Main10 file), P2-06 (the
+   rebuilt interface at five widths), and the live metadata calls in P1-06.
 
 Nothing in this list is speculative, and nothing above has been relabelled to make
 the counts look better than they are.
@@ -887,7 +878,7 @@ check that actually ran; `Action` is what is still owed and by whom.
 | F12 | Watchlists and favourites | COMPLETE | toggle/filter tests | — | — |
 | F13 | Audio tracks and subtitles | COMPLETE | `step_5`, `step_21`, Bengali pixel test | on-screen legibility | owner |
 | F14 | Skip intro and credits | COMPLETE (manual) | marker and guard tests | — | — |
-| F15 | Subtitle search | COMPLETE core / BLOCKED live | `providers_subtitles.rs` (19) | key, TLS transport, offline-retention decision | owner |
+| F15 | Subtitles: file first, then The Subtitle DB | COMPLETE store + order / PENDING live | store tests, `step_21` | run `SUBTITLE_PROVIDER.md` §8 with the owner's key | owner |
 | F16 | Local recommendations | COMPLETE | recommendation tests | — | — |
 | F17 | Browse previews | COMPLETE | `step_17` | — | — |
 | F18 | Picture-in-Picture | WITHDRAWN (2026-11-02) | — | not wanted; ADR-016 withdrawn | — |
@@ -901,12 +892,12 @@ check that actually ran; `Action` is what is still owed and by whom.
 | Q00 | Installed local app | COMPLETE | bundle walk, `verify-bundle.sh` | — | — |
 | Q00B | Design system | COMPLETE | `ds_pinned.rs` at a pinned commit, visible theme string | machine-local sync | — |
 | Q01 | Offline | COMPLETE by construction | 33 provider tests assert zero requests when unconfigured | execute with Wi-Fi off | owner |
-| Q02 | Performance | COMPLETE (SDR and HDR) | 4K 24.39 fps / 13.95 % CPU; extended range 24.51 fps / 14.27 %; paging; startup ~1.2 s | the owner's look at HDR (P1-03) | owner |
+| Q02 | Performance | COMPLETE (SDR) | 4K 24.39 fps / 13.95 % CPU; paging; startup ~1.2 s. HDR removed 2026-11-03; its figures are history | — | — |
 | Q03 | Fidelity | COMPLETE | `step_7`, anamorphic test | the look | owner |
 | Q04 | Portability | COMPLETE | layout, `cfg` boundaries, `cargo check` for the Windows target | real Windows build | owner |
 | Q05 | Security and privacy | COMPLETE | argument vectors, root canonicalisation, credential redaction tests, cast host allowlist | — | — |
 | Q06 | Durability | COMPLETE | migration tests (v2–v9), restore atomicity, byte-identical failure test | — | — |
-| Q07 | Accessibility | PARTIAL / BLOCKED | ADR-017 with the exact grep and lockfile evidence | upstream `accesskit`, or an authorised `NSAccessibility` project | owner decision |
+| Q07 | Accessibility | COMPLETE for keyboard and focus; screen-reader bridge removed 2026-11-03 (ADR-005) | keyboard journey, action strip, focus tests, subtitle styling | — | — |
 | Q08 | Honest reporting | COMPLETE | this document set | — | — |
 
 Acceptance steps 1–15 keep their status in `MACOS_ACCEPTANCE_CHECKLIST.md`; the

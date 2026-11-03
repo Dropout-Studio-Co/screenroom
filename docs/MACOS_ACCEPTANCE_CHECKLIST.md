@@ -48,35 +48,32 @@ Record the result of each step (pass, fail plus what was seen) under the
 "Owner session" heading in `IMPLEMENTATION_STATUS.md`. A failed step is a defect to
 fix, never a row to delete.
 
-## Two steps worth doing in the same sitting
+## Two steps that no longer exist
 
-**HDR.** The extended-range path is built and measured (16-bit PQ surface, float
-swapchain, EDR layer, target peak read from the panel at 406 nits). It is a real
-setting now, not an environment variable: Settings → *Show HDR films as HDR*, then
-restart, because the window picks its surface when it opens. Play an HDR10 film and
-look at the highlights; turn it back off and look at the same film again. The two
-should differ in the highlights, and that difference is the whole point.
+**HDR — removed 2026-11-03.** There is no HDR mode, no extended-range output, no
+*Show HDR films as HDR* setting and no HDR receipt: **SDR is the only output**
+([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)). The measurements
+behind the old switch are kept as history in
+[`HDR_VERIFICATION.md`](HDR_VERIFICATION.md); do not look for the setting.
 
-Verified without any environment variable: with the setting on the app reports
-`picture_surface Rgba16Float` at 23.9 fps and 13.35 % CPU; with it off,
-`Bgra8Unorm`. What no measurement can answer is whether it *looks* right on your
-panel, which is why this is still your step.
+**VoiceOver — removed 2026-11-03.** The `NSAccessibility` bridge and its receipt
+are gone, so there is no tree to read and no pass to run. The keyboard journey
+(step 15), focus order, reduced motion and subtitle size/position remain, and they
+are what the accessibility checks now cover. See the retired
+[`VOICEOVER_PASS.md`](VOICEOVER_PASS.md).
 
-**VoiceOver.** ⌘F5, then VO+Right through the header, the heading and the cards, and
-VO+Space on a card. The tree is built and verified headlessly (0 controls before,
-13 after, focus and press working); what only you can answer is whether it *reads*
-sensibly and in a useful order.
+## The step that was deferred, and then run
 
-## One step is deferred on purpose
+`Q01` / P1-12 asks for a run with the network off. It was deferred while Wi-Fi was
+needed for other work, and the owner then performed it on **2026-11-03**: playback,
+rail scrolling and switching embedded subtitles all worked with the radio off. That
+is the owner's own report, recorded in
+[`MACOS_REMAINING_WORK.md`](MACOS_REMAINING_WORK.md) (P1-12) and in
+[`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md).
 
-`Q01` / P1-12 asks for a run with the network off. **You asked that Wi-Fi stay up
-while other work is running, so this was deliberately not performed.** What was
-done instead is in `scripts/check-no-network.sh`: the app plays a file for eight
-seconds while its sockets are sampled five times a second. It held **zero** sockets
-in 37 samples. That is not the same as being offline, so the step stays open.
-
-Do it whenever it suits you: turn Wi-Fi off, open the app, browse, play something,
-quit, reopen, resume. Nothing should hang or show an error.
+`scripts/check-no-network.sh` is still the independent mechanism check: it plays a
+file for eight seconds while the process's sockets are sampled five times a second,
+and reports **zero** sockets held.
 
 ## The remaining manual session, in the order that lets you stop early
 

@@ -1,7 +1,16 @@
 # ADR-019 — HDR presentation on macOS: an extended-range swapchain
 
+> **SUPERSEDED AND RETIRED 2026-11-03.** HDR is removed from Screenroom
+> completely, so this decision no longer governs anything: SDR is the only desktop
+> output, there is no extended-range swapchain, no HDR setting and no HDR receipt.
+> The text below is kept unedited as the audit trail of a decision that was
+> implemented and measured, and then withdrawn by
+> [`ADR-005`](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md). Read
+> "implemented" below as "implemented until 2026-11-03".
+
 - **Date:** 2026-11-02
-- **Status:** Accepted; implemented; one owner check outstanding
+- **Status:** **RETIRED 2026-11-03** — accepted and implemented as recorded here,
+  then superseded by ADR-005. Not current guidance; do not rebuild this path.
 - **Supersedes:** the "blocked, needs a patched renderer or an
   application-owned layer" conclusion in P1-03 of
   [`MACOS_REMAINING_WORK.md`](MACOS_REMAINING_WORK.md)

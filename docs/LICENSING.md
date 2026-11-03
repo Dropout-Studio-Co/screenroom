@@ -1,6 +1,8 @@
 # Licensing and redistribution policy
 
-Checked 2026-11-02 against the resolved dependency graph on this host. This records
+Checked 2026-11-02 against the resolved dependency graph on this host, and updated
+2026-11-03 for the subtitle provider change and the HDR retirement
+([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)). This records
 evidence and release requirements. It grants no new rights in third-party code,
 brands, codecs, media or private design material.
 
@@ -49,7 +51,7 @@ product as long as notices are retained; it does not relicense first-party code.
 `uniffi` (MPL-2.0) is no longer planned: its only consumers were the iOS/Android
 apps removed by [ADR-003](ADR-003_DESKTOP_AND_TV_SCOPE.md).
 
-## Dependencies added for the online providers and for HDR
+## Dependencies added for the online providers, and the retired HDR fork
 
 Two changes in the 2026-11-02 session brought new third-party code in, and both are
 permissive and compatible with an MIT-licensed product.
@@ -64,13 +66,17 @@ certificate list rather than code. That is the first CDLA-licensed component in 
 graph; it is permissive, imposes no source obligation, and is recorded here because a
 release notice should name it.
 
-**A vendored `iced_wgpu` for the HDR swapchain.** `vendor/iced_wgpu` is upstream
-`iced_wgpu` 0.14.0, MIT as declared in its own `Cargo.toml` (upstream ships no
-separate LICENSE file), carried under a root `[patch.crates-io]` entry. Only
-`Cargo.toml` and `src/window/compositor.rs` differ, and the reasoning, the patch and
-the update procedure are in `vendor/README.md`. A redistributed binary must treat
-this fork as third-party source: keep the MIT notice and the upstream attribution,
-and ship the patched source alongside any binary release.
+**A vendored `iced_wgpu` for the HDR swapchain — retired.** `vendor/iced_wgpu` is
+upstream `iced_wgpu` 0.14.0, MIT as declared in its own `Cargo.toml` (upstream ships
+no separate LICENSE file), carried under a root `[patch.crates-io]` entry. Only
+`Cargo.toml` and `src/window/compositor.rs` differed, and the reasoning, the patch
+and the update procedure are in `vendor/README.md`. Its **only** purpose was
+selecting a 16-bit float swapchain for HDR, and HDR was removed on 2026-11-03
+([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)), so the fork has no
+remaining consumer and is retired with the feature. A tree that still carries it
+keeps the obligation below until it is gone: treat the fork as third-party source,
+keep the MIT notice and the upstream attribution, and ship the patched source
+alongside any binary release.
 
 ## Native media components: source license is not binary clearance
 
@@ -120,10 +126,14 @@ foundations pin is `41406ab436ef2b9c1edcf69e9d4ada4b94d13eec`.
 - TMDB branding (`tmdb-logo.svg` in the archive) remains TMDB branding, governed by
   TMDB's logo/attribution rules; it is not Screenroom artwork. If TMDB data is used,
   the required attribution sentence stays visible.
-- Provider APIs (TMDB, OpenSubtitles) grant API use, not rights to redistribute
+- Provider APIs (TMDB, The Subtitle DB) grant API use, not rights to redistribute
   other people's images or subtitle works. Indefinite offline retention of provider
   artwork is unresolved and is treated as a release blocker for automatic remote
   caching; user-permitted local image bytes with provenance are the lawful path.
+  A subtitle downloaded from The Subtitle DB is kept for the owner's own playback,
+  with its provenance, and is never re-shared or redistributed; see
+  [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §9. The provider was OpenSubtitles
+  before 2026-11-03 (ADR-010, superseded); the same retention rule applied to it.
 - User videos, databases, posters and screenshots never become project assets
   because the app can open them. Test media must be generated or explicitly
   rights-cleared; the libmpv smoke test generates its own clip with FFmpeg.

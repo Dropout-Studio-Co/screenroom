@@ -1,7 +1,10 @@
 # Online metadata
 
-Screenroom works offline. Online metadata is optional, and it is the only feature
-that talks to the internet.
+Screenroom works offline. Online metadata is optional. It is one of only two
+features that can talk to the internet: the other is the subtitle lookup, which
+runs only when the file has no embedded track and no sidecar, and which is
+described in [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md). Nothing else in the
+application opens a connection on its own.
 
 ## The key
 
@@ -61,3 +64,8 @@ drains the rest.
 The capability reports itself as not configured with the exact reason, and the
 Settings screen shows that reason instead of pretending to start a pass. Nothing
 else in the application depends on the network.
+
+The subtitle provider has its own credential and its own precedence —
+`SCREENROOM_TSDB_API_KEY`, then `SCREENROOM_TSDB_CONFIG`, then `subtitles.key` —
+recorded in [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §3. It is not the same
+key as the metadata one, and one being absent never affects the other.

@@ -5,6 +5,14 @@
 > [ADR-004](ADR-004_PERSONAL_EDITION_SCOPE.md) (which amends
 > [ADR-003](ADR-003_DESKTOP_AND_TV_SCOPE.md)). The previous Flutter milestone plan
 > is history; its acceptance ideas are reused where they still apply.
+>
+> **2026-11-03:** the "Status" column of the feature→milestone map is a snapshot
+> from 2026-10 and is stale for several rows. The live record is
+> [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) and
+> [`CAPABILITY_MATRIX.md`](CAPABILITY_MATRIX.md). HDR is removed and the subtitle
+> provider is The Subtitle DB behind a file-first order
+> ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)); where this plan
+> says otherwise, ADR-005 wins.
 
 Every milestone below is **independently testable and resumable**: it has an
 explicit entry condition, a definition of done, the evidence that proves it, and a
@@ -88,7 +96,7 @@ a refused switch is visible. See
   gate G3b still needs a listening pass (the owner's, on real speakers).
 - The offline run was proven by holding zero network sockets rather than by
   disabling the machine's networking; an airplane-mode run is still owed.
-- Windows and 4K/HDR remain BLOCKED on hardware.
+- Windows and 4K remain BLOCKED on hardware.
 
 **Depends on** M1.
 
@@ -113,7 +121,7 @@ above.**
 
 **Evidence** command transcript, database rows, window screenshots carrying the
 fixture's burnt-in timecode, and the automated frame-rate and resume tests.
-Windows and 4K/HDR remain BLOCKED until that hardware exists.
+Windows and 4K remain BLOCKED until that hardware exists.
 
 **Not in M2:** subtitles/track selection, full library UI, design-system styling
 of the player, previews. (PiP was withdrawn entirely on 2026-11-02.)
@@ -224,7 +232,7 @@ behaviour.
 | --- | --- | --- |
 | F06 artwork | all | permitted local image bytes, provenance, dimensions, hash, eviction; remote retention only with rights |
 | F05 enrichment | desktop/TV | whole-library durable jobs, visible-first priority, retry/quota/offline queue, manual binding that nothing overwrites |
-| F15 subtitle provider | desktop/TV | optional provider search/download with quota display and manual fallback |
+| F15 subtitle provider | desktop/TV | The Subtitle DB as the single online provider, reached only after an embedded track and then a sidecar; keyed search with `Retry-After` handling and a manual fallback that is simply "the file already had one" |
 | F14 markers | all | manual intro/credits intervals validated against edition duration; skip only inside a verified interval |
 | F16 recommendations | desktop/TV | explainable local ranking over owned, available media; no hosted AI |
 | F17 previews | desktop | single muted decoder, delay, resource cap, reduced-motion off switch |
@@ -272,7 +280,7 @@ a truthful reason and a recovery path.
 | F12 | Watchlists/favourites | M1 (store), M3/M5 (UI) | delivered on desktop |
 | F13 | Tracks and subtitles | M3 (desktop), M5 (TV) | desktop: enumerate and switch both, “Off” for subtitles; styling open |
 | F14 | Skip intro/credits | M6 | not started |
-| F15 | Subtitle search | M6 | not started |
+| F15 | Subtitles: file first, then The Subtitle DB | M6 | store and resolution order done; live provider PENDING (see `SUBTITLE_PROVIDER.md` §8) |
 | F16 | Local recommendations | M6 | not started |
 | F17 | Browse previews | M6 | not started |
 | F18 | PiP / mini-player | — | withdrawn 2026-11-02: not wanted; nothing is offered |

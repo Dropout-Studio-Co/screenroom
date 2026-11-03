@@ -1,3 +1,10 @@
+> **Historical planning record, 2026-11-03.** This is the transcript that scoped the
+> subtitle-provider migration; it changed no files. Every OpenSubtitles reference in
+> it describes the provider that was **removed**, not one that is current, and the
+> code paths it quotes are the pre-change tree. The record of the decision is
+> [`ADR-005`](../../ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md), and the
+> behaviour is in [`SUBTITLE_PROVIDER.md`](../../SUBTITLE_PROVIDER.md).
+
 Reading additional input from stdin...
 OpenAI Codex v0.166.0
 --------

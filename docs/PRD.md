@@ -1,14 +1,31 @@
-> **SCOPE AND STACK NOTICE (2026-10-26):** [`ADR-002_RUST_FIRST_STACK.md`](ADR-002_RUST_FIRST_STACK.md) as amended by [`ADR-003_DESKTOP_AND_TV_SCOPE.md`](ADR-003_DESKTOP_AND_TV_SCOPE.md) is the authoritative architecture: desktop/laptop (Windows, macOS, Linux) and smart TVs (Samsung Tizen, LG webOS, Android TV, other compatible TVs) only, with equal priority; shared Rust core, iced + wgpu + libmpv desktop, LightningJS 3 + Blits + TypeScript TV with platform-native playback, SQLite where supported, FFmpeg/FFprobe, MIT first-party code. iOS/Android phone and tablet apps and the Flutter fallback are out of scope. This document's product requirements, entities and evidence rules still apply to desktop and TV; any mobile, Flutter-only or Svelte/Tauri statement inside it is history, not a requirement. No physical-device gate has passed -- see `IMPLEMENTATION_STATUS.md` for what is actually verified.
+> **SCOPE AND STACK NOTICE (2026-10-27, [ADR-004](ADR-004_PERSONAL_EDITION_SCOPE.md)):** [`ADR-002_RUST_FIRST_STACK.md`](ADR-002_RUST_FIRST_STACK.md), as amended by [`ADR-003_DESKTOP_AND_TV_SCOPE.md`](ADR-003_DESKTOP_AND_TV_SCOPE.md) and then scoped by ADR-004, is the authoritative architecture: exactly three targets — the owner's MacBook Air M4 on macOS, the owner's Windows ultrawide desktop, and the owner's Samsung UA50AU8000RXER — with a shared Rust core, iced + wgpu + libmpv on desktop, LightningJS 3 + Blits + TypeScript with Tizen AVPlay on the TV, SQLite where supported, FFmpeg/FFprobe, MIT first-party code. Linux, LG webOS, Android TV, iOS/Android phone and tablet apps, Apple TV, Roku and the Flutter fallback are out of scope. This document's product requirements, entities and evidence rules still apply to the three targets; any mobile, Flutter-only, Svelte/Tauri or wider-platform statement inside it is history, not a requirement. No physical-device gate for Windows or the Samsung TV has passed -- see `IMPLEMENTATION_STATUS.md` for what is actually verified.
 
 # Local media application — Product Requirements Document (name TBD)
 
 Version 1.0 planning revision · 2026-10-25 · **Not a completed implementation or a full user-approved release contract**.
 
+> **OWNER DECISIONS (2026-11-03), superseding earlier wording in this document.**
+> Recorded in [`ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md`](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md):
+>
+> 1. **Online subtitles come from The Subtitle DB and nowhere else.**
+>    OpenSubtitles is removed. Detail: [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md).
+> 2. **Subtitles resolve file-first:** embedded tracks, then sidecar files beside
+>    the media, and only when neither exists does the application ask The Subtitle
+>    DB. No second online service and no fallback chain.
+> 3. **VoiceOver-specific functionality is removed** — the `NSAccessibility`
+>    bridge, its announcements and its receipt. Keyboard navigation, focus,
+>    reduced motion and subtitle styling stay requirements (Q07).
+> 4. **HDR is removed completely.** SDR is the only desktop output: no HDR mode,
+>    no extended-range output, no setting, no receipt.
+>
+> Every HDR, VoiceOver or OpenSubtitles statement that remains below is either
+> updated to this decision or kept as dated history.
+
 ## 1. Product definition and boundaries
 
 **Vision.** A high-performance, premium, cinematic **installed offline-first application** for locally sourced movies and TV episodes, delivering the organization and convenience of a streaming-service experience around media files the user has authorized. Beyond VLC-like playback, it offers poster-based organization, series/episode context, progress, profiles, discoverability, subtitles, reliable autoplay, local recommendations, and advanced conveniences. It does not itself host a movie subscription service or require uploading personal media to a cloud.
 
-**Confirmed core:** user-selected folders/USB/external disks; local, independent per-device history; home with Continue Watching first; next-episode autoplay and browse previews desired; English metadata default; profiles/favorites/watchlists/search; eventual intro/credits skipping, subtitles/downloads, recommendations and casting; Picture-in-Picture was withdrawn on 2026-11-02 as not wanted; and computer conversion; free-only tools/services for personal use; one monorepo; Windows/ultrawide and Samsung TV first; Mac and iPhone optional. Help discovering available external sources, while showing only permitted and feasible actions. See original handoff in `../reference/SCREENROOM_CHATGPT_HANDOFF.md`.
+**Confirmed core:** user-selected folders/USB/external disks; local, independent per-device history; home with Continue Watching first; next-episode autoplay and browse previews desired; English metadata default; profiles/favorites/watchlists/search; eventual intro/credits skipping, subtitles, recommendations and casting; Picture-in-Picture was withdrawn on 2026-11-02 as not wanted; and computer conversion; free-only tools/services for personal use; one monorepo; Windows/ultrawide and Samsung TV first, macOS also a target and iPhone out of scope (ADR-003/ADR-004). Help discovering available external sources, while showing only permitted and feasible actions. See original handoff in `../reference/SCREENROOM_CHATGPT_HANDOFF.md`.
 
 **Proposals, not ratified:** exact screen composition (not the design system), feature milestone split, seven-hundred-millisecond preview delay, five-second autoplay countdown, a 95% completion heuristic, particular storage engines, provider selections and native player. Treat these as changeable defaults, not the user's explicit requirements.
 
@@ -16,16 +33,16 @@ Version 1.0 planning revision · 2026-10-25 · **Not a completed implementation 
 
 ## 2. Priority audience, devices and operating model
 
-**Delivery rule (revised 2026-10-26):** every target platform receives a real installable, on-device app: Windows/Linux/macOS executables and signed TV packages (`.wgt` for Samsung, `.ipk` for webOS, an APK for Android TV). Phone and tablet apps are out of scope ([ADR-003](ADR-003_DESKTOP_AND_TV_SCOPE.md)). **No website, PWA, ordinary browser-tab application, required hosted service or required localhost web-server runtime.** The UI stack is per platform family (iced on desktop, LightningJS 3 + Blits on TVs) and every UI uses the platform's native media engine, not a browser `<video>` element. Only the TV packages run inside the platform's web engine, which is stated plainly rather than called pure native UI. See [`ADR-002_RUST_FIRST_STACK.md`](ADR-002_RUST_FIRST_STACK.md) and [`ARCHITECTURE.md`](ARCHITECTURE.md).
+**Delivery rule (revised 2026-10-27):** each of the three targets receives a real installable, on-device app: a Windows and a macOS executable, and a signed Tizen package (`.wgt`) for the Samsung television. Phone and tablet apps are out of scope ([ADR-003](ADR-003_DESKTOP_AND_TV_SCOPE.md)); Linux, LG webOS and Android TV are out of scope ([ADR-004](ADR-004_PERSONAL_EDITION_SCOPE.md)). **No website, PWA, ordinary browser-tab application, required hosted service or required localhost web-server runtime.** The UI stack is per platform family (iced on desktop, LightningJS 3 + Blits on the TV) and every UI uses the platform's native media engine, not a browser `<video>` element. Only the TV package runs inside the platform's web engine, which is stated plainly rather than called pure native UI. See [`ADR-002_RUST_FIRST_STACK.md`](ADR-002_RUST_FIRST_STACK.md) and [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 **Confirmed design-system rule (2026-10-25):** all first-party visuals derive from the private Dropout Studio Design System—black-first editorial foundations, canonical semantic tokens, components, iconography, accessibility, and motion rules. Screenroom prototype palette is explicitly superseded. The cinematic library/player layouts are domain compositions built on these foundations, adapted and tested for 10-foot TV and Windows ultrawide. See `DROPOUT_DESIGN_INTEGRATION.md`.
 
 **Naming:** finalized as **Screenroom** (2026-10-26). Logo/icon artwork, bundle IDs, app-store identity and trademark clearance remain release-gate work, not name decisions (`NAMING.md`).
 
 - Initially one owner, potentially multiple **local viewer profiles** per device; profiles are not authenticated accounts or parental controls.
-- **Primary**: owner's Windows PC with ultrawide monitor, frequently used for long viewing. Exact OS build/GPU/CPU/display/HDR chain unmeasured.
+- **Primary**: owner's Windows PC with ultrawide monitor, frequently used for long viewing. Exact OS build/GPU/CPU/display chain unmeasured.
 - **Primary**: Samsung UA50AU8000RXER (2021 AU8000, 4K panel, Tizen 6.0 model-family baseline; firmware reference 2301.1 historical). Local USB on TV, not assumed to see PC drives. Remote-only operation is essential.
-- **Equal platform priority (2026-10-26):** Desktop/laptop (Windows, macOS, Linux) and smart TVs (Samsung Tizen, LG webOS, Android TV, other compatible TVs) receive the same product priority; iOS/Android phones and tablets are out of scope (ADR-003). Availability of hardware or SDKs changes when a gate can be *proven*, never whether the platform is in scope. Owner devices currently available for acceptance: Windows ultrawide PC, Samsung UA50AU8000RXER, MacBook Air M4 (host); other devices are gated by access, not by ambition.
+- **Three targets, equal priority (ADR-004):** the owner's macOS MacBook Air M4, the owner's Windows ultrawide desktop, and the owner's Samsung UA50AU8000RXER television receive the same product priority; iOS/Android phones and tablets, Linux, LG webOS, Android TV, Apple TV and Roku are out of scope (ADR-003, ADR-004). Availability of hardware or SDKs changes when a gate can be *proven*, never whether the platform is in scope.
 - Media remains separately stored on each device or attached disk; no automatic progress sync; no permanent NAS/LAN host assumed.
 
 ## 3. Jobs to be done / user journeys
@@ -60,9 +77,9 @@ IDs are persistent across architecture/implementation/tests. **Milestone labels 
 | **F10** | Core | **Next episode:** exact verified sequence, cancelable countdown, no silent gaps/ambiguous episodes, handle end of series/cross-season only with known order. |
 | **F11** | Core | **Search/filter/sort:** filenames/titles, movie/series, watched, available, genres when known; all results reachable in a large library (virtualized/paged). |
 | **F12** | Core | **Watchlists/favorites:** per-profile, persistent across rename/relink/source disconnect/metadata correction. |
-| **F13** | Core | **Tracks/subtitles:** embedded, adjacent and manual file support by device; audio track selection; subtitle language, offset/size where supported; Bengali and Unicode; document ASS/image limitations. |
+| **F13** | Core | **Tracks/subtitles:** embedded tracks first, then sidecar files beside the media (`.srt`, `.smi`, `.vtt`, `.ass`, `.ssa`, `.sub`, `.ttml`, `.dfxp`), by device; audio track selection; subtitle language, offset/size where supported; Bengali and Unicode; document ASS/image limitations. |
 | **F14** | Advanced | **Skip intro/credits:** verified provider or manually entered markers, confidence/runtime/edition validation, reversible/accurate skip, protect post-credit scenes, offline use only if permitted. No invented markers. |
-| **F15** | Advanced | **Subtitle search/download:** free permitted provider with match/release/hash/language, quota/error handling, user-triggered save and offline reuse; manual/embedded fallback. |
+| **F15** | Advanced | **Subtitles for a file, file-first:** an embedded track or a sidecar satisfies the request and no network is consulted; only when neither exists may the app ask **The Subtitle DB**, its single online provider, and offer matches by TMDB id, IMDb id, infohash, release name or title, with language/format recorded, a user-triggered keep into the library and offline reuse afterwards. No second online service, no fallback chain, no automatic background search. |
 | **F16** | Advanced | **Local recommendations:** explainable ranking restricted to owned local library, preferences/history/available titles; no paid/hosted AI required; cold-start behavior. |
 | **F17** | Advanced | **Browse previews:** muted delayed preview, one active decoder, capped resources, reduced-motion setting, still-image/offline fallback. |
 | **F18** | Advanced | **PiP: withdrawn (2026-11-02).** The owner does not want Picture-in-Picture, so the requirement is removed rather than replaced: no OS PiP and no mini-player substitute is offered. ADR-016 is withdrawn and nothing depends on it. |
@@ -86,7 +103,7 @@ IDs are persistent across architecture/implementation/tests. **Milestone labels 
 
 **Q02 Performance:** cold/warm startup, first useful scan result, input-to-response, first video frame and stable 4K playback measured on owner hardware; no asserted zero-lag promise. Measure Tauri/WebView/DS overhead against an actually feasible baseline on the same hardware, including memory, idle CPU, remote-key latency and animation stability. Watching has resource priority; no runaway scans/transcodes; virtualize results; one preview decoder; cap poster resolutions and queues.
 
-**Q03 Fidelity:** preserve aspect ratio by default, honor stream timebase/audio/subtitle selection, accurately checkpoint by session ID, never pretend a codec/container extension guarantees playback/HDR.
+**Q03 Fidelity:** preserve aspect ratio by default, honor stream timebase/audio/subtitle selection, accurately checkpoint by session ID, never pretend a codec or container extension guarantees playback.
 
 **Q04 Portability:** one monorepo; shared domain contracts and adaptable UI; OS-specific player/permission/storage implementations isolated behind explicit feature/capability interfaces. A TV package is not a Tauri binary.
 
@@ -94,7 +111,7 @@ IDs are persistent across architecture/implementation/tests. **Milestone labels 
 
 **Q06 Durability:** migrations/transactions/journals with rollback; device unplugged or update must not silently drop profile/library data. Provider images retained only as permitted; TV uninstall may delete private app data, so backup is needed.
 
-**Q07 Accessibility and design quality:** every critical TV flow works via remote, Windows via keyboard/mouse, meaningful accessible names/contrast/reduced motion, subtitle scaling and legibility, deterministic focus/scroll restoration. Dropout DS WCAG 2.2 AA, contrast, 44×44 coarse targets and borderless semantic focus states apply; TV D-pad focus must be couch-distance-visible without unsupported CSS effects.
+**Q07 Accessibility and design quality:** every critical TV flow works via remote, Windows via keyboard/mouse, with legible labels, contrast, reduced motion, subtitle scaling and legibility, and deterministic focus/scroll restoration. Screen-reader support beyond the platform's own defaults is **not** a requirement: VoiceOver-specific functionality was removed on 2026-11-03 (ADR-005) and the keyboard, focus, motion and subtitle requirements above remain. Dropout DS WCAG 2.2 AA, contrast, 44×44 coarse targets and borderless semantic focus states apply; TV D-pad focus must be couch-distance-visible without unsupported CSS effects.
 
 **Q08 Honest reporting:** implemented ≠ unit-tested ≠ browser-tested ≠ physical Windows-tested ≠ Samsung-certified. Capability matrix updated at each milestone.
 
@@ -105,7 +122,7 @@ IDs are persistent across architecture/implementation/tests. **Milestone labels 
 - **M2 — Complete core:** F01–F13 and F20–F22 to independently verified supported behavior; robust identity/scanning, collection-wide metadata and permitted durable artwork, profiles/history, large library and recoverability.
 - **M3 — Advanced personal experiences:** F14–F19 and F23–F25 where feasible and rights-compliant; record explicit tested fallbacks/owner exceptions, don't drop or counterfeit scope.
 - **M4 — Packaging and hardening:** migration/backup/security/codec/perf/accessibility audits, Windows installer and signed **development** TV package, verified personal-use installation and recovery.
-- **M5 — Optional platform reach (historical; phones removed by ADR-003):** Mac, Linux, LG webOS/Android TV/other TVs through the same shared domain/core repo and new adapters after actual demand. No default requirement to enroll in paid stores.
+- **M5 — retired platform reach:** phones, Linux, LG webOS and Android TV were removed by [ADR-003](ADR-003_DESKTOP_AND_TV_SCOPE.md) and [ADR-004](ADR-004_PERSONAL_EDITION_SCOPE.md). macOS is a delivered target, not a later reach; the Windows and Samsung halves stay blocked on their own gates, not on scope.
 
 The user wants **the entire application properly built**; milestones are engineering checkpoints, not a claim that M2 equals every requested feature.
 
@@ -119,7 +136,7 @@ C. For a renamed/moved title, metadata correction or disconnected drive, stable 
 
 D. With 10,000 generated library records, the **entire** result set remains discoverable, scanning/background jobs can be stopped, and UI remains usable; empirical performance numbers are recorded, not invented.
 
-E. Test rights-cleared image retention, source/recovery migration, provider outage/quotas, low storage, subtitle Unicode and unsupported audio/HDR; mark all observed device restrictions.
+E. Test rights-cleared image retention, source/recovery migration, provider outage/quotas, low storage, subtitle Unicode and unsupported audio; mark all observed device restrictions.
 
 F. Zero required recurring/one-off paid service subscriptions in personal mode; read originals in place; one repository.
 
@@ -131,11 +148,17 @@ Acceptance maps to `TEST_PLAN.md`; quantitative timing/budget targets are *propo
 
 ## 8. Open decisions and exclusions
 
-- Unknown actual Windows hardware/OS/resolution/audio/HDR; the user can supply later, or a permitted on-device script can report non-sensitive facts.
+- Unknown actual Windows hardware/OS/resolution/audio; the user can supply later, or a permitted on-device script can report non-sensitive facts.
 - TV installation, USB permission, filesystem and AVPlay lifecycle/storage survive only theoretical documentation today; physical acceptance requires first-person evidence.
 - libmpv/native composition approach, compatible distribution builds/licenses are unsettled.
 - TMDB metadata/image offline retention terms unresolved; alternative provider or user/local artwork may be necessary if required caching conflicts with permissions.
-- OpenSubtitles quota figures conflict across current first-party help pages; implement usage discovery and conservative fallback, not a hardcoded free tier.
+- **Subtitle provider settled (2026-11-03):** The Subtitle DB only, reached after
+  embedded tracks and sidecars — see
+  [`ADR-005`](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md) and
+  [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md). OpenSubtitles was removed, so
+  the earlier question about conflicting OpenSubtitles quota figures no longer
+  applies; TSDB publishes no rate limit on lookups and 1 000 downloads per hour
+  anonymously, 100 000 per day with a key.
 - Dflix exact CDN reachability, TorrentBD URL/integration rights and Bangladesh directory accuracy unverified.
 - No automatic media torrent downloading, parental restrictions, cross-device sync, third-party paid platform integration or public-store release specified for initial personal build.
 - "Screenroom" brand/name, visual tokens and precise advanced-milestone priorities await later review; routine defaults should be implemented sensibly and transparently, not via an exhaustive questionnaire.

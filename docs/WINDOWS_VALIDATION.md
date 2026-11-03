@@ -137,8 +137,10 @@ as a limitation, not a defect, unless it fails to recover.
    you are looking at the CPU bridge — the same one measured at 1080p on macOS, with
    unknown 4K headroom. `RenderBridge::Direct3D11` names the *intended* bridge, not a
    working one.
-2. **4K, HDR and hardware decode are unmeasured everywhere.** The macOS benchmark
-   that reads as "4K" actually measures 1080p (`MAX_DIMENSION = 1920`).
+2. **4K and hardware decode are unmeasured everywhere.** The macOS benchmark
+   that reads as "4K" actually measures 1080p (`MAX_DIMENSION = 1920`). HDR is not
+   in this list: it was removed on 2026-11-03 ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md))
+   and SDR is the only output on every platform.
 3. **Nobody has heard audio.** The audio clock and `avsync` are measured; listening
    is not.
 4. **No Windows packaging or signing.** `scripts/package-macos.sh` and
