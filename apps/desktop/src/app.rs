@@ -58,7 +58,7 @@ const SUGGESTIONS: i64 = 8;
 
 const QUIT_ROUTING_BUDGET: u8 = 40;
 
-const MAX_SUBTITLE_ROWS: usize = 6;
+const MAX_SUBTITLE_ROWS: usize = 4;
 
 const MODE_SETTLE: Duration = Duration::from_millis(1_500);
 
