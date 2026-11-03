@@ -154,17 +154,6 @@ gate_leave() {
   release_of "$gate"
 }
 
-reclaim() {
-  if ! gate_enter; then
-    return 1
-  fi
-  if ! live_holder; then
-    rm -f "$lock"
-  fi
-  gate_leave
-  return 0
-}
-
 acquire() {
   if ! gate_enter; then
     return 1
@@ -194,10 +183,6 @@ record() {
   printf '{"sha":"%s","result":"%s","detail":"%s","finished":"%s","head":"%s","dirty":%s}\n' \
     "$1" "$2" "$3" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(git rev-parse HEAD)" "${4:-false}" >"$last"
 }
-
-if [ "$force" -eq 1 ] && [ -f "$lock" ] && ! live_holder; then
-  reclaim
-fi
 
 if ! acquire; then
   printf '%s\n%s\n' "$root" "$(git rev-parse HEAD)" >"$pending"
