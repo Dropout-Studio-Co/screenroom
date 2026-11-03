@@ -52,7 +52,7 @@ Rules that hold at every tier:
 ## 2. Routes used
 
 Base: `https://api.thesubtitledb.org`. Lookups are anonymous; only the catalogue
-search needs a key.
+search requires a key, and the download route accepts one to raise its allowance.
 
 | Route | What it answers | Auth |
 | --- | --- | --- |
@@ -63,7 +63,7 @@ search needs a key.
 | `GET /v1/by-title?q=…&type=movie\|tv` | one resolved title; not a candidate list | none |
 | `GET /v1/by-search?q=…&type=movie\|tv` | catalogue search | `Authorization: Bearer sdb_…` |
 | `GET /v1/by-subid/{id}` | one subtitle's own record | none |
-| `GET /get/{id}` | the subtitle bytes; answers 302 to `files.thesubtitledb.org` | none |
+| `GET /get/{id}` | the subtitle bytes; answers 302 to `files.thesubtitledb.org` | optional: `Bearer` raises the download allowance |
 
 Parameters: `lang`, `format`, `limit` (at most 100) and `offset` (at most
 10 000). The lookup order is the identity the library actually has: a known TMDB
@@ -96,9 +96,17 @@ down, printed, logged or committed** — not in this document, not in a test, no
 in a receipt. The file is read once, held in memory for the request, and its
 presence alone is what a capability report shows.
 
-A key is used by `/v1/by-search` and by nothing else. An invalid or missing key is
-reported as such: it is never reinterpreted as anonymous access, and lookups that
-need no key keep working without one.
+A key is attached to two things only: `/v1/by-search`, which refuses to answer
+without one, and `/get/{id}`, where it raises the download allowance from 1 000 an
+hour to 100 000 a day. It is never attached to a lookup route, never written into a
+URL, never followed across a host change, and it is **not sent at all over a plain
+`http` base address** — a keyed configuration pointed at `http` is reported as
+not configured rather than shipping the credential in the clear. An invalid or
+missing key is reported as such: it is never reinterpreted as anonymous access,
+and lookups that need no key keep working without one.
+
+The key file must be readable by your own account only. A file that other accounts
+can read is refused with the `chmod 600` that fixes it, rather than being used.
 
 ## 4. Published limits
 

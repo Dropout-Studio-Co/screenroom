@@ -128,7 +128,9 @@ fn config() -> SubtitleProviderConfig {
 }
 
 fn keyed_config() -> SubtitleProviderConfig {
-    config().with_api_key("unit-test-key")
+    config()
+        .with_base_url("https://api.invalid")
+        .with_api_key("unit-test-key")
 }
 
 fn provider_with(config: SubtitleProviderConfig, shared: Rc<Shared>) -> (TsdbProvider, FakeTime) {
@@ -500,14 +502,14 @@ fn a_keyed_search_picks_the_best_title_then_reads_its_subtitles() {
     assert!(
         requests[0]
             .url
-            .starts_with("http://api.invalid/v1/by-title?"),
+            .starts_with("https://api.invalid/v1/by-title?"),
         "{}",
         requests[0].url
     );
     assert!(
         requests[1]
             .url
-            .starts_with("http://api.invalid/v1/by-search?q=Harbour%20Lights&type=movie"),
+            .starts_with("https://api.invalid/v1/by-search?q=Harbour%20Lights&type=movie"),
         "{}",
         requests[1].url
     );
@@ -520,7 +522,7 @@ fn a_keyed_search_picks_the_best_title_then_reads_its_subtitles() {
     assert!(
         requests[2]
             .url
-            .starts_with("http://api.invalid/v1/by-tmdb/movie/76342?"),
+            .starts_with("https://api.invalid/v1/by-tmdb/movie/76342?"),
         "the title with the most Bengali subtitles is the one to read: {}",
         requests[2].url
     );
@@ -1197,8 +1199,34 @@ impl Environment {
 }
 
 fn write_key_file(directory: &Path, body: &str) {
-    std::fs::write(directory.join(TSDB_KEY_FILE_NAME), body).expect("a key file");
+    let path = directory.join(TSDB_KEY_FILE_NAME);
+    std::fs::write(&path, body).expect("a key file");
+    restrict_to_owner(&path);
 }
+
+fn write_open_key_file(directory: &Path, body: &str) {
+    let path = directory.join(TSDB_KEY_FILE_NAME);
+    std::fs::write(&path, body).expect("a key file");
+    open_to_other_accounts(&path);
+}
+
+#[cfg(unix)]
+fn restrict_to_owner(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).expect("a private key");
+}
+
+#[cfg(not(unix))]
+fn restrict_to_owner(_path: &Path) {}
+
+#[cfg(unix)]
+fn open_to_other_accounts(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).expect("a shared key");
+}
+
+#[cfg(not(unix))]
+fn open_to_other_accounts(_path: &Path) {}
 
 fn write_config_file(directory: &Path, body: &str) -> std::path::PathBuf {
     let path = directory.join("subtitles.conf");
@@ -1330,6 +1358,89 @@ fn an_oversized_or_non_regular_key_file_is_refused() {
         .configuration_error
         .expect("a directory is not a key file");
     assert!(error.contains("regular file"), "{error}");
+}
+
+#[test]
+fn a_key_file_other_accounts_can_read_is_refused() {
+    let environment = Environment::take();
+    let directory = TempDir::new().expect("temp dir");
+    write_open_key_file(directory.path(), "key-file-value-1");
+    environment.set(TSDB_CONFIG_DIR_ENVIRONMENT, directory.path());
+
+    let config = SubtitleProviderConfig::from_environment();
+
+    if cfg!(unix) {
+        assert!(config.api_key.is_none());
+        let error = config.configuration_error.expect("a shared key file");
+        assert!(error.contains("chmod 600"), "{error}");
+    } else {
+        assert_eq!(
+            config.api_key.as_ref().map(Secret::expose),
+            Some("key-file-value-1")
+        );
+    }
+}
+
+#[test]
+fn an_environment_key_survives_a_config_file_that_cannot_be_read() {
+    let environment = Environment::take();
+    let directory = TempDir::new().expect("temp dir");
+    environment.set(TSDB_API_KEY_ENVIRONMENT, "environment-key-1");
+    environment.set(
+        TSDB_CONFIG_ENVIRONMENT,
+        directory.path().join("missing.conf"),
+    );
+    environment.set(TSDB_CONFIG_DIR_ENVIRONMENT, directory.path());
+
+    let config = SubtitleProviderConfig::from_environment();
+
+    assert_eq!(
+        config.api_key.as_ref().map(Secret::expose),
+        Some("environment-key-1")
+    );
+    assert!(config.configuration_error.is_none());
+}
+
+#[test]
+fn a_key_is_never_sent_over_plain_http() {
+    let shared = Shared::new(vec![Reply::Answer(missing())]);
+    let plain = config().with_api_key("unit-test-key");
+    let (provider, _time) = provider_with(plain, shared.clone());
+
+    assert!(!provider.search_is_keyed());
+    let capability = provider.capability();
+    assert!(!capability.is_configured());
+    assert!(capability.detail.contains("https"), "{}", capability.detail);
+
+    let _ = provider
+        .search(&SubtitleSearch::movie("Harbour Lights", Some(2014), "bn"))
+        .expect("the anonymous lookup still answers");
+
+    assert!(
+        shared.requests().iter().all(|request| !request
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))),
+        "a plain http request must carry no credential"
+    );
+}
+
+#[test]
+fn a_hostile_year_does_not_overflow_the_match_check() {
+    let shared = Shared::new(vec![
+        Reply::Answer(json(
+            "{\"title\": {\"media_type\": \"movie\", \"name\": \"Harbour Lights\", \
+             \"year\": -9223372036854775808}, \"subtitles\": {\"total\": 0, \"items\": []}}",
+        )),
+        Reply::Answer(missing()),
+    ]);
+    let (provider, _time) = provider_with(config(), shared.clone());
+
+    let matches = provider
+        .search(&SubtitleSearch::movie("Harbour Lights", Some(2014), "bn").with_tmdb(76341))
+        .expect("a hostile year is a miss, not a panic");
+
+    assert!(matches.is_empty());
 }
 
 #[test]

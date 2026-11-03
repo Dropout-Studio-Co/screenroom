@@ -207,6 +207,7 @@ impl SubtitleProviderConfig {
         if let Some(key) = environment_key {
             if key_is_usable(&key) {
                 config.api_key = Some(Secret::new(key));
+                config.configuration_error = None;
             } else {
                 config.api_key = None;
                 config.configuration_error = Some(KEY_REJECTED.to_string());
@@ -246,6 +247,9 @@ const KEY_FILE_REJECTED: &str = "The subtitle key file was rejected. It must hol
      no spaces.";
 
 const KEY_FILE_UNREADABLE: &str = "The subtitle key file cannot be read.";
+
+const KEY_FILE_PERMISSIONS: &str = "The subtitle key file can be read by other accounts. Restrict it to your own, for example \
+     with chmod 600.";
 
 const KEY_FILE_UNUSABLE: &str =
     "The subtitle key file is not a regular file of at most 1024 bytes.";
@@ -295,6 +299,17 @@ fn default_configuration_directory() -> Option<PathBuf> {
     )
 }
 
+#[cfg(unix)]
+fn key_file_is_private(metadata: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    metadata.permissions().mode() & 0o077 == 0
+}
+
+#[cfg(not(unix))]
+fn key_file_is_private(_metadata: &std::fs::Metadata) -> bool {
+    true
+}
+
 fn read_key_file(directory: &Path) -> std::result::Result<Option<String>, String> {
     let path = directory.join(TSDB_KEY_FILE_NAME);
     let metadata = match std::fs::metadata(&path) {
@@ -304,6 +319,9 @@ fn read_key_file(directory: &Path) -> std::result::Result<Option<String>, String
     };
     if !metadata.is_file() || metadata.len() > KEY_FILE_MAX_BYTES {
         return Err(KEY_FILE_UNUSABLE.to_string());
+    }
+    if !key_file_is_private(&metadata) {
+        return Err(KEY_FILE_PERMISSIONS.to_string());
     }
     let body = std::fs::read_to_string(&path).map_err(|_| KEY_FILE_UNREADABLE.to_string())?;
     let key = body.trim();
@@ -504,7 +522,15 @@ impl TsdbProvider {
     }
 
     pub fn search_is_keyed(&self) -> bool {
-        self.config.api_key.is_some()
+        self.config.api_key.is_some() && self.base_is_secure()
+    }
+
+    fn base_is_secure(&self) -> bool {
+        self.config
+            .base_url
+            .trim()
+            .to_ascii_lowercase()
+            .starts_with("https://")
     }
 
     fn with_agent(&self, request: HttpRequest) -> HttpRequest {
@@ -516,8 +542,10 @@ impl TsdbProvider {
     fn with_key(&self, request: HttpRequest) -> HttpRequest {
         let request = self.with_agent(request);
         match &self.config.api_key {
-            Some(key) => request.with_header("Authorization", format!("Bearer {}", key.expose())),
-            None => request,
+            Some(key) if self.base_is_secure() => {
+                request.with_header("Authorization", format!("Bearer {}", key.expose()))
+            }
+            _ => request,
         }
     }
 
@@ -801,6 +829,10 @@ fn usable_identifier(value: &str) -> Option<&str> {
     .then_some(trimmed)
 }
 
+fn years_apart(remote: i64, requested: i64) -> bool {
+    remote.saturating_sub(requested).unsigned_abs() > 1
+}
+
 fn title_matches(title: &Value, request: &SubtitleSearch) -> bool {
     let Some(expected) = kind_parameter(request.kind) else {
         return false;
@@ -816,7 +848,7 @@ fn title_matches(title: &Value, request: &SubtitleSearch) -> bool {
     }
     if let (Some(remote), Some(requested)) =
         (title.get("year").and_then(Value::as_i64), request.year)
-        && (remote - requested).abs() > 1
+        && years_apart(remote, requested)
     {
         return false;
     }
@@ -854,7 +886,7 @@ fn choose_search_result<'a>(
         }
         if let (Some(remote), Some(requested)) =
             (result.get("year").and_then(Value::as_i64), request.year)
-            && (remote - requested).abs() > 1
+            && years_apart(remote, requested)
         {
             continue;
         }
@@ -964,6 +996,13 @@ impl SubtitleProvider for TsdbProvider {
         }
         if let Err(reason) = scheme_is_carried(self.transport.as_ref(), &self.config.base_url) {
             return ProviderCapability::not_configured(TSDB_PROVIDER, reason);
+        }
+        if self.config.api_key.is_some() && !self.base_is_secure() {
+            return ProviderCapability::not_configured(
+                TSDB_PROVIDER,
+                "The subtitle key is not sent over plain http. Point the provider at an https \
+                 address before using a key.",
+            );
         }
         let mut capability = ProviderCapability::configured(TSDB_PROVIDER, "en");
         capability.detail = if self.search_is_keyed() {
