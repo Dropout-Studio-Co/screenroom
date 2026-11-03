@@ -107,6 +107,8 @@ pub struct PlayerSnapshot {
 
     pub tracks: Vec<MediaTrack>,
 
+    pub reclaimed_while_reading: u64,
+
     pub audio_pts: Option<f64>,
 
     pub avsync: Option<f64>,
@@ -143,6 +145,7 @@ impl Default for PlayerSnapshot {
             loaded: false,
             tracks_ready: false,
             tracks: Vec::new(),
+            reclaimed_while_reading: 0,
             audio_pts: None,
             avsync: None,
             total_avsync_change: None,
@@ -590,6 +593,14 @@ impl FrameRenderer {
             Self::Software(renderer) => renderer.render(),
             #[cfg(target_os = "macos")]
             Self::Gpu(renderer) => renderer.render(),
+        }
+    }
+
+    fn reclaimed_while_reading(&self) -> u64 {
+        match self {
+            Self::Software(_) => 0,
+            #[cfg(target_os = "macos")]
+            Self::Gpu(renderer) => renderer.reclaimed_while_reading(),
         }
     }
 
@@ -1462,6 +1473,7 @@ impl Runner {
         let (volume, muted) = (self.volume, self.muted);
         let hardware_decoder = self.hardware_decoder.clone();
         let output = self.renderer.output();
+        let reclaimed = self.renderer.reclaimed_while_reading();
         let (load_id, position_ready, seek_serial) =
             (self.load_id, self.position_ready, self.seek_serial);
         publish(shared, |snapshot| {
@@ -1484,6 +1496,7 @@ impl Runner {
             snapshot.muted = muted;
             snapshot.hardware_decoder = hardware_decoder;
             snapshot.output = output;
+            snapshot.reclaimed_while_reading = reclaimed;
         });
     }
 }

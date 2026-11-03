@@ -1030,6 +1030,21 @@ pub fn pointer_event(event: &iced::Event) -> Option<Message> {
     }
 }
 
+pub fn fit_label(label: &str, room_px: f32) -> String {
+    let mut used = 0.0_f32;
+    let mut kept = String::new();
+    for character in label.chars() {
+        let width = if character.is_ascii() { 7.0 } else { 14.0 };
+        if used + width > room_px {
+            kept.push('…');
+            return kept;
+        }
+        used += width;
+        kept.push(character);
+    }
+    kept
+}
+
 fn motion_ticks() -> Subscription<Message> {
     use iced::futures::StreamExt;
     use iced::futures::channel::mpsc;
@@ -2237,13 +2252,8 @@ impl App {
         } else {
             result.release_name.clone()
         };
-        let room = ((self.window_width - 260.0) / 7.0).clamp(24.0, 120.0) as usize;
-        let short: String = name.chars().take(room).collect();
-        let name = if name.chars().count() > room {
-            format!("{short}…")
-        } else {
-            short
-        };
+        let room = (self.window_width - 260.0).clamp(120.0, 720.0);
+        let name = fit_label(&name, room);
         format!("{name} · {} cues", result.cues)
     }
 
@@ -2298,7 +2308,7 @@ impl App {
         };
         if self.snapshot.load_id != active.load_id || !self.snapshot.tracks_ready {
             self.error = None;
-            let note = "This film's tracks are not ready yet; nothing was asked. Try again.";
+            let note = "Tracks are not ready yet; nothing was asked. Try again.";
             self.status = Some(note.to_string());
             self.note_subtitle(note);
             return;
@@ -2900,6 +2910,7 @@ impl App {
             return false;
         }
         run.note_tick();
+        run.note_reclaimed(self.snapshot.reclaimed_while_reading);
         let decoded = self
             .snapshot
             .frame
@@ -5914,7 +5925,7 @@ impl App {
                 }
                 panel = panel.push(entry);
             }
-            if window_len > 0 && entries.len() > window_len {
+            if self.subtitle_row_budget() >= 2 && window_len > 0 && entries.len() > window_len {
                 panel = panel.push(
                     text(format!(
                         "{}–{} of {}",

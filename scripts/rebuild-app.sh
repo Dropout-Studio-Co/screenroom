@@ -14,6 +14,8 @@ common="$(git rev-parse --git-common-dir)"
 common="$(cd "$common" && pwd)"
 lock="$common/screenroom-build.lock"
 pending="$common/screenroom-build.pending"
+reclaim="$common/screenroom-build.reclaim"
+gate="$common/screenroom-build.gate"
 stamp="$common/screenroom-installed.sha"
 last="$common/screenroom-build-last.json"
 state="$root/.artifacts/builds"
@@ -32,6 +34,12 @@ holder_pid() {
 
 holder_start() {
   cut -d'|' -f2- "$lock" 2>/dev/null || true
+}
+
+release_of() {
+  if [ "$(cut -d'|' -f1 "$1" 2>/dev/null || true)" = "$$" ]; then
+    rm -f "$1"
+  fi
 }
 
 live_holder() {
@@ -91,21 +99,22 @@ done
 mkdir -p "$state"
 
 if [ "$unlock" -eq 1 ]; then
-  rm -f "$lock" "$pending"
-  echo "rebuild-app: lock and pending marker cleared"
+  rm -f "$lock" "$pending" "$gate" "$reclaim"
+  echo "rebuild-app: lock, gate and pending marker cleared"
   exit 0
 fi
 
 my_start="$(ps -o lstart= -p $$ 2>/dev/null | tr -s ' ' | sed 's/^ //;s/ $//')"
 
 claim() {
-  local staging
+  local staging target
+  target="${1:-$lock}"
   staging="$(mktemp "$common/.screenroom-lock.XXXXXX")" || return 1
   if ! printf '%s|%s\n' "$$" "$my_start" >"$staging"; then
     rm -f "$staging"
     return 1
   fi
-  if ln "$staging" "$lock" 2>/dev/null; then
+  if ln "$staging" "$target" 2>/dev/null; then
     rm -f "$staging"
     return 0
   fi
@@ -113,20 +122,57 @@ claim() {
   return 1
 }
 
-acquire() {
-  local attempt
+gate_enter() {
+  local attempt holder start current
   attempt=0
-  while [ "$attempt" -lt 3 ]; do
+  while [ "$attempt" -lt 20 ]; do
     attempt=$((attempt + 1))
-    if claim; then
+    if claim "$gate"; then
       return 0
     fi
-    if live_holder; then
-      return 1
+    holder="$(cut -d'|' -f1 "$gate" 2>/dev/null || true)"
+    start="$(cut -d'|' -f2- "$gate" 2>/dev/null || true)"
+    current="$(ps -o lstart= -p "$holder" 2>/dev/null | tr -s ' ' | sed 's/^ //;s/ $//')"
+    if [ -z "$current" ] || [ "$current" != "$start" ]; then
+      rm -f "$gate"
     fi
-    sleep 1
+    sleep 0.2
   done
-  claim
+  return 1
+}
+
+gate_leave() {
+  release_of "$gate"
+}
+
+reclaim() {
+  if ! gate_enter; then
+    return 1
+  fi
+  if ! live_holder; then
+    rm -f "$lock"
+  fi
+  gate_leave
+  return 0
+}
+
+acquire() {
+  if ! gate_enter; then
+    return 1
+  fi
+  if claim "$lock"; then
+    gate_leave
+    return 0
+  fi
+  if ! live_holder; then
+    rm -f "$lock"
+    if claim "$lock"; then
+      gate_leave
+      return 0
+    fi
+  fi
+  gate_leave
+  return 1
 }
 
 release() {
@@ -141,7 +187,7 @@ record() {
 }
 
 if [ "$force" -eq 1 ] && [ -f "$lock" ] && ! live_holder; then
-  rm -f "$lock"
+  reclaim
 fi
 
 if ! acquire; then
@@ -227,6 +273,7 @@ stamp_state() {
   printf '%s\n' "$1"
 }
 
+built_any=""
 rounds=0
 while [ "$rounds" -lt 20 ]; do
   rounds=$((rounds + 1))
@@ -293,6 +340,7 @@ while [ "$rounds" -lt 20 ]; do
     chmod +x "$installed/Contents/MacOS/Screenroom" 2>/dev/null || true
     xattr -dr com.apple.quarantine "$installed" 2>/dev/null || true
     took="$(( $(date +%s) - started ))"
+    built_any="1"
     record "$head_sha" built "installed in ${took}s" "$dirty"
     printf '%s\n' "$head_sha" >"$stamp"
     echo "rebuild-app: installed $head_sha at $installed in ${took}s"
@@ -319,7 +367,7 @@ while [ "$rounds" -lt 20 ]; do
   break
 done
 
-if [ -f "$pending" ] && [ "$(cat "$stamp" 2>/dev/null || true)" != "$(git rev-parse HEAD)" ]; then
+if [ -f "$pending" ]; then
   queued_root="$(sed -n '1p' "$pending" 2>/dev/null || true)"
   rm -f "$pending"
   if [ -n "$queued_root" ] && [ "$queued_root" != "$root" ] && [ -x "$queued_root/scripts/rebuild-app.sh" ]; then
@@ -329,6 +377,10 @@ if [ -f "$pending" ] && [ "$(cat "$stamp" 2>/dev/null || true)" != "$(git rev-pa
     echo "rebuild-app: commits are still arriving; continuing in a fresh worker"
     nohup "$0" --background >>"$state/hooks.log" 2>&1 &
   fi
+fi
+
+if [ -n "$built_any" ] && [ "$(cat "$stamp" 2>/dev/null || true)" != "$(git rev-parse HEAD)" ]; then
+  nohup "$0" --background >>"$state/hooks.log" 2>&1 &
 fi
 
 if [ "$dirty" = "true" ]; then

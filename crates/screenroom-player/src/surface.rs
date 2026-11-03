@@ -244,6 +244,26 @@ impl Drop for SurfaceLock<'_> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_read_is_outstanding_until_it_is_released() {
+        let reads = SurfaceReads::default();
+        reads.note_reading(3);
+        assert!(reads.outstanding());
+
+        reads.note_released(3);
+        assert!(!reads.outstanding());
+
+        reads.note_reading(4);
+        reads.note_released(3);
+        assert!(
+            reads.outstanding(),
+            "a stale release must not settle a newer read"
+        );
+
+        reads.note_released(4);
+        assert!(!reads.outstanding());
+    }
     use super::*;
 
     #[test]

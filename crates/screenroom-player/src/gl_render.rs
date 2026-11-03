@@ -708,7 +708,10 @@ impl GlRenderer {
             return;
         }
         if self.slots.iter().any(|slot| {
-            Arc::strong_count(&slot.surface) != 1 || slot.write.pending || slot.fence.is_some()
+            Arc::strong_count(&slot.surface) != 1
+                || slot.write.pending
+                || slot.fence.is_some()
+                || !slot.reads_reported()
         }) {
             return;
         }

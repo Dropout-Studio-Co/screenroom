@@ -264,13 +264,6 @@ impl std::fmt::Debug for ImportedSurface {
 }
 
 impl VideoPipeline {
-    fn release_sampled(&mut self) {
-        #[cfg(target_os = "macos")]
-        {
-            self.sampled = None;
-        }
-    }
-
     fn can_reuse(&self, frame: &Frame) -> bool {
         self.bind_group.is_some()
             && self.uploaded_generation == Some(frame.generation)
@@ -563,9 +556,7 @@ impl shader::Pipeline for VideoPipeline {
         }
     }
 
-    fn trim(&mut self) {
-        self.release_sampled();
-    }
+    fn trim(&mut self) {}
 }
 
 fn bytemuck_f32(values: &[f32; 4]) -> &[u8] {
@@ -1077,6 +1068,33 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         );
         assert!(pipeline.texture_size == (4, 4));
         assert!(pipeline.uploaded_generation == Some(7));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_trim_keeps_the_sample_lease_that_releases_the_surface() {
+        let Some((device, queue)) = device() else {
+            return;
+        };
+        let pipeline = VideoPipeline::new(&device, &queue, wgpu::TextureFormat::Bgra8UnormSrgb);
+        let surface = std::sync::Arc::new(
+            screenroom_player::SurfaceFrame::new(8, 8).expect("a surface exists"),
+        );
+        let frame = Frame::gpu(8, 8, std::sync::Arc::clone(&surface), 1);
+        let mut pipeline = pipeline;
+        pipeline.sampled = Some(SampledSurface {
+            key: 7,
+            generation: frame.generation,
+            reads: std::sync::Arc::clone(surface.reads()),
+        });
+
+        pipeline.trim();
+
+        assert!(
+            pipeline.sampled.is_some(),
+            "trim runs before submit; dropping the lease here means the release is never registered"
+        );
     }
 
     #[test]

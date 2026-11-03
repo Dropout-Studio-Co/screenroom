@@ -195,6 +195,8 @@ pub struct Run {
     rendered: (u32, u32),
     visible: bool,
     drawn_frames: u64,
+
+    reclaimed_while_reading: u64,
     drawn_seen: u64,
     sampler: Option<Sampler>,
     failure: Option<String>,
@@ -270,6 +272,7 @@ impl Run {
             rendered: (0, 0),
             visible: visible_requested(),
             drawn_frames: 0,
+            reclaimed_while_reading: 0,
             drawn_seen: 0,
             sampler: None,
             failure: None,
@@ -278,6 +281,10 @@ impl Run {
 
     pub fn note_window(&mut self, visible: bool) {
         self.visible = visible;
+    }
+
+    pub fn note_reclaimed(&mut self, total: u64) {
+        self.reclaimed_while_reading = total;
     }
 
     pub fn note_drawn(&mut self, total: u64, _now: Instant) {
@@ -473,6 +480,10 @@ impl Run {
         push("delivered_total", delivered_delta.to_string());
         push("uploaded_total", uploaded_delta.to_string());
         push("imported_total", imports().to_string());
+        push(
+            "reclaimed_while_reading",
+            self.reclaimed_while_reading.to_string(),
+        );
         push("imported_fps", format!("{:.3}", imports() as f64 / window));
         push(
             "picture_surface",

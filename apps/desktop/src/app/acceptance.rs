@@ -1806,8 +1806,9 @@ fn before_the_player_reports_its_tracks_nothing_online_is_asked() {
     assert!(app.subtitle_results.is_empty());
     assert!(app.error.is_none(), "{:?}", app.error);
     let status = app.status.clone().unwrap_or_default();
-    assert!(status.contains("tracks"), "{status}");
+    assert!(status.contains("Tracks"), "{status}");
     assert!(status.contains("nothing was asked"), "{status}");
+    assert!(status.contains("Try again"), "{status}");
 }
 
 #[test]
@@ -2026,6 +2027,22 @@ fn a_subtitle_that_appears_after_the_search_stops_the_download() {
     assert!(app.subtitle_download.is_none(), "no download may start");
     let note = app.subtitle_note.clone().unwrap_or_default();
     assert!(note.contains("own subtitle"), "{note}");
+}
+
+#[test]
+fn a_wide_label_is_measured_not_counted() {
+    let wide = "映画の字幕ファイル名がとても長い場合のテスト用ラベルです";
+    let fitted = fit_label(wide, 140.0);
+    assert!(fitted.ends_with('…'), "{fitted}");
+    let width: f32 = fitted
+        .chars()
+        .map(|c| if c.is_ascii() { 7.0 } else { 14.0 })
+        .sum();
+    assert!(width <= 140.0 + 14.0, "{width}");
+
+    let ascii = "Parasite.2019.1080p.AMZN.WEB-DL.Dual.Audio.HEVC";
+    let fitted = fit_label(ascii, 140.0);
+    assert!(fitted.chars().count() > 14, "{fitted}");
 }
 
 #[test]

@@ -33,6 +33,38 @@ device test. The TSDB paths need the owner's key and the commands in
 (2026-11-03), and the two steps that need a visible window and a person are still
 PENDING.
 
+### GPU read completion, 2026-11-04
+
+The video surface never told the player when the GPU had finished sampling it.
+`VideoPipeline::trim` — which iced calls after **every** draw, before the frame is
+submitted — discarded the `sampled` record, so the completion callback that
+`note_sampled` registers on the next frame was never registered for the last sample.
+`SurfaceReads` therefore stayed `begun > finished`, `reads_reported()` stayed false,
+and the player fell back to its 250 ms publication-age grace before reusing a slot.
+
+The fix keeps the sample record across `trim`, so the release is registered against a
+submission that already contains that frame's sampling; `reap_surplus_slots` also
+refuses to destroy a slot whose read is not reported. The grace timer stays only as a
+fallback for the case where no further frame arrives.
+
+New observation, now in the play-check report as `reclaimed_while_reading`, same
+release build and 20 s hidden-window 1080p run:
+
+| | Reclaims while reading | Delivered | Imports | Failure |
+| --- | --- | --- | --- | --- |
+| Before | **346** | 30.2 fps | 30.0 /s | none |
+| After | **0** | 30.1 fps | 30.0 /s | none |
+
+The planning pass (GPT-6.1 Sol, read-only) proposed per-draw `RenderPass`
+completion leases; the measured zero on the normal path made the smaller change the
+right one to land, and the lease machinery remains an option if a future consumer can
+hold a surface past its grace. Two limits stay deliberate: the 250 ms grace is still
+the fallback when no further frame arrives to carry a release, and subtitle labels are
+fitted by estimated glyph width rather than measured text. Plan and reasoning:
+[`superpowers/plans/2026-11-04-gpu-sync-and-final-review.md`](superpowers/plans/2026-11-04-gpu-sync-and-final-review.md).
+Tests: `a_trim_keeps_the_sample_lease_that_releases_the_surface` and
+`a_read_is_outstanding_until_it_is_released`.
+
 ### Playback: flicker and pointer-driven chrome, 2026-11-03
 
 Two defects were fixed and measured on the installed bundle playing a generated
@@ -79,7 +111,7 @@ Regression tests: `a_trim_keeps_the_picture_bindable_so_a_redraw_is_not_blank`,
 and seven acceptance tests covering exit and entry, a repeated boundary, a tick with
 the pointer out, the menu hold and its selection, a paused key press while outside,
 a hovered slider that must not hold, and a resize that releases the hold. The suite
-is **792 tests, 0 failures**.
+is **795 tests, 0 failures**.
 
 ### Subtitles verified in the running application, 2026-11-03
 
@@ -103,7 +135,7 @@ the drop-on-film-change behaviour; the suite is **771 tests, 0 failures**.
 
 | Removed | Evidence it is gone | What replaced it |
 | --- | --- | --- |
-| `apps/desktop/src/accessibility.rs` (2,703 lines) and its call sites | the file is deleted; no `NSAccessibility` selector, `ScreenFacts`, `Role`, `Action`, `SCREENROOM_AX_CHECK` or `mod accessibility` remains, and `grep -rn "NSAccessibility" apps/desktop/src` is empty (the one surviving word is `accessibilityDisplayShouldReduceMotion`, the reduced-motion system query moved to `motion.rs`); `cargo test -p screenroom-desktop --lib` is 372 tests, the 26 AX tests gone and the keyboard/focus ones intact | `apps/desktop/src/motion.rs` keeps `system_reduce_motion` for the three callers that used it |
+| `apps/desktop/src/accessibility.rs` (2,703 lines) and its call sites | the file is deleted; no `NSAccessibility` selector, `ScreenFacts`, `Role`, `Action`, `SCREENROOM_AX_CHECK` or `mod accessibility` remains, and `grep -rn "NSAccessibility" apps/desktop/src` is empty (the one surviving word is `accessibilityDisplayShouldReduceMotion`, the reduced-motion system query moved to `motion.rs`); `cargo test -p screenroom-desktop --lib` is 374 tests, the 26 AX tests gone and the keyboard/focus ones intact | `apps/desktop/src/motion.rs` keeps `system_reduce_motion` for the three callers that used it |
 | HDR mode, extended-range output, the setting and `hdr_check` | `grep -rniE "SCREENROOM_HDR\|HdrMode\|hdr_extended\|extended_range\|Rgba16Float\|is_extended" apps crates` returns nothing; `crates/screenroom-player/src/display.rs` deleted | SDR only: libmpv still decodes 10-bit/4K and tone-maps into the eight-bit surface |
 | `vendor/iced_wgpu` and the root `[patch.crates-io]` entry | directory deleted; `Cargo.toml` has no patch section; `Cargo.lock` records `source = "registry+https://github.com/rust-lang/crates.io-index"` and checksum `ff144a99…` | crates.io `iced_wgpu` 0.14.0 |
 
