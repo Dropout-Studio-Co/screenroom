@@ -5895,10 +5895,13 @@ impl App {
                 let marker = if index == focus { "› " } else { "  " };
                 let kept = index < kept_len;
                 let mut entry = row![
-                    text(format!("{marker}{label}"))
-                        .size(tokens.type_scale.micro)
-                        .color(ink(tokens.palette.foreground)),
-                    Space::new().width(Length::Fill),
+                    container(
+                        text(format!("{marker}{label}"))
+                            .size(tokens.type_scale.micro)
+                            .color(ink(tokens.palette.foreground))
+                    )
+                    .width(Length::Fill)
+                    .clip(true),
                 ]
                 .spacing(tokens.spacing.field_x)
                 .align_y(Alignment::Center);

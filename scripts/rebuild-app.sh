@@ -123,18 +123,23 @@ claim() {
 }
 
 gate_enter() {
-  local attempt holder start current
+  local attempt quarantine holder start current
   attempt=0
   while [ "$attempt" -lt 20 ]; do
     attempt=$((attempt + 1))
     if claim "$gate"; then
       return 0
     fi
-    holder="$(cut -d'|' -f1 "$gate" 2>/dev/null || true)"
-    start="$(cut -d'|' -f2- "$gate" 2>/dev/null || true)"
-    current="$(ps -o lstart= -p "$holder" 2>/dev/null | tr -s ' ' | sed 's/^ //;s/ $//')"
-    if [ -z "$current" ] || [ "$current" != "$start" ]; then
-      rm -f "$gate"
+    quarantine="$common/.screenroom-gate.$$"
+    if mv "$gate" "$quarantine" 2>/dev/null; then
+      holder="$(cut -d'|' -f1 "$quarantine" 2>/dev/null || true)"
+      start="$(cut -d'|' -f2- "$quarantine" 2>/dev/null || true)"
+      current="$(ps -o lstart= -p "$holder" 2>/dev/null | tr -s ' ' | sed 's/^ //;s/ $//')"
+      if [ -n "$current" ] && [ "$current" = "$start" ]; then
+        mv "$quarantine" "$gate" 2>/dev/null || rm -f "$quarantine"
+      else
+        rm -f "$quarantine"
+      fi
     fi
     sleep 0.2
   done

@@ -303,6 +303,15 @@ impl VideoPipeline {
 }
 
 #[cfg(target_os = "macos")]
+impl Drop for VideoPipeline {
+    fn drop(&mut self) {
+        if let Some(sampled) = self.sampled.take() {
+            sampled.reads.note_released(sampled.generation);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn import_surface(
     device: &wgpu::Device,
     pipeline: &VideoPipeline,

@@ -15,7 +15,7 @@ const MAX_SURFACE_POOL_SIZE: usize = 16;
 
 const FENCE_TIMEOUT: Duration = Duration::from_secs(1);
 
-const READER_GRACE: Duration = Duration::from_millis(250);
+const READER_GRACE: Duration = Duration::from_millis(1000);
 
 const PARAM_API_TYPE: c_int = 1;
 const PARAM_OPENGL_INIT_PARAMS: c_int = 2;

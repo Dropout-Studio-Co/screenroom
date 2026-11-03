@@ -58,9 +58,11 @@ release build and 20 s hidden-window 1080p run:
 The planning pass (GPT-6.1 Sol, read-only) proposed per-draw `RenderPass`
 completion leases; the measured zero on the normal path made the smaller change the
 right one to land, and the lease machinery remains an option if a future consumer can
-hold a surface past its grace. Two limits stay deliberate: the 250 ms grace is still
-the fallback when no further frame arrives to carry a release, and subtitle labels are
-fitted by estimated glyph width rather than measured text. Plan and reasoning:
+hold a surface past its grace. Two limits are documented rather than hidden: the 1 s grace is the last-resort safety
+valve that keeps the surface pool from starving if a completion callback is ever lost
+(wgpu 27 exposes no render-pass submission callback, so a per-draw lease is not
+available), and subtitle labels are ellipsized from an estimated glyph width while the
+row itself lets the label fill and clip so the action can never be pushed out. Plan and reasoning:
 [`superpowers/plans/2026-11-04-gpu-sync-and-final-review.md`](superpowers/plans/2026-11-04-gpu-sync-and-final-review.md).
 Tests: `a_trim_keeps_the_sample_lease_that_releases_the_surface` and
 `a_read_is_outstanding_until_it_is_released`.
