@@ -1,0 +1,34 @@
+{
+  "title": {
+    "imdb": "tt0120338",
+    "tmdb_id": 597,
+    "media_type": "movie",
+    "name": "The Lantern Keeper",
+    "year": 1998,
+    "subtitle_count": 1,
+    "subtitle_languages": ["en"]
+  },
+  "subtitles": {
+    "total": 1,
+    "limit": 100,
+    "offset": 0,
+    "items": [
+      {
+        "id": 771001,
+        "language": "en",
+        "format": "srt",
+        "cues": 1490,
+        "duration_s": 11700,
+        "bytes": 112000,
+        "encoding": "utf-8",
+        "release_name": "The.Lantern.Keeper.1998.Remastered",
+        "hearing_impaired": false,
+        "uploader": "fixture",
+        "ai_transcribed": false,
+        "fps": 23.976,
+        "added_at": "2026-09-20T00:00:00Z",
+        "download_url": "https://api.thesubtitledb.org/get/771001"
+      }
+    ]
+  }
+}

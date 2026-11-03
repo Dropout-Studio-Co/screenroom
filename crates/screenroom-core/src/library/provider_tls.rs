@@ -9,7 +9,7 @@ use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 
 use super::provider_http::{
     DEFAULT_CONNECT_TIMEOUT, Deadline, HttpMethod, HttpRequest, HttpResponse, HttpTarget,
-    HttpTransport, MAX_RESPONSE_BYTES, TcpTransport, TransportError, parse_target_with,
+    HttpTransport, MAX_TRANSFER_BYTES, TcpTransport, TransportError, parse_target_with,
     read_response, url_scheme,
 };
 
@@ -99,7 +99,7 @@ impl HttpsTransport {
         deadline: &Deadline,
     ) -> Result<HttpResponse, TransportError> {
         let target = parse_target_with(url, "https", HTTPS_PORT)?;
-        let limit = request.max_bytes.min(MAX_RESPONSE_BYTES);
+        let limit = request.max_bytes.min(MAX_TRANSFER_BYTES);
         let socket = self.connect(&target, deadline)?;
         let control = socket.try_clone()?;
         let name =
@@ -140,12 +140,14 @@ impl HttpTransport for HttpsTransport {
         if !url_scheme(&request.url).is_some_and(|scheme| scheme == "https") {
             return self.plaintext.send(request);
         }
+        let start = parse_target_with(&request.url, "https", HTTPS_PORT)?;
         let deadline = Deadline::after(request.timeout);
         let mut url = request.url.clone();
         let mut followed = 0_usize;
         loop {
+            let hop = request_for_hop(request, &start.host, &url)?;
             let response = self
-                .exchange(&url, request, &deadline)
+                .exchange(&url, &hop, &deadline)
                 .map_err(classify)
                 .map_err(|error| error.into_timeout(request.timeout))?;
             if !is_redirect(response.status) || request.method != HttpMethod::Get {
@@ -159,7 +161,7 @@ impl HttpTransport for HttpsTransport {
                     "the answer redirected more often than the transport follows",
                 ));
             }
-            url = redirect_target(&url, &location)?;
+            url = redirect_target(&url, &location, &request.redirect_hosts)?;
             followed += 1;
         }
     }
@@ -240,7 +242,11 @@ fn is_redirect(status: u16) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
 }
 
-fn redirect_target(current: &str, location: &str) -> Result<String, TransportError> {
+fn redirect_target(
+    current: &str,
+    location: &str,
+    allow_hosts: &[String],
+) -> Result<String, TransportError> {
     let location = location.trim();
     if location.is_empty() || location.chars().any(char::is_control) {
         return Err(TransportError::InvalidRequest(
@@ -263,12 +269,41 @@ fn redirect_target(current: &str, location: &str) -> Result<String, TransportErr
     let target = target.split('#').next().unwrap_or(&target).to_string();
     let current = parse_target_with(current, "https", HTTPS_PORT)?;
     let next = parse_target_with(&target, "https", HTTPS_PORT)?;
-    if !current.host.eq_ignore_ascii_case(&next.host) || current.port != next.port {
-        return Err(TransportError::InvalidRequest(
-            "the answer redirected to a different host, which the transport does not follow",
-        ));
+    if current.host.eq_ignore_ascii_case(&next.host) && current.port == next.port {
+        return Ok(target);
     }
-    Ok(target)
+    if redirect_host_allowed(&next.host, allow_hosts) {
+        return Ok(target);
+    }
+    Err(TransportError::InvalidRequest(
+        "the answer redirected to a different host, which the transport does not follow",
+    ))
+}
+
+fn redirect_host_allowed(host: &str, allow_hosts: &[String]) -> bool {
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() {
+        return false;
+    }
+    allow_hosts.iter().any(|entry| {
+        let entry = entry.trim().trim_end_matches('.').to_ascii_lowercase();
+        !entry.is_empty() && (host == entry || host.ends_with(&format!(".{entry}")))
+    })
+}
+
+fn request_for_hop(
+    request: &HttpRequest,
+    start_host: &str,
+    url: &str,
+) -> Result<HttpRequest, TransportError> {
+    let target = parse_target_with(url, "https", HTTPS_PORT)?;
+    if target.host.eq_ignore_ascii_case(start_host) {
+        return Ok(request.clone());
+    }
+    let mut hop = request.clone();
+    hop.headers
+        .retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
+    Ok(hop)
 }
 
 fn origin_of(url: &str) -> Result<String, TransportError> {
@@ -292,6 +327,7 @@ fn authority_of(target: &HttpTarget) -> String {
 mod tests {
     use std::io::{BufRead, Write};
     use std::net::TcpListener;
+    use std::sync::Mutex;
     use std::sync::mpsc;
     use std::thread;
     use std::time::Instant;
@@ -305,7 +341,14 @@ mod tests {
     struct TestServer {
         base_url: String,
         certificate: CertificateDer<'static>,
+        heads: Arc<Mutex<Vec<String>>>,
         handle: thread::JoinHandle<()>,
+    }
+
+    impl TestServer {
+        fn heads(&self) -> Vec<String> {
+            self.heads.lock().expect("the head log").clone()
+        }
     }
 
     fn response(status: &str, headers: &[(&str, &str)], body: &[u8]) -> Vec<u8> {
@@ -325,17 +368,35 @@ mod tests {
     fn start_server_named(names: Vec<String>, replies: Vec<Vec<u8>>) -> TestServer {
         let CertifiedKey { cert, signing_key } =
             generate_simple_self_signed(names).expect("a self-signed certificate");
-        let certificate: CertificateDer<'static> = cert.der().clone();
-        let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(signing_key.serialize_der()));
+        start_secured(
+            &cert.der().clone(),
+            &signing_key.serialize_der(),
+            "127.0.0.1",
+            "127.0.0.1",
+            replies,
+        )
+    }
+
+    fn start_secured(
+        certificate: &CertificateDer<'static>,
+        signing_key_der: &[u8],
+        bind: &str,
+        name: &str,
+        replies: Vec<Vec<u8>>,
+    ) -> TestServer {
+        let certificate = certificate.clone();
+        let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(signing_key_der.to_vec()));
         let config = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(vec![certificate.clone()], key)
             .expect("a server configuration");
-        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
+        let listener = TcpListener::bind((bind, 0)).expect("a loopback listener");
         listener
             .set_nonblocking(true)
             .expect("a non-blocking listener");
         let address = listener.local_addr().expect("a bound address");
+        let heads = Arc::new(Mutex::new(Vec::new()));
+        let recorded = heads.clone();
         let handle = thread::spawn(move || {
             let give_up = Instant::now() + Duration::from_secs(5);
             for reply in replies {
@@ -356,7 +417,10 @@ mod tests {
                     continue;
                 };
                 let mut stream = StreamOwned::new(connection, accepted);
-                read_head(&mut stream);
+                recorded
+                    .lock()
+                    .expect("the head log")
+                    .push(read_head(&mut stream));
                 let _ = stream.write_all(&reply);
                 let _ = stream.flush();
                 stream.conn.send_close_notify();
@@ -364,20 +428,22 @@ mod tests {
             }
         });
         TestServer {
-            base_url: format!("https://{address}"),
+            base_url: format!("https://{name}:{}", address.port()),
             certificate,
+            heads,
             handle,
         }
     }
 
-    fn read_head(stream: &mut StreamOwned<ServerConnection, TcpStream>) {
+    fn read_head(stream: &mut StreamOwned<ServerConnection, TcpStream>) -> String {
+        let mut head = String::new();
         let mut reader = BufReader::new(stream);
         loop {
             let mut line = String::new();
             match reader.read_line(&mut line) {
-                Ok(0) | Err(_) => return,
-                Ok(_) if line == "\r\n" || line == "\n" => return,
-                Ok(_) => {}
+                Ok(0) | Err(_) => return head,
+                Ok(_) if line == "\r\n" || line == "\n" => return head,
+                Ok(_) => head.push_str(&line),
             }
         }
     }
@@ -523,6 +589,96 @@ mod tests {
         assert_eq!(answer.status, 200);
         assert_eq!(answer.body, b"1\n00:00:01,000 --> 00:00:02,000\nhello\n");
         server.handle.join().expect("the server thread");
+    }
+
+    #[test]
+    fn an_allowlisted_cross_host_redirect_is_followed_without_the_authorization_header() {
+        let CertifiedKey { cert, signing_key } =
+            generate_simple_self_signed(vec!["127.0.0.1".to_string(), "localhost".to_string()])
+                .expect("a self-signed certificate");
+        let certificate: CertificateDer<'static> = cert.der().clone();
+        let key = signing_key.serialize_der();
+        let second = start_secured(
+            &certificate,
+            &key,
+            "127.0.0.1",
+            "localhost",
+            vec![response(
+                "200 OK",
+                &[("Content-Type", "application/x-subrip")],
+                b"1\n00:00:01,000 --> 00:00:02,000\nhello\n",
+            )],
+        );
+        let location = format!("{}/files/1", second.base_url);
+        let first = start_secured(
+            &certificate,
+            &key,
+            "127.0.0.1",
+            "127.0.0.1",
+            vec![response("302 Found", &[("Location", &location)], b"")],
+        );
+        let request = HttpRequest::get(format!("{}/get/1", first.base_url))
+            .with_header("Authorization", "Bearer unit-test-key")
+            .with_redirect_hosts(["localhost"]);
+        let answer = trusting(&first)
+            .send(&request)
+            .expect("an allowlisted redirect is followed");
+        assert_eq!(answer.status, 200);
+        assert_eq!(answer.body, b"1\n00:00:01,000 --> 00:00:02,000\nhello\n");
+        let first_head = first.heads().remove(0);
+        assert!(
+            first_head
+                .to_ascii_lowercase()
+                .contains("authorization: bearer unit-test-key"),
+            "{first_head}"
+        );
+        let second_head = second.heads().remove(0);
+        assert!(
+            !second_head.to_ascii_lowercase().contains("authorization"),
+            "{second_head}"
+        );
+        second.handle.join().expect("the server thread");
+        first.handle.join().expect("the server thread");
+    }
+
+    #[test]
+    fn a_cross_host_redirect_without_an_allowlist_entry_is_refused() {
+        let CertifiedKey { cert, signing_key } =
+            generate_simple_self_signed(vec!["127.0.0.1".to_string(), "localhost".to_string()])
+                .expect("a self-signed certificate");
+        let certificate: CertificateDer<'static> = cert.der().clone();
+        let key = signing_key.serialize_der();
+        let second = start_secured(&certificate, &key, "127.0.0.1", "localhost", Vec::new());
+        let location = format!("{}/files/1", second.base_url);
+        let first = start_secured(
+            &certificate,
+            &key,
+            "127.0.0.1",
+            "127.0.0.1",
+            vec![response("302 Found", &[("Location", &location)], b"")],
+        );
+        let error = trusting(&first)
+            .send(&HttpRequest::get(format!("{}/get/1", first.base_url)))
+            .expect_err("a cross-host redirect needs an allowlist entry");
+        match error {
+            TransportError::InvalidRequest(reason) => {
+                assert!(reason.contains("different host"), "{reason}");
+            }
+            other => panic!("{other:?}"),
+        }
+        first.handle.join().expect("the server thread");
+        second.handle.join().expect("the server thread");
+    }
+
+    #[test]
+    fn an_allowlist_entry_covers_its_subdomains_but_not_a_lookalike_name() {
+        let allow = vec!["thesubtitledb.org".to_string()];
+        assert!(redirect_host_allowed("thesubtitledb.org", &allow));
+        assert!(redirect_host_allowed("files.thesubtitledb.org", &allow));
+        assert!(redirect_host_allowed("FILES.TheSubtitleDB.org.", &allow));
+        assert!(!redirect_host_allowed("notthedbsubtitledb.org", &allow));
+        assert!(!redirect_host_allowed("thesubtitledb.org.invalid", &allow));
+        assert!(!redirect_host_allowed("", &allow));
     }
 
     #[test]

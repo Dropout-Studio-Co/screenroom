@@ -1,11 +1,11 @@
 use std::cell::RefCell;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::provider_http::{
     BASE_BACKOFF_MS, Clock, DEFAULT_BUDGET_PER_MINUTE, DEFAULT_MAX_ATTEMPTS, DEFAULT_TIMEOUT,
@@ -19,17 +19,23 @@ use super::{Library, new_id};
 use crate::domain::MediaKind;
 use crate::error::{CoreError, Result};
 
-pub const OPENSUBTITLES_PROVIDER: &str = "opensubtitles";
+pub const TSDB_PROVIDER: &str = "thesubtitledb";
 
-pub const OPENSUBTITLES_BASE_URL: &str = "https://api.opensubtitles.com/api/v1";
+pub const TSDB_BASE_URL: &str = "https://api.thesubtitledb.org";
 
-pub const OPENSUBTITLES_API_KEY_ENVIRONMENT: &str = "SCREENROOM_OPENSUBTITLES_API_KEY";
+pub const TSDB_API_KEY_ENVIRONMENT: &str = "SCREENROOM_TSDB_API_KEY";
 
-pub const OPENSUBTITLES_BASE_URL_ENVIRONMENT: &str = "SCREENROOM_OPENSUBTITLES_BASE_URL";
+pub const TSDB_BASE_URL_ENVIRONMENT: &str = "SCREENROOM_TSDB_BASE_URL";
 
-pub const OPENSUBTITLES_CONFIG_ENVIRONMENT: &str = "SCREENROOM_OPENSUBTITLES_CONFIG";
+pub const TSDB_CONFIG_ENVIRONMENT: &str = "SCREENROOM_TSDB_CONFIG";
 
-pub const OPENSUBTITLES_USER_AGENT: &str = "Screenroom 0.1";
+pub const TSDB_CONFIG_DIR_ENVIRONMENT: &str = "SCREENROOM_CONFIG_DIR";
+
+pub const TSDB_USER_AGENT: &str = "Screenroom 0.1";
+
+pub const TSDB_KEY_FILE_NAME: &str = "subtitles.key";
+
+pub const DOWNLOAD_HOST_DOMAINS: &[&str] = &["thesubtitledb.org"];
 
 pub const BENGALI_CODES: &[&str] = &["bn", "ben"];
 
@@ -37,7 +43,11 @@ pub const DEFAULT_SUBTITLE_FORMAT: &str = "srt";
 
 pub const MAX_RELEASE_CHARS: usize = 200;
 
-pub const DOWNLOAD_HOST_DOMAINS: &[&str] = &["opensubtitles.org", "opensubtitles.com"];
+const KEY_FILE_MAX_BYTES: u64 = 1_024;
+
+const KEY_MIN_CHARACTERS: usize = 8;
+
+const KEY_MAX_CHARACTERS: usize = 512;
 
 pub fn subtitle_language_codes(language: &str) -> Vec<String> {
     let trimmed = language.trim().to_ascii_lowercase();
@@ -117,8 +127,8 @@ impl Default for SubtitleProviderConfig {
 impl SubtitleProviderConfig {
     pub fn unconfigured() -> Self {
         Self {
-            base_url: OPENSUBTITLES_BASE_URL.to_string(),
-            user_agent: OPENSUBTITLES_USER_AGENT.to_string(),
+            base_url: TSDB_BASE_URL.to_string(),
+            user_agent: TSDB_USER_AGENT.to_string(),
             api_key: None,
             timeout: DEFAULT_TIMEOUT,
             max_bytes: MAX_RESPONSE_BYTES,
@@ -179,8 +189,9 @@ impl SubtitleProviderConfig {
         Ok(config)
     }
 
-    pub fn from_environment() -> Self {
-        let mut config = match environment_text(OPENSUBTITLES_CONFIG_ENVIRONMENT) {
+    pub fn from_configuration_dir(dir: Option<&Path>) -> Self {
+        let environment_key = environment_text(TSDB_API_KEY_ENVIRONMENT);
+        let mut config = match environment_text(TSDB_CONFIG_ENVIRONMENT) {
             Some(path) => match Self::load(Path::new(&path)) {
                 Ok(loaded) => loaded,
                 Err(error) => Self {
@@ -190,23 +201,116 @@ impl SubtitleProviderConfig {
             },
             None => Self::unconfigured(),
         };
-        if let Some(value) = environment_text(OPENSUBTITLES_BASE_URL_ENVIRONMENT) {
+        if let Some(value) = environment_text(TSDB_BASE_URL_ENVIRONMENT) {
             config.base_url = value;
         }
-        if config.api_key.is_none()
-            && let Some(key) = environment_text(OPENSUBTITLES_API_KEY_ENVIRONMENT)
-        {
-            config.api_key = Some(Secret::new(key));
+        if let Some(key) = environment_key {
+            if key_is_usable(&key) {
+                config.api_key = Some(Secret::new(key));
+            } else {
+                config.api_key = None;
+                config.configuration_error = Some(KEY_REJECTED.to_string());
+            }
+            return config;
+        }
+        if let Some(configured) = config.api_key.take() {
+            if key_is_usable(configured.expose()) {
+                config.api_key = Some(configured);
+            } else {
+                config.configuration_error = Some(KEY_REJECTED.to_string());
+            }
+            return config;
+        }
+        if config.configuration_error.is_some() {
+            return config;
+        }
+        if let Some(directory) = configuration_directory(dir) {
+            match read_key_file(&directory) {
+                Ok(Some(key)) => config.api_key = Some(Secret::new(key)),
+                Ok(None) => {}
+                Err(error) => config.configuration_error = Some(error),
+            }
         }
         config
     }
+
+    pub fn from_environment() -> Self {
+        Self::from_configuration_dir(None)
+    }
 }
+
+const KEY_REJECTED: &str =
+    "The subtitle key was rejected. A key is 8 to 512 printable characters with no spaces.";
+
+const KEY_FILE_REJECTED: &str = "The subtitle key file was rejected. It must hold a key of 8 to 512 printable characters with \
+     no spaces.";
+
+const KEY_FILE_UNREADABLE: &str = "The subtitle key file cannot be read.";
+
+const KEY_FILE_UNUSABLE: &str =
+    "The subtitle key file is not a regular file of at most 1024 bytes.";
 
 fn environment_text(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn key_is_usable(key: &str) -> bool {
+    (KEY_MIN_CHARACTERS..=KEY_MAX_CHARACTERS).contains(&key.len())
+        && key.bytes().all(|byte| byte.is_ascii_graphic())
+}
+
+fn configuration_directory(explicit: Option<&Path>) -> Option<PathBuf> {
+    if let Some(directory) = explicit {
+        return Some(directory.to_path_buf());
+    }
+    if let Some(directory) = environment_text(TSDB_CONFIG_DIR_ENVIRONMENT) {
+        return Some(PathBuf::from(directory));
+    }
+    default_configuration_directory()
+}
+
+fn default_configuration_directory() -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        let home = environment_text("HOME")?;
+        return Some(
+            Path::new(&home)
+                .join("Library")
+                .join("Application Support")
+                .join("Screenroom"),
+        );
+    }
+    if cfg!(windows) {
+        let base = environment_text("APPDATA").or_else(|| environment_text("LOCALAPPDATA"))?;
+        return Some(Path::new(&base).join("Screenroom"));
+    }
+    let home = environment_text("HOME")?;
+    Some(
+        Path::new(&home)
+            .join(".local")
+            .join("share")
+            .join("Screenroom"),
+    )
+}
+
+fn read_key_file(directory: &Path) -> std::result::Result<Option<String>, String> {
+    let path = directory.join(TSDB_KEY_FILE_NAME);
+    let metadata = match std::fs::metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(KEY_FILE_UNREADABLE.to_string()),
+    };
+    if !metadata.is_file() || metadata.len() > KEY_FILE_MAX_BYTES {
+        return Err(KEY_FILE_UNUSABLE.to_string());
+    }
+    let body = std::fs::read_to_string(&path).map_err(|_| KEY_FILE_UNREADABLE.to_string())?;
+    let key = body.trim();
+    if !key_is_usable(key) {
+        return Err(KEY_FILE_REJECTED.to_string());
+    }
+    Ok(Some(key.to_string()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,7 +327,11 @@ pub struct SubtitleSearch {
 
     pub language: String,
 
-    pub file_hash: Option<String>,
+    pub tmdb_id: Option<i64>,
+
+    pub imdb_id: Option<String>,
+
+    pub release_name: Option<String>,
 }
 
 impl SubtitleSearch {
@@ -235,7 +343,9 @@ impl SubtitleSearch {
             season: None,
             episode: None,
             language: language.to_string(),
-            file_hash: None,
+            tmdb_id: None,
+            imdb_id: None,
+            release_name: None,
         }
     }
 
@@ -253,16 +363,31 @@ impl SubtitleSearch {
             season: Some(season),
             episode: Some(episode),
             language: language.to_string(),
-            file_hash: None,
+            tmdb_id: None,
+            imdb_id: None,
+            release_name: None,
         }
+    }
+
+    pub fn with_tmdb(mut self, id: i64) -> Self {
+        self.tmdb_id = Some(id);
+        self
+    }
+
+    pub fn with_imdb(mut self, id: impl Into<String>) -> Self {
+        self.imdb_id = Some(id.into());
+        self
+    }
+
+    pub fn with_release(mut self, name: impl Into<String>) -> Self {
+        self.release_name = Some(name.into());
+        self
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubtitleMatch {
-    pub id: String,
-
-    pub file_id: i64,
+    pub id: i64,
 
     pub language: String,
 
@@ -272,16 +397,18 @@ pub struct SubtitleMatch {
 
     pub format: String,
 
-    pub downloads: i64,
+    pub cues: i64,
 
     pub hearing_impaired: bool,
 
-    pub file_name: String,
+    pub ai_transcribed: bool,
+
+    pub encoding: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DownloadedSubtitle {
-    pub file_id: i64,
+    pub id: i64,
 
     pub language: String,
 
@@ -292,8 +419,6 @@ pub struct DownloadedSubtitle {
     pub format: String,
 
     pub bytes: Vec<u8>,
-
-    pub remaining_downloads: Option<i64>,
 }
 
 pub trait SubtitleProvider {
@@ -308,29 +433,29 @@ pub trait SubtitleProvider {
 
     fn download(
         &self,
-        file_id: i64,
+        id: i64,
         language: &str,
         format_hint: &str,
     ) -> std::result::Result<DownloadedSubtitle, ProviderError>;
 }
 
-pub struct OpenSubtitlesProvider {
+pub struct TsdbProvider {
     config: SubtitleProviderConfig,
     transport: Box<dyn HttpTransport>,
     pacer: RefCell<Pacer>,
 }
 
-impl fmt::Debug for OpenSubtitlesProvider {
+impl fmt::Debug for TsdbProvider {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("OpenSubtitlesProvider")
+            .debug_struct("TsdbProvider")
             .field("base_url", &self.config.base_url)
-            .field("configured", &self.config.api_key.is_some())
+            .field("keyed_search", &self.search_is_keyed())
             .finish_non_exhaustive()
     }
 }
 
-impl OpenSubtitlesProvider {
+impl TsdbProvider {
     pub fn new(config: SubtitleProviderConfig) -> Self {
         let pacer = Pacer::system(config.budget_per_minute).with_retry(
             config.max_attempts,
@@ -378,16 +503,8 @@ impl OpenSubtitlesProvider {
         &self.config
     }
 
-    fn configured(&self) -> bool {
+    pub fn search_is_keyed(&self) -> bool {
         self.config.api_key.is_some()
-    }
-
-    fn with_key(&self, request: HttpRequest) -> HttpRequest {
-        let request = self.with_agent(request);
-        match &self.config.api_key {
-            Some(key) => request.with_header("Api-Key", key.expose()),
-            None => request,
-        }
     }
 
     fn with_agent(&self, request: HttpRequest) -> HttpRequest {
@@ -396,61 +513,239 @@ impl OpenSubtitlesProvider {
             .with_header("Accept", "application/json")
     }
 
-    fn search_value(&self, request: &SubtitleSearch) -> std::result::Result<Value, ProviderError> {
-        if !self.configured() {
-            return Err(ProviderError::NotConfigured);
+    fn with_key(&self, request: HttpRequest) -> HttpRequest {
+        let request = self.with_agent(request);
+        match &self.config.api_key {
+            Some(key) => request.with_header("Authorization", format!("Bearer {}", key.expose())),
+            None => request,
         }
-        let languages = subtitle_language_codes(&request.language);
-        let mut params = vec![
-            ("query", request.title.trim().to_string()),
-            ("languages", languages.join(",")),
-        ];
-        if let Some(year) = request.year {
-            params.push(("year", year.to_string()));
+    }
+
+    fn url_with_query(&self, path: &str, params: &[(&str, String)]) -> String {
+        let mut url = join_url(&self.config.base_url, path);
+        if params.is_empty() {
+            return url;
         }
-        if request.kind == MediaKind::Series {
-            params.push(("type", "episode".to_string()));
-            if let Some(season) = request.season {
-                params.push(("season_number", season.to_string()));
-            }
-            if let Some(episode) = request.episode {
-                params.push(("episode_number", episode.to_string()));
-            }
-        } else {
-            params.push(("type", "movie".to_string()));
-        }
-        if let Some(hash) = request
-            .file_hash
-            .as_deref()
-            .map(str::trim)
-            .filter(|hash| !hash.is_empty())
-        {
-            params.push(("moviehash", hash.to_string()));
-        }
-        let mut url = join_url(&self.config.base_url, "/subtitles");
         let query: Vec<String> = params
             .iter()
             .map(|(name, value)| format!("{name}={}", encode_query_value(value)))
             .collect();
         url.push('?');
         url.push_str(&query.join("&"));
-        let mut request = self.with_key(HttpRequest::get(url));
-        request.max_bytes = self.config.max_bytes;
-        request.timeout = self.config.timeout;
-        let mut pacer = self.pacer.borrow_mut();
-        pacer.execute(|| self.value_from(&request))
+        url
+    }
+
+    fn lookup_url(&self, path: &str, languages: &[String]) -> String {
+        self.url_with_query(
+            path,
+            &[
+                ("lang", languages.join(",")),
+                ("sort", "cues".to_string()),
+                ("limit", "100".to_string()),
+            ],
+        )
+    }
+
+    fn lookup_urls(&self, request: &SubtitleSearch, languages: &[String]) -> Vec<String> {
+        let mut urls = Vec::new();
+        if let Some(tmdb_id) = request.tmdb_id.filter(|id| *id > 0) {
+            match request.kind {
+                MediaKind::Movie => {
+                    urls.push(self.lookup_url(&format!("/v1/by-tmdb/movie/{tmdb_id}"), languages))
+                }
+                MediaKind::Series => {
+                    if let (Some(season), Some(episode)) = (request.season, request.episode) {
+                        urls.push(self.lookup_url(
+                            &format!("/v1/by-tmdb/tv/{tmdb_id}/season/{season}/episode/{episode}"),
+                            languages,
+                        ));
+                    }
+                }
+                MediaKind::Unknown => {}
+            }
+        }
+        if let Some(imdb_id) = request.imdb_id.as_deref().and_then(usable_identifier) {
+            let path = match (request.kind, request.season, request.episode) {
+                (MediaKind::Series, Some(season), Some(episode)) => {
+                    format!("/v1/by-imdb/{imdb_id}/season/{season}/episode/{episode}")
+                }
+                _ => format!("/v1/by-imdb/{imdb_id}"),
+            };
+            urls.push(self.lookup_url(&path, languages));
+        }
+        if let Some(release) = request
+            .release_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|release| !release.is_empty())
+        {
+            urls.push(self.url_with_query(
+                "/v1/by-releasename",
+                &[
+                    ("release", release.to_string()),
+                    ("lang", languages.join(",")),
+                    ("sort", "cues".to_string()),
+                    ("limit", "100".to_string()),
+                ],
+            ));
+        }
+        let title = request.title.trim();
+        if !title.is_empty()
+            && let Some(kind) = kind_parameter(request.kind)
+        {
+            urls.push(self.url_with_query(
+                "/v1/by-title",
+                &[
+                    ("q", title.to_string()),
+                    ("type", kind.to_string()),
+                    ("lang", languages.join(",")),
+                    ("sort", "cues".to_string()),
+                    ("limit", "100".to_string()),
+                ],
+            ));
+        }
+        urls
+    }
+
+    fn lookup(
+        &self,
+        url: &str,
+        request: &SubtitleSearch,
+    ) -> std::result::Result<Option<Vec<SubtitleMatch>>, ProviderError> {
+        let mut http = self.with_agent(HttpRequest::get(url.to_string()));
+        http.max_bytes = self.config.max_bytes;
+        http.timeout = self.config.timeout;
+        let value = {
+            let mut pacer = self.pacer.borrow_mut();
+            match pacer.execute(|| self.value_from(&http)) {
+                Ok(value) => value,
+                Err(ProviderError::NotFound) => return Ok(None),
+                Err(error) => return Err(error),
+            }
+        };
+        self.matches_from(&value, request)
+    }
+
+    fn search_by_title(
+        &self,
+        request: &SubtitleSearch,
+        languages: &[String],
+    ) -> std::result::Result<Option<Vec<SubtitleMatch>>, ProviderError> {
+        let title = request.title.trim();
+        let Some(kind) = kind_parameter(request.kind) else {
+            return Ok(None);
+        };
+        if title.is_empty() {
+            return Ok(None);
+        }
+        let url = self.url_with_query(
+            "/v1/by-search",
+            &[
+                ("q", title.to_string()),
+                ("type", kind.to_string()),
+                ("lang", languages.join(",")),
+                ("sort", "cues".to_string()),
+                ("limit", "100".to_string()),
+            ],
+        );
+        let mut http = self.with_key(HttpRequest::get(url));
+        http.max_bytes = self.config.max_bytes;
+        http.timeout = self.config.timeout;
+        let value = {
+            let mut pacer = self.pacer.borrow_mut();
+            match pacer.execute(|| self.value_from(&http)) {
+                Ok(value) => value,
+                Err(ProviderError::NotFound) => return Ok(None),
+                Err(error) => return Err(error),
+            }
+        };
+        let results = value.get("results").and_then(Value::as_array).ok_or(
+            ProviderError::InvalidResponse("the search had no results list"),
+        )?;
+        let Some(chosen) = choose_search_result(results, request, languages) else {
+            return Ok(None);
+        };
+        let Some(url) = self.result_lookup_url(chosen, request, languages) else {
+            return Ok(None);
+        };
+        self.lookup(&url, request)
+    }
+
+    fn result_lookup_url(
+        &self,
+        result: &Value,
+        request: &SubtitleSearch,
+        languages: &[String],
+    ) -> Option<String> {
+        let tmdb_id = result
+            .get("tmdb_id")
+            .and_then(Value::as_i64)
+            .filter(|id| *id > 0);
+        let imdb_id = result
+            .get("imdb")
+            .and_then(Value::as_str)
+            .and_then(usable_identifier);
+        match (request.kind, request.season, request.episode) {
+            (MediaKind::Movie, _, _) => match (tmdb_id, imdb_id) {
+                (Some(tmdb_id), _) => {
+                    Some(self.lookup_url(&format!("/v1/by-tmdb/movie/{tmdb_id}"), languages))
+                }
+                (None, Some(imdb_id)) => {
+                    Some(self.lookup_url(&format!("/v1/by-imdb/{imdb_id}"), languages))
+                }
+                (None, None) => None,
+            },
+            (MediaKind::Series, Some(season), Some(episode)) => match (tmdb_id, imdb_id) {
+                (Some(tmdb_id), _) => Some(self.lookup_url(
+                    &format!("/v1/by-tmdb/tv/{tmdb_id}/season/{season}/episode/{episode}"),
+                    languages,
+                )),
+                (None, Some(imdb_id)) => Some(self.lookup_url(
+                    &format!("/v1/by-imdb/{imdb_id}/season/{season}/episode/{episode}"),
+                    languages,
+                )),
+                (None, None) => None,
+            },
+            (MediaKind::Series, _, _) => {
+                imdb_id.map(|imdb_id| self.lookup_url(&format!("/v1/by-imdb/{imdb_id}"), languages))
+            }
+            (MediaKind::Unknown, _, _) => None,
+        }
     }
 
     fn value_from(&self, request: &HttpRequest) -> std::result::Result<Value, ProviderError> {
         let response = self.transport.send(request)?;
         if !(200..300).contains(&response.status) {
-            return Err(ProviderError::from_status(
-                response.status,
-                response.retry_after_ms(),
-            ));
+            return Err(status_error(response.status, response.retry_after_ms()));
         }
         serde_json::from_slice(&response.body)
             .map_err(|_| ProviderError::InvalidResponse("the body was not JSON"))
+    }
+
+    fn matches_from(
+        &self,
+        value: &Value,
+        request: &SubtitleSearch,
+    ) -> std::result::Result<Option<Vec<SubtitleMatch>>, ProviderError> {
+        let title = value.get("title").ok_or(ProviderError::InvalidResponse(
+            "the answer had no title object",
+        ))?;
+        if !title_matches(title, request) {
+            return Ok(None);
+        }
+        let items = value
+            .get("subtitles")
+            .and_then(|subtitles| subtitles.get("items"))
+            .and_then(Value::as_array)
+            .ok_or(ProviderError::InvalidResponse(
+                "the answer had no subtitle list",
+            ))?;
+        let matches: Vec<SubtitleMatch> = items.iter().filter_map(subtitle_match_from).collect();
+        if matches.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(matches))
+        }
     }
 
     fn download_host_allowed(&self, host: &str) -> bool {
@@ -468,43 +763,143 @@ impl OpenSubtitlesProvider {
             .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
     }
 
-    fn resolve_link(&self, link: &str) -> std::result::Result<String, ProviderError> {
-        let link = link.trim();
-        if link.is_empty() {
-            return Err(ProviderError::InvalidResponse("the download had no link"));
+    fn secure_download_url(&self, url: &str) -> std::result::Result<String, ProviderError> {
+        let Some((scheme, host)) = absolute_url_parts(url) else {
+            return Err(ProviderError::InvalidResponse(
+                "the download address was unusable",
+            ));
+        };
+        if scheme != "https" {
+            return Err(ProviderError::InvalidResponse(
+                "the download address was not secure",
+            ));
         }
-        if link.starts_with("http://") || link.starts_with("https://") {
-            let Some((_, host)) = absolute_url_parts(link) else {
-                return Err(ProviderError::InvalidResponse(
-                    "the download link was unusable",
-                ));
-            };
-            if !self.download_host_allowed(&host) {
-                return Err(ProviderError::InvalidResponse(
-                    "the download link pointed outside the configured provider",
-                ));
-            }
-            return Ok(link.to_string());
+        if !self.download_host_allowed(&host) {
+            return Err(ProviderError::InvalidResponse(
+                "the download link pointed outside the configured provider",
+            ));
         }
-        if link.starts_with('/') {
-            let base = &self.config.base_url;
-            let origin = match base.split_once("://") {
-                Some((scheme, rest)) => match rest.find('/') {
-                    Some(index) => format!("{scheme}://{}", &rest[..index]),
-                    None => base.trim_end_matches('/').to_string(),
-                },
-                None => {
-                    return Err(ProviderError::InvalidResponse(
-                        "the download link was unusable",
-                    ));
-                }
-            };
-            return Ok(format!("{origin}{link}"));
-        }
-        Err(ProviderError::InvalidResponse(
-            "the download link was unusable",
-        ))
+        Ok(url.to_string())
     }
+}
+
+fn kind_parameter(kind: MediaKind) -> Option<&'static str> {
+    match kind {
+        MediaKind::Movie => Some("movie"),
+        MediaKind::Series => Some("tv"),
+        MediaKind::Unknown => None,
+    }
+}
+
+fn usable_identifier(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()
+        && trimmed.len() <= 32
+        && trimmed
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric()))
+    .then_some(trimmed)
+}
+
+fn title_matches(title: &Value, request: &SubtitleSearch) -> bool {
+    let Some(expected) = kind_parameter(request.kind) else {
+        return false;
+    };
+    let actual = title
+        .get("media_type")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if actual != expected {
+        return false;
+    }
+    if let (Some(remote), Some(requested)) =
+        (title.get("year").and_then(Value::as_i64), request.year)
+        && (remote - requested).abs() > 1
+    {
+        return false;
+    }
+    true
+}
+
+fn choose_search_result<'a>(
+    results: &'a [Value],
+    request: &SubtitleSearch,
+    languages: &[String],
+) -> Option<&'a Value> {
+    let wanted = request.title.trim().to_lowercase();
+    let expected = kind_parameter(request.kind)?;
+    let preferred_language = languages.first().map(String::as_str).unwrap_or("en");
+    let mut best: Option<(&Value, i64)> = None;
+    for result in results {
+        let name = result
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        if name != wanted {
+            continue;
+        }
+        let kind = result
+            .get("media_type")
+            .and_then(Value::as_str)
+            .or_else(|| result.get("kind").and_then(Value::as_str))
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        if kind != expected {
+            continue;
+        }
+        if let (Some(remote), Some(requested)) =
+            (result.get("year").and_then(Value::as_i64), request.year)
+            && (remote - requested).abs() > 1
+        {
+            continue;
+        }
+        let count = result
+            .get("language_counts")
+            .and_then(|counts| counts.get(preferred_language))
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
+        match best {
+            Some((_, best_count)) if count <= best_count => {}
+            _ => best = Some((result, count)),
+        }
+    }
+    best.map(|(result, _)| result)
+}
+
+fn subtitle_match_from(item: &Value) -> Option<SubtitleMatch> {
+    let id = item.get("id").and_then(Value::as_i64)?;
+    let language = text(item, "language")?;
+    let format = text(item, "format")?.to_ascii_lowercase();
+    if !SUBTITLE_EXTENSIONS.contains(&format.as_str()) {
+        return None;
+    }
+    Some(SubtitleMatch {
+        id,
+        language_name: subtitle_language_name(&language),
+        language,
+        release_name: clean_release(
+            item.get("release_name")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        ),
+        format,
+        cues: integer(item, "cues").unwrap_or_default(),
+        hearing_impaired: boolean(item, "hearing_impaired"),
+        ai_transcribed: boolean(item, "ai_transcribed"),
+        encoding: text(item, "encoding").unwrap_or_default(),
+    })
+}
+
+fn status_error(status: u16, retry_after_ms: Option<i64>) -> ProviderError {
+    if status == 503 && retry_after_ms.is_some() {
+        return ProviderError::RateLimited { retry_after_ms };
+    }
+    ProviderError::from_status(status, retry_after_ms)
 }
 
 fn absolute_url_parts(url: &str) -> Option<(String, String)> {
@@ -541,13 +936,6 @@ fn host_is_loopback_or_local(host: &str) -> bool {
         || host.ends_with(".local")
 }
 
-fn format_from_name(name: &str) -> Option<String> {
-    let extension = name.rsplit_once('.')?.1.trim().to_ascii_lowercase();
-    SUBTITLE_EXTENSIONS
-        .contains(&extension.as_str())
-        .then_some(extension)
-}
-
 fn text(value: &Value, key: &str) -> Option<String> {
     value
         .get(key)
@@ -561,145 +949,106 @@ fn integer(value: &Value, key: &str) -> Option<i64> {
     value.get(key).and_then(Value::as_i64)
 }
 
-fn match_from(value: &Value) -> Option<SubtitleMatch> {
-    let attributes = value.get("attributes")?;
-    let id = match value.get("id")? {
-        Value::String(id) => id.clone(),
-        Value::Number(number) => number.to_string(),
-        _ => return None,
-    };
-    let files = attributes.get("files").and_then(Value::as_array);
-    let first_file = files.and_then(|entries| entries.first());
-    let file_id = first_file
-        .and_then(|file| integer(file, "file_id"))
-        .or_else(|| integer(attributes, "file_id"))?;
-    let file_name = first_file
-        .and_then(|file| text(file, "file_name"))
-        .or_else(|| text(attributes, "file_name"))
-        .unwrap_or_default();
-    let language = text(attributes, "language").unwrap_or_default();
-    if language.is_empty() {
-        return None;
-    }
-    let release_name = text(attributes, "release")
-        .or_else(|| first_file.and_then(|file| text(file, "release")))
-        .or_else(|| (!file_name.is_empty()).then(|| file_name.clone()))
-        .unwrap_or_default();
-    let format = text(attributes, "format")
-        .or_else(|| format_from_name(&file_name))
-        .unwrap_or_else(|| DEFAULT_SUBTITLE_FORMAT.to_string());
-    Some(SubtitleMatch {
-        id,
-        file_id,
-        language_name: subtitle_language_name(&language),
-        language,
-        release_name,
-        format,
-        downloads: integer(attributes, "download_count").unwrap_or_default(),
-        hearing_impaired: attributes
-            .get("hearing_impaired")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        file_name,
-    })
+fn boolean(value: &Value, key: &str) -> bool {
+    value.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
-impl SubtitleProvider for OpenSubtitlesProvider {
+impl SubtitleProvider for TsdbProvider {
     fn provider_name(&self) -> &'static str {
-        OPENSUBTITLES_PROVIDER
+        TSDB_PROVIDER
     }
 
     fn capability(&self) -> ProviderCapability {
         if let Some(error) = &self.config.configuration_error {
-            return ProviderCapability::not_configured(OPENSUBTITLES_PROVIDER, error.clone());
-        }
-        if self.config.api_key.is_none() {
-            return ProviderCapability::not_configured(
-                OPENSUBTITLES_PROVIDER,
-                "Subtitle search is not configured. Set SCREENROOM_OPENSUBTITLES_API_KEY or \
-                 SCREENROOM_OPENSUBTITLES_CONFIG first.",
-            );
+            return ProviderCapability::not_configured(TSDB_PROVIDER, error.clone());
         }
         if let Err(reason) = scheme_is_carried(self.transport.as_ref(), &self.config.base_url) {
-            return ProviderCapability::not_configured(OPENSUBTITLES_PROVIDER, reason);
+            return ProviderCapability::not_configured(TSDB_PROVIDER, reason);
         }
-        ProviderCapability::configured(OPENSUBTITLES_PROVIDER, "en")
+        let mut capability = ProviderCapability::configured(TSDB_PROVIDER, "en");
+        capability.detail = if self.search_is_keyed() {
+            "Online subtitle lookups and keyed title search are configured for The Subtitle DB."
+                .to_string()
+        } else {
+            "Online subtitle lookups work for The Subtitle DB without a key; keyed title search \
+             needs a free The Subtitle DB key."
+                .to_string()
+        };
+        capability
     }
 
     fn search(
         &self,
         request: &SubtitleSearch,
     ) -> std::result::Result<Vec<SubtitleMatch>, ProviderError> {
-        let value = self.search_value(request)?;
-        let Some(data) = value.get("data").and_then(Value::as_array) else {
-            return Err(ProviderError::InvalidResponse(
-                "the search had no data list",
-            ));
-        };
-        Ok(data.iter().filter_map(match_from).collect())
+        if self.config.configuration_error.is_some() {
+            return Err(ProviderError::NotConfigured);
+        }
+        let languages = subtitle_language_codes(&request.language);
+        if languages.is_empty() || kind_parameter(request.kind).is_none() {
+            return Ok(Vec::new());
+        }
+        for url in self.lookup_urls(request, &languages) {
+            if let Some(matches) = self.lookup(&url, request)? {
+                return Ok(matches);
+            }
+        }
+        if self.search_is_keyed()
+            && let Some(matches) = self.search_by_title(request, &languages)?
+        {
+            return Ok(matches);
+        }
+        Ok(Vec::new())
     }
 
     fn download(
         &self,
-        file_id: i64,
+        id: i64,
         language: &str,
         format_hint: &str,
     ) -> std::result::Result<DownloadedSubtitle, ProviderError> {
-        if !self.configured() {
+        if self.config.configuration_error.is_some() {
             return Err(ProviderError::NotConfigured);
         }
-        if file_id <= 0 {
+        if id <= 0 {
             return Err(ProviderError::InvalidResponse(
                 "the download handle was not usable",
             ));
         }
-        let url = join_url(&self.config.base_url, "/download");
-        let body = json!({ "file_id": file_id }).to_string().into_bytes();
-        let mut request = self
-            .with_key(HttpRequest::post(url, body))
-            .with_header("Content-Type", "application/json");
+        let url =
+            self.secure_download_url(&join_url(&self.config.base_url, &format!("/get/{id}")))?;
+        let mut request = HttpRequest::get(url)
+            .with_header("User-Agent", self.config.user_agent.clone())
+            .with_header("Accept", "*/*")
+            .with_max_bytes(MAX_SUBTITLE_BYTES as usize)
+            .with_redirect_hosts(DOWNLOAD_HOST_DOMAINS.iter().copied());
+        if let Some(key) = &self.config.api_key {
+            request = request.with_header("Authorization", format!("Bearer {}", key.expose()));
+        }
         request.timeout = self.config.timeout;
-        request.max_bytes = self.config.max_bytes;
-        let value = {
-            let mut pacer = self.pacer.borrow_mut();
-            pacer.execute(|| self.value_from(&request))?
-        };
-        let link = text(&value, "link")
-            .ok_or(ProviderError::InvalidResponse("the download had no link"))?;
-        let file_name = text(&value, "file_name").unwrap_or_default();
-        let resolved = self.resolve_link(&link)?;
         let response = {
-            let mut request = HttpRequest::get(resolved)
-                .with_max_bytes(MAX_SUBTITLE_BYTES as usize)
-                .with_header("User-Agent", self.config.user_agent.clone())
-                .with_header("Accept", "*/*");
-            request.timeout = self.config.timeout;
             let mut pacer = self.pacer.borrow_mut();
             pacer.execute(|| {
                 let response = self.transport.send(&request)?;
                 if !(200..300).contains(&response.status) {
-                    return Err(ProviderError::from_status(
-                        response.status,
-                        response.retry_after_ms(),
-                    ));
+                    return Err(status_error(response.status, response.retry_after_ms()));
                 }
                 Ok(response)
             })?
         };
-        let format = format_from_name(&file_name)
-            .or_else(|| {
-                let hint = format_hint.trim().to_ascii_lowercase();
-                SUBTITLE_EXTENSIONS.contains(&hint.as_str()).then_some(hint)
-            })
-            .unwrap_or_else(|| DEFAULT_SUBTITLE_FORMAT.to_string());
+        let hint = format_hint.trim().to_ascii_lowercase();
+        let format = if SUBTITLE_EXTENSIONS.contains(&hint.as_str()) {
+            hint
+        } else {
+            DEFAULT_SUBTITLE_FORMAT.to_string()
+        };
         Ok(DownloadedSubtitle {
-            file_id,
+            id,
             language: language.to_string(),
             language_name: subtitle_language_name(language),
-            release_name: file_name,
+            release_name: String::new(),
             format,
             bytes: response.body,
-            remaining_downloads: integer(&value, "remaining"),
         })
     }
 }
@@ -766,7 +1115,7 @@ impl Library {
             label,
             language,
             format,
-            provenance: "downloaded from OpenSubtitles".to_string(),
+            provenance: "downloaded from The Subtitle DB".to_string(),
             bytes: downloaded.bytes.len() as i64,
             created_ms: super::now_ms(),
         };

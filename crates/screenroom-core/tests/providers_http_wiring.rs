@@ -1,6 +1,6 @@
 use screenroom_core::{
-    ApiCredential, CatalogueMetadataProvider, OpenSubtitlesProvider, ProviderConfig, Secret,
-    SubtitleProvider, SubtitleProviderConfig, TmdbProvider,
+    ApiCredential, CatalogueMetadataProvider, ProviderConfig, Secret, SubtitleProvider,
+    SubtitleProviderConfig, TmdbProvider, TsdbProvider,
 };
 
 fn credential() -> ApiCredential {
@@ -31,10 +31,10 @@ fn the_default_subtitle_transport_carries_the_default_secure_address() {
         config.base_url
     );
 
-    let capability = OpenSubtitlesProvider::new(config).capability();
+    let capability = TsdbProvider::new(config).capability();
 
     assert!(capability.is_configured(), "{}", capability.detail);
-    assert_eq!(capability.provider, "opensubtitles");
+    assert_eq!(capability.provider, "thesubtitledb");
 }
 
 #[test]
