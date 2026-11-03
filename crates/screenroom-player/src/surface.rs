@@ -9,16 +9,13 @@ use objc2_io_surface::{
 };
 
 use crate::PlayerError;
-use crate::frame::{PixelFormat, half_to_f32};
+use crate::frame::PixelFormat;
 
 pub const BGRA_PIXEL_FORMAT: u32 = u32::from_be_bytes(*b"BGRA");
-
-pub const RGBA_HALF_PIXEL_FORMAT: u32 = u32::from_be_bytes(*b"RGhA");
 
 fn pixel_format_number(format: PixelFormat) -> Result<u32, PlayerError> {
     match format {
         PixelFormat::Bgra8 => Ok(BGRA_PIXEL_FORMAT),
-        PixelFormat::Rgba16Float => Ok(RGBA_HALF_PIXEL_FORMAT),
         PixelFormat::Rgba8 => Err(PlayerError::Argument(
             "an IOSurface cannot hold a tightly packed RGBA8 CPU frame".to_string(),
         )),
@@ -202,29 +199,12 @@ impl SurfaceFrame {
                 .map(|pixel| [pixel[0], pixel[1], pixel[2], pixel[3]])
         })
     }
-
-    pub fn read_extended_pixel(&self, x: u32, y: u32) -> Option<[f32; 4]> {
-        if self.format != PixelFormat::Rgba16Float || x >= self.width || y >= self.height {
-            return None;
-        }
-        self.with_pixels(|bytes| {
-            let offset = y as usize * self.bytes_per_row as usize + x as usize * 8;
-            let pixel = bytes.get(offset..offset + 8)?;
-            Some([
-                half_to_f32(u16::from_le_bytes([pixel[0], pixel[1]])),
-                half_to_f32(u16::from_le_bytes([pixel[2], pixel[3]])),
-                half_to_f32(u16::from_le_bytes([pixel[4], pixel[5]])),
-                half_to_f32(u16::from_le_bytes([pixel[6], pixel[7]])),
-            ])
-        })
-    }
 }
 
 pub fn format_name(format: PixelFormat) -> &'static str {
     match format {
         PixelFormat::Rgba8 => "RGBA8",
         PixelFormat::Bgra8 => "BGRA8",
-        PixelFormat::Rgba16Float => "RGBA16Float",
     }
 }
 
@@ -232,7 +212,6 @@ pub fn format_fourcc(format: PixelFormat) -> &'static str {
     match format {
         PixelFormat::Rgba8 => "RGBA",
         PixelFormat::Bgra8 => "BGRA",
-        PixelFormat::Rgba16Float => "RGhA",
     }
 }
 
@@ -320,32 +299,6 @@ mod tests {
         assert_eq!(surface.bytes_per_pixel(), 4);
         assert_eq!(surface.format().bits_per_channel(), 8);
         assert_eq!(format_fourcc(surface.format()), "BGRA");
-    }
-
-    #[test]
-    fn a_half_float_surface_is_created_with_the_core_video_pixel_format() {
-        let surface = SurfaceFrame::new_with_format(16, 9, PixelFormat::Rgba16Float)
-            .expect("IOSurfaceCreate accepts a 64-bit half-float RGBA surface");
-        assert_eq!(surface.format(), PixelFormat::Rgba16Float);
-        assert_eq!(surface.pixel_format_number(), RGBA_HALF_PIXEL_FORMAT);
-        assert_eq!(surface.pixel_format_number(), u32::from_be_bytes(*b"RGhA"));
-        assert_eq!(surface.bytes_per_pixel(), 8);
-        assert_eq!(surface.format().bits_per_channel(), 16);
-        assert_eq!(surface.bytes_per_row() as usize, 16 * 8);
-        assert_eq!(format_fourcc(surface.format()), "RGhA");
-        assert!(surface.read_pixel(0, 0).is_none());
-        assert_eq!(
-            surface.read_extended_pixel(0, 0),
-            Some([0.0, 0.0, 0.0, 0.0])
-        );
-        assert!(surface.read_extended_pixel(16, 0).is_none());
-    }
-
-    #[test]
-    fn a_float_surface_row_stride_holds_eight_bytes_per_pixel() {
-        let surface = SurfaceFrame::new_with_format(3840, 2160, PixelFormat::Rgba16Float)
-            .expect("IOSurfaceCreate accepts a 4K half-float surface");
-        assert_eq!(surface.bytes_per_row(), 3840 * 8);
     }
 
     #[test]
