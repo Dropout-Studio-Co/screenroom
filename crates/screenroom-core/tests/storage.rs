@@ -169,6 +169,23 @@ fn preferences_survive_a_reopen() {
 }
 
 #[test]
+fn the_retired_hdr_preference_is_deleted_on_the_next_save() {
+    let directory = TempDir::new().expect("temp dir");
+    let library = open_library(&directory);
+    library.set_setting("hdrExtended", "true").expect("seed");
+
+    library
+        .set_preferences(&Preferences::default())
+        .expect("save");
+
+    assert!(library.setting("hdrExtended").unwrap().is_none());
+    assert_eq!(
+        library.preferences().expect("preferences"),
+        Preferences::default()
+    );
+}
+
+#[test]
 fn clearing_a_language_preference_removes_it() {
     let directory = TempDir::new().expect("temp dir");
     let library = open_library(&directory);

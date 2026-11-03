@@ -62,7 +62,6 @@ search requires a key, and the download route accepts one to raise its allowance
 | `GET /v1/by-releasename?release=…` | a release name, such as the file's own name | none |
 | `GET /v1/by-title?q=…&type=movie\|tv` | one resolved title; not a candidate list | none |
 | `GET /v1/by-search?q=…&type=movie\|tv` | catalogue search | `Authorization: Bearer sdb_…` |
-| `GET /v1/by-subid/{id}` | one subtitle's own record | none |
 | `GET /get/{id}` | the subtitle bytes; answers 302 to `files.thesubtitledb.org` | optional: `Bearer` raises the download allowance |
 
 Parameters: `lang`, `format`, `limit` (at most 100) and `offset` (at most
@@ -115,9 +114,13 @@ can read is refused with the `chmod 600` that fixes it, rather than being used.
 - Overload is answered **503 with `retry-after`**; the app waits at least that
   long before trying again, and gives up after a bounded number of attempts.
 
-The app never retries earlier than the provider says, keeps its cooldown across
-actions rather than resetting on every press, and reports a refusal instead of
-quietly hammering the service.
+The app never retries earlier than the provider says, and reports a refusal
+instead of quietly hammering the service. Within one action the transport retries
+at most three times, honouring `retry-after` and backing off exponentially, under a
+per-minute budget of 120 requests and one overall deadline. The desktop app builds a
+provider per action, so that budget and the backoff state start fresh on each press;
+because the action is a person pressing a control rather than a loop, the published
+allowances are far above what the app can use.
 
 ## 5. What each answer means
 

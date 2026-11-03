@@ -600,11 +600,10 @@ pub struct App {
 
     metadata_capability: ProviderCapability,
     subtitle_capability: ProviderCapability,
-    subtitle_keyed: bool,
     artwork_retention: ArtworkRetention,
     enrichment: Option<Receiver<Result<EnrichmentDrainReport, String>>>,
-    subtitle_query: String,
     subtitle_results: Vec<screenroom_core::SubtitleMatch>,
+    subtitle_results_for: Option<String>,
     subtitle_search: Option<Receiver<Result<Vec<screenroom_core::SubtitleMatch>, String>>>,
     subtitle_download: Option<SubtitleDownload>,
     cast_session: Option<crate::cast_session::CastSession>,
@@ -875,8 +874,6 @@ pub enum Message {
 
     ToggleArtworkRetention,
 
-    SubtitleQueryChanged(String),
-
     FindSubtitles,
 
     SubtitleDownload { id: i64, format: String },
@@ -1119,7 +1116,6 @@ impl App {
         let metadata_capability =
             TmdbProvider::new(ProviderConfig::from_environment()).capability();
         let subtitle_provider = TsdbProvider::new(SubtitleProviderConfig::from_environment());
-        let subtitle_keyed = subtitle_provider.search_is_keyed();
         let subtitle_capability = subtitle_provider.capability();
         let artwork_retention = library
             .artwork_retention()
@@ -1218,11 +1214,10 @@ impl App {
 
             metadata_capability,
             subtitle_capability,
-            subtitle_keyed,
             artwork_retention,
             enrichment: None,
-            subtitle_query: String::new(),
             subtitle_results: Vec::new(),
+            subtitle_results_for: None,
             subtitle_search: None,
             subtitle_download: None,
             cast_session: None,
@@ -1851,6 +1846,10 @@ impl App {
         if self.active.is_some() {
             self.finish_active();
         }
+        if self.subtitle_results_for.as_deref() != Some(file_id) {
+            self.subtitle_results.clear();
+            self.subtitle_results_for = None;
+        }
         let origin = match self.screen {
             Screen::Detail => Screen::Detail,
             _ => Screen::Browse,
@@ -2011,14 +2010,6 @@ impl App {
             .unwrap_or_else(|| "bn".to_string())
     }
 
-    fn subtitle_provider_hint(&self) -> &'static str {
-        if self.subtitle_keyed {
-            "By TMDb id, release name and title, plus The Subtitle DB's own keyed search."
-        } else {
-            "By TMDb id, release name and title. A key adds The Subtitle DB's own keyed search."
-        }
-    }
-
     fn tmdb_identity(&self, work_id: &str) -> Option<i64> {
         self.library
             .provider_identity(work_id, "tmdb")
@@ -2154,9 +2145,7 @@ impl App {
             self.status = Some("Play something first, then find its subtitles.".to_string());
             return;
         };
-        let query = self.subtitle_query.trim().to_string();
-        let typed = !query.is_empty();
-        let title = if typed { query } else { active.title.clone() };
+        let title = active.title.clone();
         let year = active.year;
         let season = active.season;
         let episode = active.episode;
@@ -2185,6 +2174,7 @@ impl App {
         }
         self.error = None;
         self.subtitle_results.clear();
+        self.subtitle_results_for = Some(file_id.clone());
         self.status = Some("Asking The Subtitle DB…".to_string());
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -2208,6 +2198,14 @@ impl App {
         };
         let file_id = active.file_id.clone();
         let load_id = active.load_id;
+        if self.subtitle_results_for.as_deref() != Some(file_id.as_str()) {
+            self.status = Some(
+                "Those results were found for a different film. Find subtitles again for this \
+                 one."
+                    .to_string(),
+            );
+            return;
+        }
         let language = self.subtitle_language();
         let format = format.to_string();
         self.error = None;
@@ -2784,6 +2782,8 @@ impl App {
             player.stop();
         }
         self.subtitles.clear();
+        self.subtitle_results.clear();
+        self.subtitle_results_for = None;
         self.frame = None;
         self.scrub = None;
         self.snapshot = PlayerSnapshot::default();
@@ -4667,7 +4667,6 @@ impl App {
             Message::BackupNow => self.backup_now(),
             Message::EnrichmentNow => self.enrichment_now(),
             Message::ToggleArtworkRetention => self.toggle_artwork_retention(),
-            Message::SubtitleQueryChanged(value) => self.subtitle_query = value,
             Message::FindSubtitles => self.find_subtitles(),
             Message::SubtitleDownload { id, format } => self.subtitle_download(id, &format),
             Message::CastTo(id) => self.cast_to(&id),
@@ -4947,6 +4946,10 @@ impl App {
                     "f" => return self.toggle_fullscreen(),
                     "m" => self.toggle_mute(),
                     "s" => self.skip_segment(),
+                    "t" => {
+                        self.player_chrome = true;
+                        self.find_subtitles();
+                    }
                     "i" => self.toggle_segment_mark("intro"),
                     "c" => self.toggle_segment_mark("credits"),
                     _ => {}
@@ -5445,6 +5448,86 @@ impl App {
             );
         }
 
+        if self.active.is_some() {
+            let mut panel = column![].spacing(tokens.spacing.field_y);
+            panel = panel.push(
+                row![
+                    text("Subtitles")
+                        .size(tokens.type_scale.label)
+                        .color(ink(tokens.palette.foreground)),
+                    Space::new().width(Length::Fill),
+                    button(text("Find online").size(tokens.type_scale.micro))
+                        .on_press(Message::FindSubtitles)
+                        .style(action)
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                    button(text("Import…").size(tokens.type_scale.micro))
+                        .on_press(Message::ImportSubtitle)
+                        .style(quiet)
+                        .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                ]
+                .spacing(tokens.spacing.field_x)
+                .align_y(Alignment::Center),
+            );
+            if self.subtitle_search.is_some() {
+                panel = panel.push(
+                    text("Asking The Subtitle DB…")
+                        .size(tokens.type_scale.micro)
+                        .color(ink(tokens.palette.ink_muted)),
+                );
+            } else if self.subtitle_download.is_some() {
+                panel = panel.push(
+                    text("Downloading the subtitle…")
+                        .size(tokens.type_scale.micro)
+                        .color(ink(tokens.palette.ink_muted)),
+                );
+            }
+            for subtitle in &self.subtitles {
+                panel = panel.push(
+                    row![
+                        text(format!("{} · {}", subtitle.label, subtitle.format))
+                            .size(tokens.type_scale.micro)
+                            .color(ink(tokens.palette.foreground)),
+                        Space::new().width(Length::Fill),
+                        button(text("Use").size(tokens.type_scale.micro))
+                            .on_press(Message::UseSubtitle(subtitle.id.clone()))
+                            .style(quiet)
+                            .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                        button(text("Remove").size(tokens.type_scale.micro))
+                            .on_press(Message::RemoveSubtitle(subtitle.id.clone()))
+                            .style(quiet)
+                            .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                    ]
+                    .spacing(tokens.spacing.field_x)
+                    .align_y(Alignment::Center),
+                );
+            }
+            for result in &self.subtitle_results {
+                let name = if result.release_name.trim().is_empty() {
+                    result.language_name.clone()
+                } else {
+                    result.release_name.clone()
+                };
+                panel = panel.push(
+                    row![
+                        text(format!("{} · {} cues", name, result.cues))
+                            .size(tokens.type_scale.micro)
+                            .color(ink(tokens.palette.foreground)),
+                        Space::new().width(Length::Fill),
+                        button(text("Download").size(tokens.type_scale.micro))
+                            .on_press(Message::SubtitleDownload {
+                                id: result.id,
+                                format: result.format.clone(),
+                            })
+                            .style(action)
+                            .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+                    ]
+                    .spacing(tokens.spacing.field_x)
+                    .align_y(Alignment::Center),
+                );
+            }
+            block = block.push(panel.width(Length::Fill));
+        }
+
         block = block.push(
             row![
                 text(
@@ -5735,58 +5818,10 @@ impl App {
                     label: "Online provider",
                     value: self.subtitle_capability.detail.clone(),
                 });
-                rows.push(Row::Action {
-                    label: "Find subtitles online",
-                    hint: Some(self.subtitle_provider_hint()),
-                    action: "Find",
-                    on_press: Some(Message::FindSubtitles),
-                });
                 rows.push(Row::Value {
-                    label: "Kept subtitle files",
-                    value: format!("{} kept", self.subtitles.len()),
+                    label: "Where subtitles are found",
+                    value: "In the player, while a film is playing".to_string(),
                 });
-                for subtitle in &self.subtitles {
-                    rows.push(Row::Action {
-                        label: subtitle.label.as_str(),
-                        hint: Some(subtitle.format.as_str()),
-                        action: "Use",
-                        on_press: Some(Message::UseSubtitle(subtitle.id.clone())),
-                    });
-                    rows.push(Row::Action {
-                        label: subtitle.label.as_str(),
-                        hint: Some(subtitle.provenance.as_str()),
-                        action: "Remove",
-                        on_press: Some(Message::RemoveSubtitle(subtitle.id.clone())),
-                    });
-                }
-                rows.push(Row::Action {
-                    label: "Import a subtitle file",
-                    hint: Some("The import copies the file; the original is never touched."),
-                    action: "Import…",
-                    on_press: Some(Message::ImportSubtitle),
-                });
-                if self.subtitle_search.is_some() {
-                    rows.push(Row::Value {
-                        label: "Online search",
-                        value: "Asking The Subtitle DB…".to_string(),
-                    });
-                } else if !self.subtitle_results.is_empty() {
-                    rows.push(Row::Value {
-                        label: "Online search",
-                        value: format!("{} match(es)", self.subtitle_results.len()),
-                    });
-                }
-                for result in &self.subtitle_results {
-                    rows.push(Row::Action {
-                        label: result.release_name.as_str(),
-                        hint: Some(result.format.as_str()),
-                        action: "Download",
-                        on_press: Some(Message::SubtitleDownload {
-                            id: result.id,
-                            format: result.format.clone(),
-                        }),
-                    });
-                }
             }
             ui::screens::settings::Section::Accessibility => {
                 rows.push(Row::Toggle {
@@ -6046,39 +6081,20 @@ impl App {
             .spacing(tokens.spacing.field_y)
             .width(Length::Fill)
             .into(),
-            Section::Subtitles => {
-                let mut body = column![
-                    row![
-                        text_input(
-                            "Title to find subtitles for, or leave empty to use the film playing",
-                            &self.subtitle_query,
-                        )
-                        .on_input(Message::SubtitleQueryChanged)
-                        .on_submit(Message::FindSubtitles)
-                        .style(design::input_style())
-                        .padding(tokens.spacing.field_y)
-                        .width(Length::Fill),
-                        button(text("Find subtitles online").size(tokens.type_scale.label))
-                            .on_press(Message::FindSubtitles)
-                            .style(design::action_style(false))
-                            .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-                    ]
-                    .spacing(tokens.spacing.field_x)
-                    .align_y(Alignment::Center)
-                ]
-                .spacing(tokens.spacing.field_y)
-                .width(Length::Fill);
-
-                body = body.push(note(self.subtitle_capability.detail.clone()));
-                body = body.push(note(SUBTITLE_PRIORITY_NOTE.to_string()));
-                body = body.push(note(
-                    "A kept subtitle is copied into the library; the file on disk is never \
-                     modified or moved."
+            Section::Subtitles => column![
+                note(self.subtitle_capability.detail.clone()),
+                note(SUBTITLE_PRIORITY_NOTE.to_string()),
+                note(
+                    "These controls live in the player, because a film has to be playing for a \
+                     subtitle to belong to it: press the subtitles control there to find one \
+                     online, to use a kept one, or to import a file. Opening Settings stops the \
+                     film, so nothing here can act on it."
                         .to_string(),
-                ));
-
-                body.into()
-            }
+                ),
+            ]
+            .spacing(tokens.spacing.field_y)
+            .width(Length::Fill)
+            .into(),
             Section::Accessibility => column![note(
                 "Reduce motion also stops browse previews, so no preview decoder is opened."
                     .to_string()

@@ -22,7 +22,7 @@ down is kept as written, because it records something that really ran.
 
 | Decision | What it changes here | Detail |
 | --- | --- | --- |
-| **The Subtitle DB is the only online subtitle provider**; OpenSubtitles is removed | F15's provider is TSDB, not OpenSubtitles. No live lookup, keyed search or download has a receipt, so it is **PENDING**, not passed | [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) |
+| **The Subtitle DB is the only online subtitle provider**; OpenSubtitles is removed | F15's provider is TSDB, not OpenSubtitles. Its own path has one recorded live run (2026-11-03, `SUBTITLE_PROVIDER.md` §8); a downloaded subtitle drawn in the player and offline reuse after a restart stay **PENDING** | [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) |
 | **Subtitles resolve file-first**: embedded track, then sidecar, then the provider | F13/F15 acceptance includes the order itself: the online action returns before any network call when a track or a sidecar exists, and there is no second service or fallback chain | [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §1 |
 | **VoiceOver-specific functionality removed** — the `NSAccessibility` bridge, its announcements and its `SCREENROOM_AX_CHECK` receipt | Q07's screen-reader half is **removed**, not complete. The keyboard, focus, reduced-motion and subtitle-styling requirements are unchanged | [`VOICEOVER_PASS.md`](VOICEOVER_PASS.md) (retired) |
 | **HDR removed completely** — no mode, no extended-range output, no setting, no receipt; SDR is the only output | F07's HDR half and the P1-03 HDR task are **removed**, not complete. The HDR measurements of 2026-11-01/02 stay as history | [`HDR_VERIFICATION.md`](HDR_VERIFICATION.md), [`ADR-019`](ADR-019_HDR_PRESENTATION.md) (both retired) |
@@ -37,7 +37,7 @@ PENDING.
 
 | Removed | Evidence it is gone | What replaced it |
 | --- | --- | --- |
-| `apps/desktop/src/accessibility.rs` (2,703 lines) and its call sites | the file is deleted; `grep -rn "accessibility" apps/desktop/src` returns nothing; `cargo test -p screenroom-desktop --lib` is 352 tests, the 26 AX tests gone and the keyboard/focus ones intact | `apps/desktop/src/motion.rs` keeps `system_reduce_motion` for the three callers that used it |
+| `apps/desktop/src/accessibility.rs` (2,703 lines) and its call sites | the file is deleted; no `NSAccessibility` selector, `ScreenFacts`, `Role`, `Action`, `SCREENROOM_AX_CHECK` or `mod accessibility` remains, and `grep -rn "NSAccessibility" apps/desktop/src` is empty (the one surviving word is `accessibilityDisplayShouldReduceMotion`, the reduced-motion system query moved to `motion.rs`); `cargo test -p screenroom-desktop --lib` is 350 tests, the 26 AX tests gone and the keyboard/focus ones intact | `apps/desktop/src/motion.rs` keeps `system_reduce_motion` for the three callers that used it |
 | HDR mode, extended-range output, the setting and `hdr_check` | `grep -rniE "SCREENROOM_HDR\|HdrMode\|hdr_extended\|extended_range\|Rgba16Float\|is_extended" apps crates` returns nothing; `crates/screenroom-player/src/display.rs` deleted | SDR only: libmpv still decodes 10-bit/4K and tone-maps into the eight-bit surface |
 | `vendor/iced_wgpu` and the root `[patch.crates-io]` entry | directory deleted; `Cargo.toml` has no patch section; `Cargo.lock` records `source = "registry+https://github.com/rust-lang/crates.io-index"` and checksum `ff144a99…` | crates.io `iced_wgpu` 0.14.0 |
 
@@ -1928,10 +1928,11 @@ sections above is retired, and no HDR receipt will be produced again. That earli
 text stands as the record of what was built and measured
 ([`HDR_VERIFICATION.md`](HDR_VERIFICATION.md)). Picture-in-Picture is not offered
 at all — neither OS-wide nor as an in-app mini player (withdrawn 2026-11-02). The
-live subtitle provider is PENDING (above, F15): TSDB is the provider and no lookup,
-keyed search or download has a receipt. No media has been played on a real cast
-receiver. The `NSAccessibility` bridge recorded as ADR-017 was removed on
-2026-11-03, so no VoiceOver pass is run and no screen-reader tree is published;
+live subtitle provider has one recorded run (above, F15): an anonymous lookup, a
+keyed search and a download through the redirect all answered. No media has been
+played on a real cast receiver. The `NSAccessibility` bridge recorded as ADR-017
+was removed on 2026-11-03, so no VoiceOver pass is run and no screen-reader tree is
+published;
 keyboard navigation, focus, reduced motion and subtitle styling remain. And the
 owner's own 4K sample and five-minute battery observation still need the external
 SSD and the owner.

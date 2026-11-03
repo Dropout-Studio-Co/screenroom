@@ -16,6 +16,8 @@ const DEFAULT_PROFILE: &str = "defaultProfileId";
 const VOLUME_PERCENT: &str = "volumePercent";
 const CONVERSION_FOLDER: &str = "conversionFolder";
 
+const RETIRED_KEYS: &[&str] = &["hdrExtended"];
+
 const SUBTITLE_SCALE_NORMAL: u16 = 100;
 
 const SUBTITLE_POSITION_BOTTOM: u16 = 100;
@@ -203,6 +205,9 @@ impl Library {
         write(&tx, VOLUME_PERCENT, &volume.to_string())?;
         write_optional(&tx, CONVERSION_FOLDER, conversion_folder.as_deref())?;
         write_optional(&tx, DEFAULT_PROFILE, default_profile.as_deref())?;
+        for retired in RETIRED_KEYS {
+            tx.execute("DELETE FROM settings WHERE key = ?1", params![retired])?;
+        }
         tx.commit()?;
         Ok(())
     }

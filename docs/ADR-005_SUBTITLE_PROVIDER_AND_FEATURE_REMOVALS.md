@@ -24,7 +24,7 @@
 subtitle provider. **OpenSubtitles is removed entirely** — no client, no key
 handling, no copy, no fallback, no "other service" row in a capability table.
 
-Lookups by TMDB id, IMDb id, infohash, release name and title need no key. The
+Lookups by TMDB id, IMDb id, release name and title need no key. The
 catalogue search (`/v1/by-search`) needs `Authorization: Bearer sdb_…`. Downloads
 answer `302` to `files.thesubtitledb.org`. Lookups and search have no published
 rate limit; downloads allow 1 000 per hour anonymously and 100 000 per day with a

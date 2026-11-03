@@ -1835,6 +1835,63 @@ fn a_subtitle_file_beside_the_film_is_used_without_asking_online() {
 }
 
 #[test]
+fn the_player_can_find_subtitles_while_the_film_is_playing() {
+    let media = Media::new();
+    media.placeholders(&["Reachable (2020)/Reachable (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 44));
+
+    app.screen = Screen::Player;
+    let _ = app.update(Message::FindSubtitles);
+
+    let status = app.status.clone().unwrap_or_default();
+    assert!(
+        !status.contains("Play something first"),
+        "the player must be able to resolve subtitles for the film it is playing: {status}"
+    );
+    if app.subtitle_capability.is_configured() {
+        assert!(app.subtitle_search.is_some(), "{status}");
+    } else {
+        assert_eq!(Some(status), Some(app.subtitle_capability.detail.clone()));
+    }
+}
+
+#[test]
+fn results_found_for_one_film_are_not_downloaded_for_another() {
+    let media = Media::new();
+    media.placeholders(&["Elsewhere (2020)/Elsewhere (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 45));
+
+    app.subtitle_results = vec![screenroom_core::SubtitleMatch {
+        id: 7,
+        language: "bn".to_string(),
+        language_name: "Bengali".to_string(),
+        release_name: "Elsewhere.2020".to_string(),
+        format: "srt".to_string(),
+        cues: 120,
+        hearing_impaired: false,
+        ai_transcribed: false,
+        encoding: "utf-8".to_string(),
+    }];
+    app.subtitle_results_for = Some("a-different-film".to_string());
+
+    let _ = app.update(Message::SubtitleDownload {
+        id: 7,
+        format: "srt".to_string(),
+    });
+
+    assert!(app.subtitle_download.is_none(), "no download may start");
+    assert!(app.subtitles.is_empty(), "nothing may be kept");
+    let status = app.status.clone().unwrap_or_default();
+    assert!(status.contains("different film"), "{status}");
+}
+
+#[test]
 fn an_empty_answer_from_the_subtitle_db_is_reported_as_a_miss() {
     let mut app = fresh_app();
     let (sender, receiver) = std::sync::mpsc::channel();
