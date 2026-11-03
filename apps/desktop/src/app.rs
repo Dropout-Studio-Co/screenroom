@@ -550,7 +550,7 @@ pub struct App {
 
     track_menu_open: Option<TrackKind>,
 
-    pointer_down: bool,
+    pointer_buttons: std::collections::HashSet<iced::mouse::Button>,
 
     keyboard_reveal_at: Option<std::time::Instant>,
 
@@ -874,7 +874,10 @@ pub enum Message {
 
     MotionTick(std::time::Instant),
 
-    RailScrolled { label: String, offset: f32 },
+    RailScrolled {
+        label: String,
+        offset: f32,
+    },
 
     PlayerWake,
 
@@ -884,7 +887,15 @@ pub enum Message {
 
     TrackMenuClosed(TrackKind),
 
-    PointerButton(bool),
+    PointerMoved {
+        x: f32,
+        y: f32,
+    },
+
+    PointerButton {
+        button: iced::mouse::Button,
+        pressed: bool,
+    },
 
     Keyboard(keyboard::Event),
 
@@ -898,7 +909,10 @@ pub enum Message {
 
     FindSubtitles,
 
-    SubtitleDownload { id: i64, format: String },
+    SubtitleDownload {
+        id: i64,
+        format: String,
+    },
 
     CastTo(String),
 
@@ -991,14 +1005,23 @@ pub fn pointer_event(event: &iced::Event) -> Option<Message> {
     match event {
         iced::Event::Mouse(iced::mouse::Event::CursorEntered) => Some(Message::PointerInside(true)),
         iced::Event::Mouse(iced::mouse::Event::CursorLeft) => Some(Message::PointerInside(false)),
-        iced::Event::Mouse(iced::mouse::Event::CursorMoved { .. }) => {
-            Some(Message::PointerInside(true))
+        iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+            Some(Message::PointerMoved {
+                x: position.x,
+                y: position.y,
+            })
         }
-        iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_)) => {
-            Some(Message::PointerButton(true))
+        iced::Event::Mouse(iced::mouse::Event::ButtonPressed(button)) => {
+            Some(Message::PointerButton {
+                button: *button,
+                pressed: true,
+            })
         }
-        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(_)) => {
-            Some(Message::PointerButton(false))
+        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(button)) => {
+            Some(Message::PointerButton {
+                button: *button,
+                pressed: false,
+            })
         }
         _ => None,
     }
@@ -1215,7 +1238,7 @@ impl App {
             player_chrome: true,
             pointer_inside: true,
             track_menu_open: None,
-            pointer_down: false,
+            pointer_buttons: std::collections::HashSet::new(),
             keyboard_reveal_at: None,
             preferences,
             profiles: Vec::new(),
@@ -1900,7 +1923,7 @@ impl App {
         self.subtitle_note = None;
         self.subtitle_note_error = false;
         self.track_menu_open = None;
-        self.pointer_down = false;
+        self.pointer_buttons.clear();
         self.keyboard_reveal_at = None;
         let origin = match self.screen {
             Screen::Detail => Screen::Detail,
@@ -2978,7 +3001,7 @@ impl App {
         self.subtitle_note_error = false;
         self.subtitle_focus = 0;
         self.track_menu_open = None;
-        self.pointer_down = false;
+        self.pointer_buttons.clear();
         self.keyboard_reveal_at = None;
         self.frame = None;
         self.scrub = None;
@@ -4567,7 +4590,7 @@ impl App {
     }
 
     fn player_chrome_held(&self) -> bool {
-        self.track_menu_open.is_some() || self.pointer_down
+        self.track_menu_open.is_some() || !self.pointer_buttons.is_empty()
     }
 
     fn set_chrome(&mut self, visible: bool) {
@@ -4833,7 +4856,7 @@ impl App {
             Message::AudioLanguageChanged(value) => self.audio_input = value,
             Message::Resized(size) => {
                 self.track_menu_open = None;
-                self.pointer_down = false;
+                self.pointer_buttons.clear();
                 if size.width.is_finite() && size.width > 0.0 {
                     self.window_width = size.width;
                 }
@@ -4971,8 +4994,30 @@ impl App {
                 }
                 return Task::none();
             }
-            Message::PointerButton(down) => {
-                self.pointer_down = down;
+            Message::PointerMoved { x, y } => {
+                let inside = self.window_width.is_finite()
+                    && self.window_height.is_finite()
+                    && x >= 0.0
+                    && y >= 0.0
+                    && x <= self.window_width
+                    && y <= self.window_height;
+                if inside != self.pointer_inside {
+                    self.pointer_inside = inside;
+                    if inside {
+                        self.last_input = std::time::Instant::now();
+                        self.set_chrome(true);
+                    } else if !self.player_chrome_held() {
+                        self.set_chrome(false);
+                    }
+                }
+                return Task::none();
+            }
+            Message::PointerButton { button, pressed } => {
+                if pressed {
+                    self.pointer_buttons.insert(button);
+                } else {
+                    self.pointer_buttons.remove(&button);
+                }
                 return Task::none();
             }
             Message::MotionTick(now) => {
@@ -4990,9 +5035,9 @@ impl App {
                 let recent = self
                     .keyboard_reveal_at
                     .is_some_and(|at| at.elapsed() < ui::screens::player::CHROME_IDLE_AFTER);
-                let visible = (self.pointer_inside || recent)
-                    && (self.player_chrome_held()
-                        || ui::screens::player::chrome_visible(playing, self.last_input.elapsed()));
+                let visible = self.player_chrome_held()
+                    || ((self.pointer_inside || recent)
+                        && ui::screens::player::chrome_visible(playing, self.last_input.elapsed()));
                 self.set_chrome(visible);
                 if self.drive_play_check() {
                     return iced::exit();
@@ -6920,19 +6965,25 @@ mod tests {
             pointer_event(&iced::Event::Mouse(mouse::Event::CursorMoved {
                 position: iced::Point::ORIGIN
             })),
-            Some(Message::PointerInside(true))
+            Some(Message::PointerMoved { x: 0.0, y: 0.0 })
         ));
         assert!(matches!(
             pointer_event(&iced::Event::Mouse(mouse::Event::ButtonPressed(
                 mouse::Button::Left
             ))),
-            Some(Message::PointerButton(true))
+            Some(Message::PointerButton {
+                button: mouse::Button::Left,
+                pressed: true
+            })
         ));
         assert!(matches!(
             pointer_event(&iced::Event::Mouse(mouse::Event::ButtonReleased(
                 mouse::Button::Left
             ))),
-            Some(Message::PointerButton(false))
+            Some(Message::PointerButton {
+                button: mouse::Button::Left,
+                pressed: false
+            })
         ));
         assert!(
             pointer_event(&iced::Event::Mouse(mouse::Event::WheelScrolled {

@@ -2090,15 +2090,39 @@ fn an_open_track_menu_keeps_the_controls_while_the_pointer_is_out() {
 
     let _ = app.update(Message::TrackMenuOpened(TrackKind::Subtitle));
     let _ = app.update(Message::PointerInside(false));
+    let _ = app.update(Message::Tick);
     assert!(
         app.player_chrome,
-        "a menu being used outranks the pointer leaving"
+        "a menu being used outranks the pointer leaving, even on the next tick"
     );
 
     let _ = app.update(Message::TrackMenuClosed(TrackKind::Subtitle));
     let _ = app.update(Message::PointerInside(false));
     assert!(!app.player_chrome, "the hold ends with the menu");
 
+    let _ = app.update(Message::PointerInside(true));
+    let _ = app.update(Message::PointerButton {
+        button: iced::mouse::Button::Left,
+        pressed: true,
+    });
+    let _ = app.update(Message::PointerButton {
+        button: iced::mouse::Button::Right,
+        pressed: true,
+    });
+    let _ = app.update(Message::PointerButton {
+        button: iced::mouse::Button::Right,
+        pressed: false,
+    });
+    let _ = app.update(Message::PointerInside(false));
+    let _ = app.update(Message::Tick);
+    assert!(
+        app.player_chrome,
+        "releasing a different button must not end a drag that is still held"
+    );
+    let _ = app.update(Message::PointerButton {
+        button: iced::mouse::Button::Left,
+        pressed: false,
+    });
     let _ = app.update(Message::PointerInside(true));
     let _ = app.update(Message::TrackMenuOpened(TrackKind::Audio));
     let _ = app.update(Message::SelectTrack(TrackKind::Audio, 1));
@@ -2171,6 +2195,36 @@ fn hovering_the_volume_slider_does_not_latch_the_controls() {
     let _ = app.update(Message::PointerInside(false));
     let _ = app.update(Message::Tick);
     assert!(!app.player_chrome, "the controls still hide");
+}
+
+#[test]
+fn motion_beyond_the_window_is_not_presence() {
+    let media = Media::new();
+    media.placeholders(&["Drag (2020)/Drag (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 59));
+    app.screen = Screen::Player;
+    app.snapshot.state = screenroom_player::PlayerState::Paused;
+    app.window_width = 1280.0;
+    app.window_height = 800.0;
+
+    let _ = app.update(Message::PointerMoved { x: 600.0, y: 400.0 });
+    assert!(
+        app.pointer_inside,
+        "a position inside the window is presence"
+    );
+
+    let _ = app.update(Message::PointerMoved {
+        x: 1400.0,
+        y: 400.0,
+    });
+    let _ = app.update(Message::Tick);
+    assert!(
+        !app.player_chrome,
+        "a drag that leaves the window must not report presence"
+    );
 }
 
 #[test]
