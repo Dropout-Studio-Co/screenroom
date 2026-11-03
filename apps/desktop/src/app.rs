@@ -2078,6 +2078,19 @@ impl App {
             self.status = Some("A subtitle search is already running.".to_string());
             return;
         }
+        let Some(active) = self.active.as_ref() else {
+            self.status = Some("Play something first, then find its subtitles.".to_string());
+            return;
+        };
+        if self.snapshot.load_id != active.load_id || !self.snapshot.loaded {
+            self.error = None;
+            self.status = Some(
+                "The player has not reported this film's tracks yet, so a subtitle track inside \
+                 it cannot be ruled out. Nothing online was asked; try again once it is playing."
+                    .to_string(),
+            );
+            return;
+        }
         let Some(source) = self.subtitle_source() else {
             self.status = Some("Play something first, then find its subtitles.".to_string());
             return;

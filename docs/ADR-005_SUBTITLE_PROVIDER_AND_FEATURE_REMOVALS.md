@@ -108,14 +108,15 @@ desktop plays SDR, and that cost bought nothing that was being used.
 - **Rows become "removed", not "complete".** F07's HDR half and Q07's VoiceOver
   half are marked removed with this date. A removed feature is not a passing one,
   and the counts in the backlog say so.
-- **The vendored `iced_wgpu` had one consumer.** Its only purpose was selecting a
-  16-bit float swapchain for HDR. With HDR gone it has no reason to exist; while a
-  tree still carries it, its MIT notice and patch record still apply
-  ([`LICENSING.md`](LICENSING.md)).
+- **The vendored `iced_wgpu` had one consumer, and it is gone.** Its only purpose
+  was selecting a 16-bit float swapchain for HDR. The directory, the root
+  `[patch.crates-io]` entry and its `SCREENROOM_HDR` gate were deleted in this
+  change, and `iced_wgpu` resolves from crates.io 0.14.0 again with the ordinary
+  MIT obligation ([`LICENSING.md`](LICENSING.md)).
 - **No receipt is invented for any of this.** Removing a feature needs no device
-  run; the live TSDB paths stay PENDING in
-  [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8 until someone runs them with
-  the owner's key.
+  run. The provider's own path has one recorded live run
+  ([`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8); the two steps that need a
+  visible window and a person stay PENDING until someone runs them.
 
 ## What this does not change
 

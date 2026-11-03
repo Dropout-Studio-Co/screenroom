@@ -28,8 +28,34 @@ down is kept as written, because it records something that really ran.
 | **HDR removed completely** — no mode, no extended-range output, no setting, no receipt; SDR is the only output | F07's HDR half and the P1-03 HDR task are **removed**, not complete. The HDR measurements of 2026-11-01/02 stay as history | [`HDR_VERIFICATION.md`](HDR_VERIFICATION.md), [`ADR-019`](ADR-019_HDR_PRESENTATION.md) (both retired) |
 
 What this does **not** claim: that any of it has run. Removing a feature needs no
-device test. The TSDB paths need the owner's key and the four commands in
-`SUBTITLE_PROVIDER.md` §8, and until they are run the provider is unverified.
+device test. The TSDB paths need the owner's key and the commands in
+`SUBTITLE_PROVIDER.md` §8; the provider's own path has now been run there once
+(2026-11-03), and the two steps that need a visible window and a person are still
+PENDING.
+
+### Removals completed on this host, 2026-11-03
+
+| Removed | Evidence it is gone | What replaced it |
+| --- | --- | --- |
+| `apps/desktop/src/accessibility.rs` (2,703 lines) and its call sites | the file is deleted; `grep -rn "accessibility" apps/desktop/src` returns nothing; `cargo test -p screenroom-desktop --lib` is 352 tests, the 26 AX tests gone and the keyboard/focus ones intact | `apps/desktop/src/motion.rs` keeps `system_reduce_motion` for the three callers that used it |
+| HDR mode, extended-range output, the setting and `hdr_check` | `grep -rniE "SCREENROOM_HDR\|HdrMode\|hdr_extended\|extended_range\|Rgba16Float\|is_extended" apps crates` returns nothing; `crates/screenroom-player/src/display.rs` deleted | SDR only: libmpv still decodes 10-bit/4K and tone-maps into the eight-bit surface |
+| `vendor/iced_wgpu` and the root `[patch.crates-io]` entry | directory deleted; `Cargo.toml` has no patch section; `Cargo.lock` records `source = "registry+https://github.com/rust-lang/crates.io-index"` and checksum `ff144a99…` | crates.io `iced_wgpu` 0.14.0 |
+
+SDR presentation still runs after the compositor fork was dropped. The
+application's own `SCREENROOM_PLAY_CHECK`, release build, hidden window, on a
+generated 1920×1080 test pattern:
+
+```bash
+SCREENROOM_ALLOW_FOREGROUND=0 SCREENROOM_PLAY_CHECK=/tmp/sdr-check.csv \
+SCREENROOM_PLAY_CHECK_MEDIA=".artifacts/media/Screenroom.Test.Pattern.2026.1080p.mp4" \
+SCREENROOM_PLAY_CHECK_SECONDS=8 ./target/release/screenroom-desktop
+```
+
+observed: `picture_surface Bgra8Unorm`, `delivered 26.991 fps` over 199 frames,
+`drawn 29.840 fps`, `startup_ms 637.7`, `worst_gap_ms 53.5`, `cpu_mean 17.81 %`,
+`rss_mean 206722 kB`, `failure none`. `presented_fps` is `unavailable` because a
+hidden window is given no surface to present into, so this is delivered and drawn
+frames, not a claim about a visible screen.
 
 ---
 

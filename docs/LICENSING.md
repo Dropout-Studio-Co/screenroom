@@ -66,17 +66,17 @@ certificate list rather than code. That is the first CDLA-licensed component in 
 graph; it is permissive, imposes no source obligation, and is recorded here because a
 release notice should name it.
 
-**A vendored `iced_wgpu` for the HDR swapchain — retired.** `vendor/iced_wgpu` is
+**A vendored `iced_wgpu` for the HDR swapchain — removed.** `vendor/iced_wgpu` was
 upstream `iced_wgpu` 0.14.0, MIT as declared in its own `Cargo.toml` (upstream ships
 no separate LICENSE file), carried under a root `[patch.crates-io]` entry. Only
-`Cargo.toml` and `src/window/compositor.rs` differed, and the reasoning, the patch
-and the update procedure are in `vendor/README.md`. Its **only** purpose was
-selecting a 16-bit float swapchain for HDR, and HDR was removed on 2026-11-03
-([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)), so the fork has no
-remaining consumer and is retired with the feature. A tree that still carries it
-keeps the obligation below until it is gone: treat the fork as third-party source,
-keep the MIT notice and the upstream attribution, and ship the patched source
-alongside any binary release.
+`Cargo.toml` and `src/window/compositor.rs` differed. Its **only** purpose was
+selecting a 16-bit float swapchain for HDR. HDR was removed on 2026-11-03
+([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)), so the fork lost its
+only consumer: the directory, the `[patch.crates-io]` entry and its
+`SCREENROOM_HDR` gate were deleted in the same change, and `iced_wgpu` now resolves
+from crates.io 0.14.0 with the ordinary MIT obligation recorded in the table above.
+Nothing is vendored for it any more, so no patched source needs to ship with a
+binary release.
 
 ## Native media components: source license is not binary clearance
 

@@ -1785,6 +1785,29 @@ fn a_film_with_its_own_subtitle_track_is_never_sent_online() {
 }
 
 #[test]
+fn before_the_player_reports_its_tracks_nothing_online_is_asked() {
+    let media = Media::new();
+    media.placeholders(&["Unsettled (2020)/Unsettled (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 43));
+
+    app.snapshot.loaded = false;
+    let _ = app.update(Message::FindSubtitles);
+
+    assert!(
+        app.subtitle_search.is_none(),
+        "an unsettled track list must not start a lookup"
+    );
+    assert!(app.subtitle_results.is_empty());
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let status = app.status.clone().unwrap_or_default();
+    assert!(status.contains("tracks"), "{status}");
+    assert!(status.contains("Nothing online"), "{status}");
+}
+
+#[test]
 fn a_subtitle_file_beside_the_film_is_used_without_asking_online() {
     let media = Media::new();
     media.placeholders(&["Beside (2020)/Beside (2020).mkv".to_string()]);

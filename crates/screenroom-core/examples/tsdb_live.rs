@@ -53,14 +53,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         downloaded.bytes.len(),
         downloaded.format,
         cues,
-        text.lines().position(|line| line.contains("-->")).unwrap_or(0)
+        text.lines()
+            .position(|line| line.contains("-->"))
+            .unwrap_or(0)
     );
     if cues == 0 {
         return Err("the download held no subtitle cues".into());
     }
 
-    let episode = SubtitleSearch::episode("Game of Thrones", Some(2011), 4, 2, "bn")
-        .with_imdb("tt0944947");
+    let episode =
+        SubtitleSearch::episode("Game of Thrones", Some(2011), 4, 2, "bn").with_imdb("tt0944947");
     let episodes = provider.search(&episode)?;
     println!("episode matches: {}", episodes.len());
     if episodes.is_empty() {

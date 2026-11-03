@@ -9,10 +9,12 @@ mapping and the bounds. The decision is
 
 **Status (2026-11-03).** The behaviour below is the binding product behaviour.
 Imports, storage and offline reuse are implemented and covered by tests. The
-provider was replaced by TSDB under this decision; **no live lookup, keyed search
-or download has a receipt in this repository yet**, so every live step below is
-recorded as PENDING with the command that settles it. No screenshot, no measured
-latency and no "it worked" claim is made here for anything that did not run.
+provider was replaced by TSDB under this decision, and its own code path — key
+discovery, anonymous lookup, keyed search and a cross-host download — was run once
+against the live service on this host (§8, with the output). What is still
+**PENDING** is the part that needs a visible window and a person: a downloaded
+subtitle drawn in the player, and offline reuse after a restart. No screenshot and
+no measured latency is claimed for anything that did not run.
 
 ## 1. The priority chain
 
@@ -31,6 +33,9 @@ Rules that hold at every tier:
   present, the online action returns before it opens a socket, reads the key or
   shows a consent step. Proving the transport is never called in that case is an
   acceptance condition of the change, so the rule is checked rather than assumed.
+- **A track list that has not arrived is not an empty track list.** Until the
+  player has reported the loaded file's tracks, the action refuses to look online
+  and says why, because it cannot yet rule out a subtitle track inside the file.
 - **One provider, no chain.** There is no second online service, no mirror, no
   "try the other one" fallback and no silent automatic search. OpenSubtitles was
   removed on 2026-11-03 and appears nowhere as a live provider.
@@ -162,35 +167,49 @@ cargo test --workspace                      # store, import bounds, round-trip, 
 cargo test -p screenroom-desktop --lib acceptance
 ```
 
-PENDING — live, and requiring the owner's key at the path above:
+**Settled on the owner's MacBook, 2026-11-03.** The provider was exercised through
+its own code path — key discovery, anonymous lookup, keyed search, cross-host
+download redirect and text validation — not with `curl` alone:
 
 ```bash
-# 1. An anonymous lookup answers without a key.
-curl -sS "https://api.thesubtitledb.org/v1/by-tmdb/movie/550?lang=en" | head -c 400
-
-# 2. A keyed search is refused without the key and accepted with it.
-#    No key on the command line: read it from the file so it stays out of history.
-KEY=$(cat "$HOME/Library/Application Support/Screenroom/subtitles.key")
-curl -sS -o /dev/null -w '%{http_code}\n' \
-  "https://api.thesubtitledb.org/v1/by-search?q=fight%20club&type=movie"
-curl -sS -H "Authorization: Bearer $KEY" \
-  "https://api.thesubtitledb.org/v1/by-search?q=fight%20club&type=movie" | head -c 400
-
-# 3. A download redirects to the file host.
-curl -sSI "https://api.thesubtitledb.org/get/<id>" | head -n 5
-
-# 4. The application, installed, with a film that has no track and no sidecar:
-#    player → Find subtitles online → pick a result → the text appears → quit,
-#    turn the network off, reopen, play: the kept subtitle still works and the
-#    media file's bytes and modification time are unchanged.
-cargo run -p screenroom-desktop
+SCREENROOM_TSDB_LIVE=1 cargo run -q -p screenroom-core --example tsdb_live
 ```
 
-**Status of each of those four: PENDING.** A planning pass on 2026-11-03 recorded
-anonymous lookups answering, a `302` to the file host, and `400`/`401`/`404`
-answers from the live service; that transcript is not a receipt for this app, and
-no keyed search, downloaded subtitle, playback of a downloaded subtitle or
-installed-app run has been recorded. Nothing here is claimed to have happened.
+Observed, on the owner's key at `~/Library/Application Support/Screenroom/subtitles.key`
+(the value was never printed, logged or committed):
+
+```text
+provider: thesubtitledb
+configured: true
+detail: Online subtitle lookups and keyed title search are configured for The Subtitle DB.
+keyed search: true
+lookup matches: 10          (Parasite, TMDB 496243, Bengali)
+first match: id=12557726 language=bn format=srt cues=1660
+keyed search matches: 65
+downloaded: 196269 bytes, format srt, cues observed 1660, first cue on line 1
+episode matches: 4          (Game of Thrones S04E02, IMDb tt0944947, Bengali)
+tsdb_live: ok
+```
+
+The same session also confirmed, against the live service, that a malformed
+language code answers `400`, a wrong media kind and a missing id answer `404`, and
+`/get/{id}` answers `302` to `files.thesubtitledb.org` before the bytes. Those are
+provider facts observed with `curl`; the run above is the receipt for this
+application's own transport, authentication and parsing.
+
+Two checks stay PENDING, because they need a visible window and a person:
+
+```bash
+# A film with no track and no sidecar, in the installed application:
+#   player → Find subtitles online → pick a result → the text appears → quit,
+#   turn the network off, reopen, play: the kept subtitle still works and the
+#   media file's bytes and modification time are unchanged.
+scripts/package-macos.sh && open dist/Screenroom.app
+```
+
+**Also not verified:** the Windows path (no build on that machine), a downloaded
+subtitle drawn inside the player window, and the offline-reuse step above. Nothing
+here is claimed to have happened beyond the recorded run.
 
 **Also not verified:** the Windows path (no build on that machine), and the TV
 client, which has no online subtitle provider at all — it reads embedded tracks

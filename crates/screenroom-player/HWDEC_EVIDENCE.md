@@ -1,5 +1,13 @@
 # macOS software-renderer hardware decode check
 
+> **Historical record (retired 2026-11-03).** Every number below was measured when
+> it says it was measured, and is kept as the audit trail. HDR was removed from the
+> product on 2026-11-03 ([ADR-005](../docs/ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)):
+> the extended-range output path, the `HDR` setting and the `hdr_check` example no
+> longer exist, so the HDR sections and the `hdr_check` commands below cannot be
+> run again. SDR is the only output. The decode, delivery and frame-gap rows are
+> still the evidence for the SDR path and remain valid for it.
+
 Run on the owner's Apple M4 MacBook Air with mpv/libmpv 0.41.0 (client API
 2.5). Audio was muted. The three files were opened read-only, one process at a
 time. Each playback row covers 20 seconds after the first non-blank frame. Frames
