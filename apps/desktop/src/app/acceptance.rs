@@ -2130,6 +2130,72 @@ fn a_pointer_boundary_does_not_restart_when_it_repeats() {
 }
 
 #[test]
+fn a_key_board_input_keeps_the_controls_while_the_pointer_is_out() {
+    let media = Media::new();
+    media.placeholders(&["Paused (2020)/Paused (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 56));
+    app.screen = Screen::Player;
+    app.snapshot.state = screenroom_player::PlayerState::Paused;
+
+    let _ = app.update(Message::PointerInside(false));
+    assert!(!app.player_chrome);
+
+    let _ = app.update(key("space"));
+    let _ = app.update(Message::Tick);
+
+    assert!(
+        app.player_chrome,
+        "a key press while the pointer is out must show the controls, even paused"
+    );
+}
+
+#[test]
+fn hovering_the_volume_slider_does_not_latch_the_controls() {
+    let media = Media::new();
+    media.placeholders(&["Hover (2020)/Hover (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 57));
+    app.screen = Screen::Player;
+
+    let _ = app.update(Message::Volume(42.0));
+    assert!(
+        !app.player_chrome_held(),
+        "a value change is not a drag and must not hold the chrome"
+    );
+
+    let _ = app.update(Message::PointerInside(false));
+    let _ = app.update(Message::Tick);
+    assert!(!app.player_chrome, "the controls still hide");
+}
+
+#[test]
+fn a_resize_releases_a_menu_hold() {
+    let media = Media::new();
+    media.placeholders(&["Narrow (2020)/Narrow (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 58));
+    app.screen = Screen::Player;
+
+    let _ = app.update(Message::TrackMenuOpened(TrackKind::Audio));
+    let _ = app.update(Message::Resized(iced::Size::new(640.0, 480.0)));
+    assert!(
+        !app.player_chrome_held(),
+        "a resize can remove the control that owned the menu"
+    );
+
+    let _ = app.update(Message::PointerInside(false));
+    let _ = app.update(Message::Tick);
+    assert!(!app.player_chrome);
+}
+
+#[test]
 fn a_film_still_playing_outside_the_window_stays_hidden_on_tick() {
     let media = Media::new();
     media.placeholders(&["Tick (2020)/Tick (2020).mkv".to_string()]);

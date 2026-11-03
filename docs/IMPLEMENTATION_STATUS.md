@@ -65,14 +65,17 @@ Measured on the running app (window screenshots, 150 ms after each transition):
 entry shows the full chrome and subtitle panel; exit removes every overlay —
 title, scrub bar, controls, panel — while playback continues; three rapid crossings
 each produced the expected state with no oscillation; the same holds while paused.
-A track menu held open, or an active scrub/volume drag, keeps the chrome while the
-pointer is out. The mean luma of the bottom band was 29 with the chrome up and 83–86 with it gone,
+A track menu held open, or the pointer button held down (a real drag, not a slider
+value change), keeps the chrome while the pointer is out; a key press also reveals it
+for the idle window, so a paused film stays controllable without a pointer. The mean luma of the bottom band was 29 with the chrome up and 83–86 with it gone,
 across three crossings: the scrim appears and disappears exactly with presence.
 
 Regression tests: `a_trim_keeps_the_picture_bindable_so_a_redraw_is_not_blank`,
-`a_missing_binding_never_counts_as_reusable`, and four acceptance tests covering exit and entry, a repeated boundary, a tick with
-the pointer out, and the menu hold including selection. The suite is
-**777 tests, 0 failures**.
+`a_missing_binding_never_counts_as_reusable`, `only_real_pointer_events_move_the_presence_latch`,
+and seven acceptance tests covering exit and entry, a repeated boundary, a tick with
+the pointer out, the menu hold and its selection, a paused key press while outside,
+a hovered slider that must not hold, and a resize that releases the hold. The suite
+is **781 tests, 0 failures**.
 
 ### Subtitles verified in the running application, 2026-11-03
 

@@ -550,7 +550,9 @@ pub struct App {
 
     track_menu_open: Option<TrackKind>,
 
-    volume_dragging: bool,
+    pointer_down: bool,
+
+    keyboard_reveal_at: Option<std::time::Instant>,
 
     preferences: Preferences,
 
@@ -882,6 +884,8 @@ pub enum Message {
 
     TrackMenuClosed(TrackKind),
 
+    PointerButton(bool),
+
     Keyboard(keyboard::Event),
 
     RequestTerminate,
@@ -981,6 +985,23 @@ fn ticks(
         });
         receiver.map(|()| Message::Tick)
     })
+}
+
+pub fn pointer_event(event: &iced::Event) -> Option<Message> {
+    match event {
+        iced::Event::Mouse(iced::mouse::Event::CursorEntered) => Some(Message::PointerInside(true)),
+        iced::Event::Mouse(iced::mouse::Event::CursorLeft) => Some(Message::PointerInside(false)),
+        iced::Event::Mouse(iced::mouse::Event::CursorMoved { .. }) => {
+            Some(Message::PointerInside(true))
+        }
+        iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_)) => {
+            Some(Message::PointerButton(true))
+        }
+        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(_)) => {
+            Some(Message::PointerButton(false))
+        }
+        _ => None,
+    }
 }
 
 fn motion_ticks() -> Subscription<Message> {
@@ -1194,7 +1215,8 @@ impl App {
             player_chrome: true,
             pointer_inside: true,
             track_menu_open: None,
-            volume_dragging: false,
+            pointer_down: false,
+            keyboard_reveal_at: None,
             preferences,
             profiles: Vec::new(),
             settings_focus: 0,
@@ -1878,7 +1900,8 @@ impl App {
         self.subtitle_note = None;
         self.subtitle_note_error = false;
         self.track_menu_open = None;
-        self.volume_dragging = false;
+        self.pointer_down = false;
+        self.keyboard_reveal_at = None;
         let origin = match self.screen {
             Screen::Detail => Screen::Detail,
             _ => Screen::Browse,
@@ -2955,7 +2978,8 @@ impl App {
         self.subtitle_note_error = false;
         self.subtitle_focus = 0;
         self.track_menu_open = None;
-        self.volume_dragging = false;
+        self.pointer_down = false;
+        self.keyboard_reveal_at = None;
         self.frame = None;
         self.scrub = None;
         self.snapshot = PlayerSnapshot::default();
@@ -4543,7 +4567,7 @@ impl App {
     }
 
     fn player_chrome_held(&self) -> bool {
-        self.track_menu_open.is_some() || self.scrub.is_some() || self.volume_dragging
+        self.track_menu_open.is_some() || self.pointer_down
     }
 
     fn set_chrome(&mut self, visible: bool) {
@@ -4808,6 +4832,8 @@ impl App {
             Message::SubtitleLanguageChanged(value) => self.subtitle_input = value,
             Message::AudioLanguageChanged(value) => self.audio_input = value,
             Message::Resized(size) => {
+                self.track_menu_open = None;
+                self.pointer_down = false;
                 if size.width.is_finite() && size.width > 0.0 {
                     self.window_width = size.width;
                 }
@@ -4905,14 +4931,8 @@ impl App {
                 }
             }
             Message::TogglePlay => self.toggle_play(),
-            Message::Volume(percent) => {
-                self.volume_dragging = true;
-                self.drag_volume(percent)
-            }
-            Message::VolumeCommit => {
-                self.volume_dragging = false;
-                self.commit_volume()
-            }
+            Message::Volume(percent) => self.drag_volume(percent),
+            Message::VolumeCommit => self.commit_volume(),
             Message::ToggleMute => self.toggle_mute(),
             Message::ToggleFullscreen => return self.toggle_fullscreen(),
             Message::Scrub(seconds) => self.scrub = Some(seconds),
@@ -4951,6 +4971,10 @@ impl App {
                 }
                 return Task::none();
             }
+            Message::PointerButton(down) => {
+                self.pointer_down = down;
+                return Task::none();
+            }
             Message::MotionTick(now) => {
                 self.motion.step(now);
                 return self.drive_motion();
@@ -4963,7 +4987,10 @@ impl App {
                 let playing =
                     matches!(self.snapshot.state, screenroom_player::PlayerState::Playing)
                         && self.up_next.is_none();
-                let visible = self.pointer_inside
+                let recent = self
+                    .keyboard_reveal_at
+                    .is_some_and(|at| at.elapsed() < ui::screens::player::CHROME_IDLE_AFTER);
+                let visible = (self.pointer_inside || recent)
                     && (self.player_chrome_held()
                         || ui::screens::player::chrome_visible(playing, self.last_input.elapsed()));
                 self.set_chrome(visible);
@@ -4972,7 +4999,10 @@ impl App {
                 }
                 return Task::none();
             }
-            Message::Keyboard(event) => return self.handle_key(event),
+            Message::Keyboard(event) => {
+                self.keyboard_reveal_at = Some(std::time::Instant::now());
+                return self.handle_key(event);
+            }
             Message::RequestTerminate => {
                 crate::quit::request_termination();
             }
@@ -5162,15 +5192,12 @@ impl App {
                     }
                     Key::Named(Named::Space) => self.toggle_play(),
                     Key::Named(Named::ArrowUp) if !self.subtitle_actions().is_empty() => {
-                        self.player_chrome = true;
                         self.move_subtitle_focus(-1);
                     }
                     Key::Named(Named::ArrowDown) if !self.subtitle_actions().is_empty() => {
-                        self.player_chrome = true;
                         self.move_subtitle_focus(1);
                     }
                     Key::Named(Named::Enter) if self.subtitle_enter_target().is_some() => {
-                        self.player_chrome = true;
                         return self.activate_subtitle();
                     }
                     Key::Named(Named::Enter) if self.up_next.is_some() => self.play_up_next(),
@@ -5180,10 +5207,7 @@ impl App {
                         "f" => return self.toggle_fullscreen(),
                         "m" => self.toggle_mute(),
                         "s" => self.skip_segment(),
-                        "t" => {
-                            self.player_chrome = true;
-                            self.find_subtitles();
-                        }
+                        "t" => self.find_subtitles(),
                         "i" => self.toggle_segment_mark("intro"),
                         "c" => self.toggle_segment_mark("credits"),
                         _ => {}
@@ -5311,18 +5335,7 @@ impl App {
             iced::keyboard::listen().map(Message::Keyboard),
             iced::window::close_requests().map(|_| Message::Close),
             iced::window::resize_events().map(|(_id, size)| Message::Resized(size)),
-            iced::event::listen_with(|event, _status, _id| match event {
-                iced::Event::Mouse(iced::mouse::Event::CursorEntered) => {
-                    Some(Message::PointerInside(true))
-                }
-                iced::Event::Mouse(iced::mouse::Event::CursorLeft) => {
-                    Some(Message::PointerInside(false))
-                }
-                iced::Event::Mouse(iced::mouse::Event::CursorMoved { .. }) => {
-                    Some(Message::PointerInside(true))
-                }
-                _ => None,
-            }),
+            iced::event::listen_with(|event, _status, _id| crate::app::pointer_event(&event)),
         ];
         let interval = if self.screen == Screen::Player || self.preview.is_some() {
             PLAYER_TICK
@@ -5722,6 +5735,15 @@ impl App {
                     text("↑ ↓ pick a subtitle · Enter takes it")
                         .size(tokens.type_scale.micro)
                         .color(ink(tokens.palette.ink_muted)),
+                );
+            }
+            if let Some(error) = &self.error
+                && Some(error) != self.subtitle_note.as_ref()
+            {
+                panel = panel.push(
+                    text(error.clone())
+                        .size(tokens.type_scale.micro)
+                        .color(ink(ui::theme::danger())),
                 );
             }
             if let Some(message) = self.subtitle_note.clone() {
@@ -6880,6 +6902,45 @@ mod tests {
             let _ = app.move_focus(Focus::Right);
             assert_eq!(app.focus, 1);
         }
+    }
+
+    #[test]
+    fn only_real_pointer_events_move_the_presence_latch() {
+        use iced::mouse;
+
+        assert!(matches!(
+            pointer_event(&iced::Event::Mouse(mouse::Event::CursorEntered)),
+            Some(Message::PointerInside(true))
+        ));
+        assert!(matches!(
+            pointer_event(&iced::Event::Mouse(mouse::Event::CursorLeft)),
+            Some(Message::PointerInside(false))
+        ));
+        assert!(matches!(
+            pointer_event(&iced::Event::Mouse(mouse::Event::CursorMoved {
+                position: iced::Point::ORIGIN
+            })),
+            Some(Message::PointerInside(true))
+        ));
+        assert!(matches!(
+            pointer_event(&iced::Event::Mouse(mouse::Event::ButtonPressed(
+                mouse::Button::Left
+            ))),
+            Some(Message::PointerButton(true))
+        ));
+        assert!(matches!(
+            pointer_event(&iced::Event::Mouse(mouse::Event::ButtonReleased(
+                mouse::Button::Left
+            ))),
+            Some(Message::PointerButton(false))
+        ));
+        assert!(
+            pointer_event(&iced::Event::Mouse(mouse::Event::WheelScrolled {
+                delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 }
+            }))
+            .is_none(),
+            "a wheel scroll is not a boundary and must not touch presence"
+        );
     }
 
     #[test]
