@@ -9,24 +9,13 @@ mod frame;
 mod render;
 mod worker;
 
-pub mod display;
-
 #[cfg(target_os = "macos")]
 pub mod gl_render;
 
 #[cfg(target_os = "macos")]
 pub mod surface;
 
-pub use display::{
-    DisplayAssumption, DisplayTarget, PQ_C1, PQ_C2, PQ_C3, PQ_M1, PQ_M2, PQ_MAXIMUM_NITS,
-    REFERENCE_WHITE_NITS, extended_linear_to_nits, extended_range_target,
-    pq_code_to_extended_linear, pq_code_to_nits, pq_to_relative_luminance,
-    relative_luminance_to_pq,
-};
-pub use frame::{
-    Frame, OutputDescription, OutputTransfer, PixelFormat, TargetPrimaries, ToneMapping,
-    half_to_f32,
-};
+pub use frame::{Frame, PixelFormat};
 
 #[cfg(target_os = "macos")]
 pub use gl_render::GlRenderer;
@@ -35,7 +24,7 @@ pub use gl_render::GlRenderer;
 pub use surface::{SurfaceFrame, SurfaceReads};
 
 pub use worker::{
-    HdrMode, HwdecMode, MediaTrack, NO_TRACK, Player, PlayerCommand, PlayerFailure, PlayerSnapshot,
+    HwdecMode, MediaTrack, NO_TRACK, Player, PlayerCommand, PlayerFailure, PlayerSnapshot,
     SUB_POSITION_RANGE, SUB_SCALE_RANGE, TrackKind,
 };
 

@@ -56,7 +56,7 @@ mod tests {
     #[test]
     fn a_long_caption_is_carried_by_its_card_instead_of_being_dropped() {
         let caption = "Season 4 \u{00b7} Episode 12 \u{00b7} 34 min left \u{00b7} remastered with \
-                       commentary, audio description and the 4K HDR master"
+                       commentary, audio description and the 4K master"
             .to_string();
         assert!(
             caption.len() > 96,

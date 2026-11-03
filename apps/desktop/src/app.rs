@@ -76,7 +76,6 @@ pub fn run() -> iced::Result {
         eprintln!("play check refused: {error}");
         return Ok(());
     }
-    apply_hdr_preference();
     let window = iced::window::Settings {
         visible: !hides_its_window(),
         size: verification_size(),
@@ -128,24 +127,6 @@ fn library_path() -> Option<PathBuf> {
     match std::env::var_os("SCREENROOM_LIBRARY") {
         Some(path) => Some(PathBuf::from(path)),
         None => default_library_path(),
-    }
-}
-
-fn apply_hdr_preference() {
-    if std::env::var_os("SCREENROOM_HDR").is_some() {
-        return;
-    }
-    let Some(path) = library_path() else {
-        return;
-    };
-    let Ok(library) = Library::open(&path) else {
-        return;
-    };
-    let Ok(preferences) = library.preferences() else {
-        return;
-    };
-    if preferences.hdr_extended {
-        unsafe { std::env::set_var("SCREENROOM_HDR", "extended") };
     }
 }
 
@@ -893,8 +874,6 @@ pub enum Message {
     EnrichmentNow,
 
     ToggleArtworkRetention,
-
-    ToggleHdrExtended(bool),
 
     SubtitleQueryChanged(String),
 
@@ -2018,24 +1997,6 @@ impl App {
                     ArtworkRetention::DoNotStore => {
                         "Provider artwork will not be downloaded or kept.".to_string()
                     }
-                });
-            }
-            Err(error) => self.report(&error),
-        }
-    }
-
-    fn toggle_hdr_extended(&mut self, on: bool) {
-        self.preferences.hdr_extended = on;
-        match self.library.set_preferences(&self.preferences) {
-            Ok(()) => {
-                self.error = None;
-                self.status = Some(if on {
-                    "HDR is on. Restart the app for it to take effect, because the window picks \
-                     its surface when it opens."
-                        .to_string()
-                } else {
-                    "HDR is off. The picture is tone-mapped to SDR. Restart the app to apply it."
-                        .to_string()
                 });
             }
             Err(error) => self.report(&error),
@@ -4693,7 +4654,6 @@ impl App {
             Message::BackupNow => self.backup_now(),
             Message::EnrichmentNow => self.enrichment_now(),
             Message::ToggleArtworkRetention => self.toggle_artwork_retention(),
-            Message::ToggleHdrExtended(on) => self.toggle_hdr_extended(on),
             Message::SubtitleQueryChanged(value) => self.subtitle_query = value,
             Message::FindSubtitles => self.find_subtitles(),
             Message::SubtitleDownload { id, format } => self.subtitle_download(id, &format),
@@ -5613,12 +5573,6 @@ impl App {
                     hint: Some("Only a segment you marked is skipped."),
                     on: preferences.auto_skip_intro,
                     message: Message::ToggleAutoSkip(!preferences.auto_skip_intro),
-                });
-                rows.push(Row::Toggle {
-                    label: "Show HDR films as HDR (restart to apply)",
-                    hint: Some("The panel decides how much of it it can show."),
-                    on: preferences.hdr_extended,
-                    message: Message::ToggleHdrExtended(!preferences.hdr_extended),
                 });
                 rows.push(Row::Slider {
                     label: "Subtitle size",

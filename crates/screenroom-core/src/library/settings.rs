@@ -15,7 +15,6 @@ const SUBTITLE_POSITION: &str = "subtitlePositionPercent";
 const DEFAULT_PROFILE: &str = "defaultProfileId";
 const VOLUME_PERCENT: &str = "volumePercent";
 const CONVERSION_FOLDER: &str = "conversionFolder";
-const HDR_EXTENDED: &str = "hdrExtended";
 
 const SUBTITLE_SCALE_NORMAL: u16 = 100;
 
@@ -42,8 +41,6 @@ pub struct Preferences {
     pub conversion_folder: Option<String>,
 
     pub default_profile: Option<String>,
-
-    pub hdr_extended: bool,
 }
 
 impl Preferences {
@@ -69,7 +66,6 @@ impl Default for Preferences {
             volume_percent: 100,
             conversion_folder: None,
             default_profile: None,
-            hdr_extended: false,
         }
     }
 }
@@ -112,7 +108,6 @@ impl Library {
                 }
                 CONVERSION_FOLDER => preferences.conversion_folder = text(&value),
                 DEFAULT_PROFILE => preferences.default_profile = text(&value),
-                HDR_EXTENDED => preferences.hdr_extended = value == "true",
 
                 _ => {}
             }
@@ -208,15 +203,6 @@ impl Library {
         write(&tx, VOLUME_PERCENT, &volume.to_string())?;
         write_optional(&tx, CONVERSION_FOLDER, conversion_folder.as_deref())?;
         write_optional(&tx, DEFAULT_PROFILE, default_profile.as_deref())?;
-        write(
-            &tx,
-            HDR_EXTENDED,
-            if preferences.hdr_extended {
-                "true"
-            } else {
-                "false"
-            },
-        )?;
         tx.commit()?;
         Ok(())
     }

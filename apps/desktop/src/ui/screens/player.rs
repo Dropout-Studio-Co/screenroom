@@ -788,7 +788,7 @@ mod tests {
         for width in [800.0, 1000.0, 1280.0, 1440.0, 3440.0] {
             let player = Player {
                 episode: Some("S01E03 · Caprice".to_string()),
-                output: Some("4K HDR".to_string()),
+                output: Some("2160p".to_string()),
                 width,
                 ..Player::new(&snapshot, "Northern Lights", &nav)
             };

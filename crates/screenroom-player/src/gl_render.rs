@@ -4,8 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::display::DisplayTarget;
-use crate::frame::{OutputDescription, PixelFormat};
+use crate::frame::PixelFormat;
 use crate::surface::SurfaceFrame;
 use crate::{Frame, LibMpv, Mpv, PlayerError, RenderSymbols, WakeSignal};
 
@@ -22,7 +21,6 @@ const PARAM_API_TYPE: c_int = 1;
 const PARAM_OPENGL_INIT_PARAMS: c_int = 2;
 const PARAM_OPENGL_FBO: c_int = 3;
 const PARAM_FLIP_Y: c_int = 4;
-const PARAM_DEPTH: c_int = 5;
 
 const CGL_PFA_OPENGL_PROFILE: u32 = 99;
 const CGL_PFA_ACCELERATED: u32 = 73;
@@ -31,12 +29,10 @@ const CGL_OPENGL_VERSION_3_2_CORE: u32 = 0x3200;
 
 const GL_TEXTURE_RECTANGLE: u32 = 0x84f5;
 const GL_RGBA8: u32 = 0x8058;
-const GL_RGBA16F: u32 = 0x881a;
 const GL_RGBA: u32 = 0x1908;
 const GL_BGRA: u32 = 0x80e1;
 const GL_UNSIGNED_BYTE: u32 = 0x1401;
 const GL_UNSIGNED_INT_8_8_8_8_REV: u32 = 0x8367;
-const GL_HALF_FLOAT: u32 = 0x140b;
 const GL_FRAMEBUFFER: u32 = 0x8d40;
 const GL_COLOR_ATTACHMENT0: u32 = 0x8ce0;
 const GL_FRAMEBUFFER_COMPLETE: u32 = 0x8cd5;
@@ -214,7 +210,6 @@ impl Drop for CglContext {
 fn gl_formats(format: PixelFormat) -> (u32, u32, u32) {
     match format {
         PixelFormat::Bgra8 => (GL_RGBA8, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV),
-        PixelFormat::Rgba16Float => (GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT),
         PixelFormat::Rgba8 => (GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE),
     }
 }
@@ -428,7 +423,7 @@ pub struct GlRenderer {
     skipped: u64,
     fence_timeouts: u64,
     reclaimed_while_reading: u64,
-    output: OutputDescription,
+    output: PixelFormat,
     target_failure: Option<String>,
 }
 
@@ -447,43 +442,6 @@ impl std::fmt::Debug for GlRenderer {
 
 pub fn clamp_target(width: u32, height: u32) -> (u32, u32) {
     (width.max(1), height.max(1))
-}
-
-fn extended_range_values(target: DisplayTarget) -> [(&'static str, String); 5] {
-    [
-        ("target-prim", "bt.709".to_string()),
-        ("target-trc", "pq".to_string()),
-        ("target-peak", target.peak_nits().to_string()),
-        ("tone-mapping", "bt.2390".to_string()),
-        ("hdr-compute-peak", "no".to_string()),
-    ]
-}
-
-fn extended_range_reset_values() -> [(&'static str, &'static str); 5] {
-    [
-        ("target-prim", "auto"),
-        ("target-trc", "auto"),
-        ("target-peak", "auto"),
-        ("tone-mapping", "auto"),
-        ("hdr-compute-peak", "auto"),
-    ]
-}
-
-pub fn enable_extended_range(
-    core: &Mpv,
-    target: DisplayTarget,
-) -> Result<OutputDescription, PlayerError> {
-    for (name, value) in extended_range_values(target) {
-        core.set_property(name, &value)?;
-    }
-    Ok(OutputDescription::extended_float(Some(target.peak_nits())))
-}
-
-pub fn reset_extended_range(core: &Mpv) -> Result<(), PlayerError> {
-    for (name, value) in extended_range_reset_values() {
-        core.set_property(name, value)?;
-    }
-    Ok(())
 }
 
 fn writable_slot(slots: &[Slot], now: Instant) -> Option<usize> {
@@ -559,7 +517,7 @@ impl GlRenderer {
             skipped: 0,
             fence_timeouts: 0,
             reclaimed_while_reading: 0,
-            output: OutputDescription::sdr_bgra8(),
+            output: PixelFormat::Bgra8,
             target_failure: None,
         })
     }
@@ -572,22 +530,8 @@ impl GlRenderer {
         Ok(unsafe { (self.symbols.update)(self.context.as_ptr()) })
     }
 
-    pub fn output(&self) -> &OutputDescription {
-        &self.output
-    }
-
-    pub fn set_output(&mut self, output: OutputDescription) {
-        if self.output.format == output.format {
-            self.output = output;
-            return;
-        }
-        self.output = output;
-        self.target_failure = None;
-        if self.cgl.make_current().is_ok() {
-            self.release_slots();
-        }
-        self.width = 0;
-        self.height = 0;
+    pub fn output(&self) -> PixelFormat {
+        self.output
     }
 
     pub fn set_target(&mut self, width: u32, height: u32) {
@@ -607,7 +551,7 @@ impl GlRenderer {
         self.release_slots();
         let mut slots = Vec::with_capacity(SURFACE_POOL_SIZE);
         for _ in 0..SURFACE_POOL_SIZE {
-            match Slot::create(&self.cgl, width, height, self.output.format) {
+            match Slot::create(&self.cgl, width, height, self.output) {
                 Ok(slot) => slots.push(slot),
                 Err(error) => {
                     self.target_failure = Some(error.to_string());
@@ -645,7 +589,7 @@ impl GlRenderer {
         let index = match writable_slot(&self.slots, Instant::now()) {
             Some(index) => index,
             None if self.slots.len() < MAX_SURFACE_POOL_SIZE => {
-                match Slot::create(&self.cgl, self.width, self.height, self.output.format) {
+                match Slot::create(&self.cgl, self.width, self.height, self.output) {
                     Ok(slot) => {
                         self.slots.push(slot);
                         self.slots.len() - 1
@@ -665,7 +609,7 @@ impl GlRenderer {
         if !self.slots[index].reads_reported() {
             self.reclaimed_while_reading += 1;
         }
-        let (internal_format, _, _) = gl_formats(self.output.format);
+        let (internal_format, _, _) = gl_formats(self.output);
         let mut fbo = OpenGlFbo {
             fbo: framebuffer as c_int,
             w: self.width as c_int,
@@ -673,11 +617,6 @@ impl GlRenderer {
             internal_format: internal_format as c_int,
         };
         let mut flip_y: c_int = 0;
-        let mut depth: c_int = if self.output.format.is_extended_range() {
-            c_int::from(self.output.format.bits_per_channel())
-        } else {
-            0
-        };
         let mut params = vec![
             RenderParam {
                 kind: PARAM_OPENGL_FBO,
@@ -686,10 +625,6 @@ impl GlRenderer {
             RenderParam {
                 kind: PARAM_FLIP_Y,
                 data: (&mut flip_y as *mut c_int).cast(),
-            },
-            RenderParam {
-                kind: PARAM_DEPTH,
-                data: (&mut depth as *mut c_int).cast(),
             },
             RenderParam {
                 kind: 0,
@@ -811,7 +746,6 @@ impl Drop for GlRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame::TargetPrimaries;
 
     fn bare_slot() -> Slot {
         Slot {
@@ -1007,63 +941,5 @@ mod tests {
         assert_eq!(GL_RGBA8, 0x8058);
         assert_eq!(GL_BGRA, 0x80e1);
         assert_eq!(GL_UNSIGNED_INT_8_8_8_8_REV, 0x8367);
-    }
-
-    #[test]
-    fn the_extended_texture_is_a_half_float_rgba_target() {
-        assert_eq!(
-            gl_formats(PixelFormat::Rgba16Float),
-            (GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT)
-        );
-        assert_eq!(GL_RGBA16F, 0x881a);
-        assert_eq!(GL_RGBA, 0x1908);
-        assert_eq!(GL_HALF_FLOAT, 0x140b);
-    }
-
-    #[test]
-    fn extended_range_asks_mpv_to_tone_map_into_the_real_display() {
-        let values = extended_range_values(DisplayTarget::with_headroom(2.0));
-        let lookup = |key: &str| {
-            values
-                .iter()
-                .find(|(name, _)| *name == key)
-                .map(|(_, value)| value.as_str())
-        };
-        assert_eq!(lookup("target-prim"), Some("bt.709"));
-        assert_eq!(lookup("target-trc"), Some("pq"));
-        assert_eq!(lookup("target-peak"), Some("406"));
-        assert_eq!(lookup("tone-mapping"), Some("bt.2390"));
-        assert_eq!(lookup("hdr-compute-peak"), Some("no"));
-    }
-
-    #[test]
-    fn an_assumed_display_gets_a_reference_white_tone_map_instead_of_a_guess() {
-        let values = extended_range_values(DisplayTarget::sdr());
-        let peak = values
-            .iter()
-            .find(|(name, _)| *name == "target-peak")
-            .map(|(_, value)| value.as_str());
-        assert_eq!(peak, Some("203"));
-    }
-
-    #[test]
-    fn a_reset_restores_every_extended_range_option_to_auto() {
-        let reset = extended_range_reset_values();
-        for (name, value) in reset {
-            assert_eq!(value, "auto", "{name} must return to auto");
-        }
-        assert_eq!(
-            reset.len(),
-            extended_range_values(DisplayTarget::sdr()).len()
-        );
-    }
-
-    #[test]
-    fn the_default_output_of_a_fresh_renderer_is_eight_bit_sdr() {
-        assert_eq!(OutputDescription::default().format, PixelFormat::Bgra8);
-        assert_eq!(
-            OutputDescription::default().primaries,
-            TargetPrimaries::Auto
-        );
     }
 }

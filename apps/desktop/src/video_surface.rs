@@ -107,7 +107,7 @@ impl Primitive for VideoPrimitive {
         queue.write_buffer(
             &pipeline.fit_buffer,
             0,
-            bytemuck_f32(&[fit_x, fit_y, extended_range_mode(&frame.format), 0.0]),
+            bytemuck_f32(&[fit_x, fit_y, 0.0, 0.0]),
         );
         if pipeline.uploaded_generation == Some(frame.generation)
             && pipeline.texture_size == (frame.width, frame.height)
@@ -350,10 +350,6 @@ mod macos {
                 metal::MTLPixelFormat::RGBA8Unorm,
                 wgpu::TextureFormat::Rgba8Unorm,
             ),
-            PixelFormat::Rgba16Float => (
-                metal::MTLPixelFormat::RGBA16Float,
-                wgpu::TextureFormat::Rgba16Float,
-            ),
         }
     }
 
@@ -455,7 +451,7 @@ impl shader::Pipeline for VideoPipeline {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("screenroom-video-surface"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.as_str().into()),
+            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
         });
 
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -574,13 +570,8 @@ fn bytemuck_f32(values: &[f32; 4]) -> &[u8] {
     }
 }
 
-fn extended_range_mode(format: &screenroom_player::PixelFormat) -> f32 {
-    if format.is_extended_range() { 1.0 } else { 0.0 }
-}
-
 fn upload_format(format: screenroom_player::PixelFormat) -> wgpu::TextureFormat {
     match format {
-        screenroom_player::PixelFormat::Rgba16Float => wgpu::TextureFormat::Rgba16Float,
         screenroom_player::PixelFormat::Bgra8 | screenroom_player::PixelFormat::Rgba8 => {
             wgpu::TextureFormat::Rgba8Unorm
         }
@@ -592,10 +583,7 @@ static TARGET_FORMAT: std::sync::OnceLock<wgpu::TextureFormat> = std::sync::Once
 fn note_target_format(format: wgpu::TextureFormat) {
     let first = TARGET_FORMAT.set(format).is_ok();
     if first && crate::play_check::requested() {
-        eprintln!(
-            "video surface: target {format:?}, extended range {}",
-            format == wgpu::TextureFormat::Rgba16Float
-        );
+        eprintln!("video surface: target {format:?}");
     }
 }
 
@@ -603,39 +591,23 @@ pub fn target_format() -> Option<wgpu::TextureFormat> {
     TARGET_FORMAT.get().copied()
 }
 
-static SHADER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    use screenroom_player::{
-        PQ_C1, PQ_C2, PQ_C3, PQ_M1, PQ_M2, PQ_MAXIMUM_NITS, REFERENCE_WHITE_NITS,
-    };
-    let (m1, m2, c1, c2, c3) = (PQ_M1, PQ_M2, PQ_C1, PQ_C2, PQ_C3);
-    let (maximum, white) = (PQ_MAXIMUM_NITS, REFERENCE_WHITE_NITS as f32);
-    format!(
-        r#"
-const PQ_M1: f32 = {m1:?};
-const PQ_M2: f32 = {m2:?};
-const PQ_C1: f32 = {c1:?};
-const PQ_C2: f32 = {c2:?};
-const PQ_C3: f32 = {c3:?};
-const PQ_MAXIMUM_NITS: f32 = {maximum:?};
-const REFERENCE_WHITE_NITS: f32 = {white:?};
-
-struct Fit {{
+const SHADER: &str = r#"
+struct Fit {
     fit: vec2<f32>,
-    extended_range: f32,
-    padding: f32,
-}};
+    padding: vec2<f32>,
+};
 
 @group(0) @binding(0) var frame_texture: texture_2d<f32>;
 @group(0) @binding(1) var frame_sampler: sampler;
 @group(0) @binding(2) var<uniform> fit: Fit;
 
-struct VertexOutput {{
+struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
-}};
+};
 
 @vertex
-fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {{
+fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
     var positions = array<vec2<f32>, 3>(
         vec2<f32>(-1.0, -3.0),
         vec2<f32>(-1.0, 1.0),
@@ -650,38 +622,17 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {{
     out.position = vec4<f32>(positions[index], 0.0, 1.0);
     out.uv = uvs[index];
     return out;
-}}
-
-fn pq_to_extended_linear(code: vec3<f32>) -> vec3<f32> {{
-    let clamped = clamp(code, vec3<f32>(0.0), vec3<f32>(1.0));
-    let powered = pow(clamped, vec3<f32>(1.0 / PQ_M2));
-    let numerator = max(powered - vec3<f32>(PQ_C1), vec3<f32>(0.0));
-    let denominator = vec3<f32>(PQ_C2) - vec3<f32>(PQ_C3) * powered;
-    let luminance = pow(numerator / denominator, vec3<f32>(1.0 / PQ_M1)) * vec3<f32>(PQ_MAXIMUM_NITS);
-    return luminance / vec3<f32>(REFERENCE_WHITE_NITS);
-}}
-
-fn srgb_encode(value: vec3<f32>) -> vec3<f32> {{
-    let above = 1.055 * pow(max(value, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
-    let below = value * 12.92;
-    return select(above, below, value <= vec3<f32>(0.0031308));
-}}
+}
 
 @fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {{
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let uv = (input.uv - vec2<f32>(0.5, 0.5)) / fit.fit + vec2<f32>(0.5, 0.5);
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {{
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    }}
-    let sampled = textureSample(frame_texture, frame_sampler, uv).rgb;
-    if (fit.extended_range > 0.5) {{
-        return vec4<f32>(srgb_encode(pq_to_extended_linear(sampled)), 1.0);
-    }}
-    return vec4<f32>(sampled, 1.0);
-}}
-"#
-    )
-});
+    }
+    return vec4<f32>(textureSample(frame_texture, frame_sampler, uv).rgb, 1.0);
+}
+"#;
 
 #[cfg(test)]
 mod tests {
@@ -800,28 +751,8 @@ mod tests {
     }
 
     #[test]
-    fn the_extended_range_flag_follows_the_frame_format_not_the_display() {
-        assert_eq!(
-            extended_range_mode(&screenroom_player::PixelFormat::Bgra8),
-            0.0
-        );
-        assert_eq!(
-            extended_range_mode(&screenroom_player::PixelFormat::Rgba8),
-            0.0
-        );
-        assert_eq!(
-            extended_range_mode(&screenroom_player::PixelFormat::Rgba16Float),
-            1.0
-        );
-    }
-
-    #[test]
-    fn a_half_float_frame_is_uploaded_as_half_float() {
+    fn an_eight_bit_frame_is_uploaded_as_rgba8() {
         use screenroom_player::PixelFormat;
-        assert_eq!(
-            upload_format(PixelFormat::Rgba16Float),
-            wgpu::TextureFormat::Rgba16Float
-        );
         assert_eq!(
             upload_format(PixelFormat::Rgba8),
             wgpu::TextureFormat::Rgba8Unorm
@@ -830,27 +761,6 @@ mod tests {
             upload_format(PixelFormat::Bgra8),
             wgpu::TextureFormat::Rgba8Unorm
         );
-    }
-
-    #[test]
-    fn the_shader_curve_is_generated_from_the_shared_constants() {
-        let shader = SHADER.as_str();
-        for (name, value) in [
-            ("PQ_M1", screenroom_player::PQ_M1),
-            ("PQ_M2", screenroom_player::PQ_M2),
-            ("PQ_C1", screenroom_player::PQ_C1),
-            ("PQ_C2", screenroom_player::PQ_C2),
-            ("PQ_C3", screenroom_player::PQ_C3),
-            ("PQ_MAXIMUM_NITS", screenroom_player::PQ_MAXIMUM_NITS),
-        ] {
-            let declaration = format!("const {name}: f32 = {value:?};");
-            assert!(shader.contains(&declaration), "missing {declaration}");
-        }
-        assert!(shader.contains(&format!(
-            "const REFERENCE_WHITE_NITS: f32 = {:?};",
-            screenroom_player::REFERENCE_WHITE_NITS as f32
-        )));
-        assert!(shader.contains("fit.extended_range > 0.5"));
     }
 
     use iced::widget::shader::Pipeline;
@@ -1109,235 +1019,21 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         assert_eq!(sampled, [128, 128, 128, 255]);
     }
 
-    #[cfg(target_os = "macos")]
-    fn half_surface(
-        width: u32,
-        height: u32,
-        code: u16,
-    ) -> std::sync::Arc<screenroom_player::SurfaceFrame> {
-        let surface = std::sync::Arc::new(
-            screenroom_player::SurfaceFrame::new_with_format(
-                width,
-                height,
-                screenroom_player::PixelFormat::Rgba16Float,
-            )
-            .expect("a half float surface exists"),
-        );
-        let stride = surface.bytes_per_row() as usize;
-        let base = surface.base_address();
-        let mut pixel = [0u8; 8];
-        for (index, channel) in pixel.as_chunks_mut::<2>().0.iter_mut().enumerate() {
-            let value = if index == 3 { 0x3c00 } else { code };
-            *channel = value.to_le_bytes();
-        }
-        for row in 0..height as usize {
-            for column in 0..width as usize {
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        pixel.as_ptr(),
-                        base.add(row * stride + column * 8),
-                        pixel.len(),
-                    );
-                }
-            }
-        }
-        surface
-    }
-
-    #[cfg(target_os = "macos")]
-    fn srgb_encode(value: f32) -> f32 {
-        if value <= 0.003_130_8 {
-            value * 12.92
-        } else {
-            1.055 * value.powf(1.0 / 2.4) - 0.055
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn rendered_pixel(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        surface: std::sync::Arc<screenroom_player::SurfaceFrame>,
-    ) -> [f32; 4] {
-        const SIZE: u32 = 64;
-        let frame = Frame::gpu(8, 8, surface, 1);
-        let area = Rectangle {
-            x: 0.0,
-            y: 0.0,
-            width: SIZE as f32,
-            height: SIZE as f32,
-        };
-        let mut pipeline = VideoPipeline::new(device, queue, wgpu::TextureFormat::Rgba16Float);
-        let primitive = VideoPrimitive {
-            frame: Some(frame),
-            bounds: area,
-        };
-        primitive.prepare(
-            &mut pipeline,
-            device,
-            queue,
-            &area,
-            &shader::Viewport::with_physical_size(iced::Size::new(SIZE, SIZE), 1.0),
-        );
-
-        let target = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("pq-readback"),
-            size: wgpu::Extent3d {
-                width: SIZE,
-                height: SIZE,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
-        let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("pq-readback"),
-            size: u64::from(SIZE * SIZE * 8),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("pq-readback"),
-        });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("pq-readback"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            assert!(primitive.draw(&pipeline, &mut pass));
-        }
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &target,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(SIZE * 8),
-                    rows_per_image: Some(SIZE),
-                },
-            },
-            wgpu::Extent3d {
-                width: SIZE,
-                height: SIZE,
-                depth_or_array_layers: 1,
-            },
-        );
-        queue.submit(Some(encoder.finish()));
-
-        let slice = readback.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |_| {});
-        let _ = device.poll(wgpu::PollType::wait_indefinitely());
-        let data = slice.get_mapped_range();
-        let offset = (((SIZE / 2) * SIZE + SIZE / 2) * 8) as usize;
-        let channel = |index: usize| {
-            screenroom_player::half_to_f32(u16::from_le_bytes([
-                data[offset + index * 2],
-                data[offset + index * 2 + 1],
-            ]))
-        };
-        let pixel = [channel(0), channel(1), channel(2), channel(3)];
-        drop(data);
-        readback.unmap();
-        pixel
-    }
-
-    #[cfg(target_os = "macos")]
     #[test]
-    fn a_pq_code_reaches_the_swapchain_as_the_light_the_display_should_show() {
-        let Some((device, queue)) = device() else {
-            return;
-        };
-        for code in [0x3800u16, 0x38a5, 0x38fa, 0x393c] {
-            let nits = screenroom_player::pq_code_to_nits(screenroom_player::half_to_f32(code));
-            let expected = srgb_encode(nits / screenroom_player::REFERENCE_WHITE_NITS as f32);
-            let pixel = rendered_pixel(&device, &queue, half_surface(8, 8, code));
-            println!(
-                "pq code {code:#06x} nits {nits:.1} expected {expected:.4} rendered {:.4}",
-                pixel[1]
-            );
-            for channel in &pixel[..3] {
-                assert!(
-                    (channel - expected).abs() < 2e-3,
-                    "pq code {code:#06x} is {nits:.1} nits and must arrive as {expected:.4}, got {pixel:?}"
-                );
-            }
-            assert!((pixel[3] - 1.0).abs() < 1e-3, "alpha stays opaque");
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn reference_white_and_the_display_peak_land_where_the_tone_map_targets_them() {
-        let Some((device, queue)) = device() else {
-            return;
-        };
-        let white = rendered_pixel(&device, &queue, half_surface(8, 8, 0x38a5))[1];
-        let peak = rendered_pixel(&device, &queue, half_surface(8, 8, 0x393c))[1];
-        assert!(
-            (white - 1.0).abs() < 2e-3,
-            "203 nits is reference white, so the code is 1.0, got {white}"
-        );
-        assert!(
-            peak > 1.0 && (peak - 1.3539).abs() < 2e-3,
-            "406 nits is the measured 2x peak, so the code is about 1.354, got {peak}"
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn two_pq_codes_one_ten_bit_step_apart_stay_distinct() {
-        let Some((device, queue)) = device() else {
-            return;
-        };
-        let lower = rendered_pixel(&device, &queue, half_surface(8, 8, 0x3800))[1];
-        let upper = rendered_pixel(&device, &queue, half_surface(8, 8, 0x3802))[1];
-        assert!(
-            upper - lower > 2e-3,
-            "a single ten bit step must survive the shader, got {lower} and {upper}"
-        );
-    }
-
-    #[test]
-    fn the_picture_shader_compiles_for_both_targets() {
+    fn the_picture_shader_compiles_for_the_sdr_target() {
         use iced::futures::executor::block_on;
         let Some((device, queue)) = device() else {
             return;
         };
-        for format in [
-            wgpu::TextureFormat::Bgra8UnormSrgb,
-            wgpu::TextureFormat::Rgba16Float,
-        ] {
-            device.push_error_scope(wgpu::ErrorFilter::Validation);
-            let pipeline = VideoPipeline::new(&device, &queue, format);
-            let error = block_on(device.pop_error_scope());
-            assert!(
-                error.is_none(),
-                "{format:?} rejected the pipeline: {error:?}"
-            );
-            assert_eq!(pipeline.texture_size, (0, 0));
-            assert!(pipeline.bind_group.is_none());
-        }
+        let format = wgpu::TextureFormat::Bgra8UnormSrgb;
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let pipeline = VideoPipeline::new(&device, &queue, format);
+        let error = block_on(device.pop_error_scope());
+        assert!(
+            error.is_none(),
+            "{format:?} rejected the pipeline: {error:?}"
+        );
+        assert_eq!(pipeline.texture_size, (0, 0));
+        assert!(pipeline.bind_group.is_none());
     }
 }
