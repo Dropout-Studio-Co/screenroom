@@ -58,6 +58,8 @@ const SUGGESTIONS: i64 = 8;
 
 const QUIT_ROUTING_BUDGET: u8 = 40;
 
+const MAX_SUBTITLE_ROWS: usize = 6;
+
 const MODE_SETTLE: Duration = Duration::from_millis(1_500);
 
 const TERMINATE_CHECK_DELAY: Duration = Duration::from_millis(1_800);
@@ -2064,6 +2066,10 @@ impl App {
         crate::sidecar::subtitle_beside(&path)
     }
 
+    fn subtitle_message(&self) -> Option<String> {
+        self.error.clone().or_else(|| self.status.clone())
+    }
+
     fn find_subtitles(&mut self) {
         if self.subtitle_search.is_some() {
             self.status = Some("A subtitle search is already running.".to_string());
@@ -2343,11 +2349,23 @@ impl App {
                 Ok(Ok(results)) => {
                     self.subtitle_search = None;
                     self.error = None;
-                    self.status = Some(match results.len() {
-                        0 => "No subtitle on The Subtitle DB matched this file.".to_string(),
-                        count => format!("{count} subtitles matched on The Subtitle DB."),
+                    let still_watching = self.active.as_ref().is_some_and(|active| {
+                        self.subtitle_results_for.as_deref() == Some(active.file_id.as_str())
                     });
-                    self.subtitle_results = results;
+                    if still_watching {
+                        self.status = Some(match results.len() {
+                            0 => "No subtitle on The Subtitle DB matched this file.".to_string(),
+                            count => format!("{count} subtitles matched on The Subtitle DB."),
+                        });
+                        self.subtitle_results = results;
+                    } else {
+                        self.subtitle_results_for = None;
+                        self.status = Some(
+                            "Those results arrived for a different film, so they were dropped. \
+                             Find subtitles again for this one."
+                                .to_string(),
+                        );
+                    }
                 }
                 Ok(Err(message)) => {
                     self.subtitle_search = None;
@@ -5468,20 +5486,19 @@ impl App {
                 .spacing(tokens.spacing.field_x)
                 .align_y(Alignment::Center),
             );
-            if self.subtitle_search.is_some() {
+            if let Some(message) = self.subtitle_message() {
+                let color = if self.error.is_some() {
+                    ui::theme::danger()
+                } else {
+                    tokens.palette.ink_muted
+                };
                 panel = panel.push(
-                    text("Asking The Subtitle DB…")
+                    text(message)
                         .size(tokens.type_scale.micro)
-                        .color(ink(tokens.palette.ink_muted)),
-                );
-            } else if self.subtitle_download.is_some() {
-                panel = panel.push(
-                    text("Downloading the subtitle…")
-                        .size(tokens.type_scale.micro)
-                        .color(ink(tokens.palette.ink_muted)),
+                        .color(ink(color)),
                 );
             }
-            for subtitle in &self.subtitles {
+            for subtitle in self.subtitles.iter().take(MAX_SUBTITLE_ROWS) {
                 panel = panel.push(
                     row![
                         text(format!("{} · {}", subtitle.label, subtitle.format))
@@ -5501,7 +5518,17 @@ impl App {
                     .align_y(Alignment::Center),
                 );
             }
-            for result in &self.subtitle_results {
+            if self.subtitles.len() > MAX_SUBTITLE_ROWS {
+                panel = panel.push(
+                    text(format!(
+                        "{} more kept subtitle(s) for this film",
+                        self.subtitles.len() - MAX_SUBTITLE_ROWS
+                    ))
+                    .size(tokens.type_scale.micro)
+                    .color(ink(tokens.palette.ink_muted)),
+                );
+            }
+            for result in self.subtitle_results.iter().take(MAX_SUBTITLE_ROWS) {
                 let name = if result.release_name.trim().is_empty() {
                     result.language_name.clone()
                 } else {
@@ -5523,6 +5550,16 @@ impl App {
                     ]
                     .spacing(tokens.spacing.field_x)
                     .align_y(Alignment::Center),
+                );
+            }
+            if self.subtitle_results.len() > MAX_SUBTITLE_ROWS {
+                panel = panel.push(
+                    text(format!(
+                        "{} more match(es), best first",
+                        self.subtitle_results.len() - MAX_SUBTITLE_ROWS
+                    ))
+                    .size(tokens.type_scale.micro)
+                    .color(ink(tokens.palette.ink_muted)),
                 );
             }
             block = block.push(panel.width(Length::Fill));
@@ -6086,10 +6123,11 @@ impl App {
                 note(SUBTITLE_PRIORITY_NOTE.to_string()),
                 note(
                     "These controls live in the player, because a film has to be playing for a \
-                     subtitle to belong to it: press the subtitles control there to find one \
-                     online, to use a kept one, or to import a file. Opening Settings stops the \
-                     film, so nothing here can act on it."
-                        .to_string(),
+                     subtitle to belong to it: while it plays, press t or move the pointer to \
+                     show the player's subtitle row, then use Find online, Import…, Use or \
+                     Remove there. Opening Settings stops the film, so nothing here can act on \
+                     it."
+                    .to_string(),
                 ),
             ]
             .spacing(tokens.spacing.field_y)

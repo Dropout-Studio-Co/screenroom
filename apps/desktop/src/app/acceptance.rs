@@ -1844,18 +1844,61 @@ fn the_player_can_find_subtitles_while_the_film_is_playing() {
     assert!(watching(&mut app, &id, 44));
 
     app.screen = Screen::Player;
-    let _ = app.update(Message::FindSubtitles);
-
-    let status = app.status.clone().unwrap_or_default();
     assert!(
-        !status.contains("Play something first"),
-        "the player must be able to resolve subtitles for the film it is playing: {status}"
+        matches!(app.subtitle_source(), Some(SubtitleSource::Online)),
+        "the player must resolve a film that carries no subtitle"
     );
-    if app.subtitle_capability.is_configured() {
-        assert!(app.subtitle_search.is_some(), "{status}");
-    } else {
-        assert_eq!(Some(status), Some(app.subtitle_capability.detail.clone()));
-    }
+
+    app.snapshot.tracks = vec![subtitle_track("English")];
+    assert!(
+        matches!(app.subtitle_source(), Some(SubtitleSource::Track { .. })),
+        "a track inside the file must win before any lookup"
+    );
+
+    let _ = app.update(Message::FindSubtitles);
+    assert!(app.subtitle_search.is_none(), "no lookup may start");
+    let shown = app.subtitle_message().unwrap_or_default();
+    assert!(
+        shown.contains("subtitle track"),
+        "the panel must draw the reason it did nothing: {shown}"
+    );
+}
+
+#[test]
+fn results_that_arrive_for_another_film_are_dropped() {
+    let media = Media::new();
+    media.placeholders(&["Arrived (2020)/Arrived (2020).mkv".to_string()]);
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 46));
+
+    app.subtitle_results_for = Some("a-different-film".to_string());
+    let (sender, receiver) = std::sync::mpsc::channel();
+    app.subtitle_search = Some(receiver);
+    sender
+        .send(Ok(vec![screenroom_core::SubtitleMatch {
+            id: 9,
+            language: "bn".to_string(),
+            language_name: "Bengali".to_string(),
+            release_name: "Arrived.2020".to_string(),
+            format: "srt".to_string(),
+            cues: 90,
+            hearing_impaired: false,
+            ai_transcribed: false,
+            encoding: "utf-8".to_string(),
+        }]))
+        .expect("send");
+    let _ = app.update(Message::Tick);
+
+    assert!(app.subtitle_search.is_none());
+    assert!(
+        app.subtitle_results.is_empty(),
+        "results for another film must not be listed"
+    );
+    assert!(app.subtitle_results_for.is_none());
+    let shown = app.subtitle_message().unwrap_or_default();
+    assert!(shown.contains("different film"), "{shown}");
 }
 
 #[test]
@@ -1893,7 +1936,14 @@ fn results_found_for_one_film_are_not_downloaded_for_another() {
 
 #[test]
 fn an_empty_answer_from_the_subtitle_db_is_reported_as_a_miss() {
+    let media = Media::new();
+    media.placeholders(&["Nothing (2020)/Nothing (2020).mkv".to_string()]);
     let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(watching(&mut app, &id, 47));
+    app.subtitle_results_for = Some(id.clone());
+
     let (sender, receiver) = std::sync::mpsc::channel();
     app.subtitle_search = Some(receiver);
     sender.send(Ok(Vec::new())).expect("send");

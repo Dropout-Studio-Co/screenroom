@@ -104,8 +104,10 @@ not configured rather than shipping the credential in the clear. An invalid or
 missing key is reported as such: it is never reinterpreted as anonymous access,
 and lookups that need no key keep working without one.
 
-The key file must be readable by your own account only. A file that other accounts
-can read is refused with the `chmod 600` that fixes it, rather than being used.
+On macOS the key file must be readable by your own account only: a file that other
+accounts can read is refused with the `chmod 600` that fixes it, rather than being
+used. Windows has no equivalent mode bit, so the file is read there without that
+check.
 
 ## 4. Published limits
 
@@ -115,9 +117,9 @@ can read is refused with the `chmod 600` that fixes it, rather than being used.
   long before trying again, and gives up after a bounded number of attempts.
 
 The app never retries earlier than the provider says, and reports a refusal
-instead of quietly hammering the service. Within one action the transport retries
-at most three times, honouring `retry-after` and backing off exponentially, under a
-per-minute budget of 120 requests and one overall deadline. The desktop app builds a
+instead of quietly hammering the service. Within one action the transport makes at
+most three attempts — two retries — honouring `retry-after` and backing off
+exponentially, under a per-minute budget of 120 requests and one overall deadline. The desktop app builds a
 provider per action, so that budget and the backoff state start fresh on each press;
 because the action is a person pressing a control rather than a loop, the published
 allowances are far above what the app can use.
