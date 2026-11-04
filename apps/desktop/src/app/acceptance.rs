@@ -2950,3 +2950,53 @@ fn the_banner_returns_after_a_film_even_though_the_player_handle_stays() {
         "a retained player handle must not silence the update banner on Home"
     );
 }
+
+#[test]
+fn quitting_with_an_update_waiting_stores_the_place_before_handing_over() {
+    use crate::updater::{AvailableUpdate, Event};
+    if !player_ready() {
+        return;
+    }
+    let media = Media::new();
+    let film = media.path("Film (2020)/Film (2020).mkv");
+    assert!(clip(&film, 20.0), "film fixture");
+    let directory = tempfile::TempDir::new().expect("temp dir");
+    let database = directory.path().join("library.db");
+    let mut app = app_on(&database);
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(play(&mut app, &id), "the film must start");
+    assert!(until_position(&mut app, 3.0), "playback must advance");
+    let watched = app.snapshot.position;
+
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    app.updater_backend = Box::new(RecordingBackend { seen: seen.clone() });
+    app.updater.feed(Event::Ready {
+        update: AvailableUpdate {
+            version: "99.0.0".to_string(),
+            display_version: "99.0.0".to_string(),
+            notes: String::new(),
+            critical: false,
+            informational: false,
+            feed_signing: "succeeded".to_string(),
+        },
+        deferred_to_quit: true,
+    });
+
+    let _ = app.update(Message::Close);
+
+    let stored = stored_position(&app, &id) as f64 / 1_000.0;
+    assert!(
+        (stored - watched).abs() <= 1.0,
+        "the stored position is {stored:.1} s against {watched:.1} s on screen, so the update \
+         would have cost the viewer their place"
+    );
+    assert!(
+        app.active.is_none(),
+        "the viewing must be closed and checkpointed before anything installs"
+    );
+    assert!(
+        seen.lock().expect("action log").is_empty(),
+        "no install action may reach the updater through the quit path"
+    );
+}

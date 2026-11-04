@@ -2413,9 +2413,10 @@ against a local signed feed: 0.1.0 found and installed 0.2.0 on quit, the librar
 database survived, nothing relaunched, an altered archive and an unsigned feed were
 both refused with Sparkle's own signature errors, and an older feed was ignored.
 
-`cargo test --workspace` is 820 tests after this change (24 new: 15 for the state
-machine and event decoding, 9 for Settings, the banner, the playback guard and the
-quit path).
+`cargo test --workspace` is 821 tests after this change (25 new: 15 for the state
+machine and event decoding, 10 for Settings, the banner, the playback guard and the
+quit path, including one that proves the position is stored before an update is
+handed over).
 
 Two things remain outside what any local run can settle: a release served from
 GitHub, and the public-publishing decision. Both are recorded as BLOCKED or PENDING
