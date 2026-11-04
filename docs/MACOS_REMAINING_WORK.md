@@ -191,7 +191,7 @@ player's chrome receding has not been watched in a window. That is P2-06 below.
 | Q02 | Performance: startup, first frame, 4K, memory, no runaway jobs | **COMPLETE (SDR)** | startup ~1.2 s; 4K 24.4 fps at 13.95 % mean CPU with zero uploads; paging 13.7 ms first page and 78 ms grouped last page at 10k rows; backups and restores run off the UI thread. HDR was removed on 2026-11-03, so its 2026-11-02 figures are history only | single-run CPU samples |
 | Q03 | Fidelity: aspect, anamorphic, timebase, honest codec claims | COMPLETE | `step_7`, `anamorphic_video_renders_at_its_display_aspect_without_letterbox_rows` | the *look* of step 7 is the owner's |
 | Q04 | Portability: one monorepo, isolated platform adapters | COMPLETE | layout, `cfg` boundaries | — |
-| Q05 | Security and privacy | COMPLETE for the code this repository writes; six advisories remain in the iced dependency tree | argument vectors (no shell), root canonicalisation, `contained_media_path` tests, no credentials anywhere; OSV over `Cargo.lock`: one memory-safety advisory (`lru` 0.16.4) and five unmaintained notices, all transitive through iced 0.14 and none fixable inside it | P2-09, blocked upstream |
+| Q05 | Security and privacy | COMPLETE for the code this repository writes; six advisories remain in the iced dependency tree | argument vectors (no shell), root canonicalisation, `contained_media_path` tests, no credentials anywhere; OSV over `Cargo.lock`: one memory-safety advisory (`lru` 0.16.4) and five unmaintained notices, all in the iced/wgpu/metal stack that iced 0.14 pins, none fixable inside it | P2-09, blocked upstream |
 | Q06 | Durability: migrations, transactions, no silent resets | COMPLETE | migration tests, integrity check after migrate, backup/restore | — |
 | Q07 | Accessibility and design quality | **COMPLETE for keyboard and focus; screen-reader support removed** | keyboard journey, Settings action strip, contrast tokens, reduced motion, subtitle scale/position read-back. The `NSAccessibility` bridge and its headless receipts were removed on 2026-11-03 ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)); no VoiceOver pass is run | — |
 | Q08 | Honest reporting | COMPLETE | this document set; `preferred_bridge()` corrected this session | — |
@@ -721,20 +721,22 @@ receipts stay in [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md).
 - **Requirement:** no known vulnerability or unmaintained crate in the shipped
   binary. **Status:** BLOCKED; five are "unmaintained" notices with no fix to take,
   one is a real memory-safety advisory whose fix is outside the range iced allows,
-  and all six arrive transitively through iced 0.14, which the stack pins.
+  and all six belong to the iced/wgpu/metal stack that iced 0.14 pins.
 - **The six, as `Cargo.lock` stood at `5ccfb61`:** `RUSTSEC-2026-0253` — `lru`
   0.16.4, a potential use-after-free when `LruCache::pop()` unwinds; fixed in
   `lru` 0.18.2, reached here as `cryoglyph` → `iced_wgpu` on `lru = "0.16"`, and
   0.16.4 is the last 0.16 release, so no patch inside the allowed range exists.
   `RUSTSEC-2024-0436` (`paste` 1.0.15, unmaintained, through `metal`),
   `RUSTSEC-2026-0192` (`ttf-parser` 0.25.1, unmaintained, through `fontdb` →
-  `cosmic-text`), and `RUSTSEC-2026-0371`/`0370`/`0372` (`zbus_names`, `zvariant`,
-  `zvariant_derive` 5.15.1, unmaintained, through `mundy` → `iced_winit`, Linux
-  only).
-- **Why it is blocked:** every one of them is a transitive dependency of iced 0.14,
-  and `wgpu`/`metal` must stay in step with iced (ADR-004 and `AGENTS.md`). Taking
-  `lru` 0.18 means forking or patching a third-party crate, which this repository
-  forbids, and the five unmaintained notices have no replacement to move to.
+  `cosmic-text`), and `RUSTSEC-2026-0371`/`0370`/`0372` (`zbus_names` 4.3.5 and
+  `zvariant`/`zvariant_derive` 5.15.1, unmaintained, through `mundy` →
+  `iced_winit`, Linux only).
+- **Why it is blocked:** five of the six are transitive dependencies of iced 0.14,
+  and `wgpu`/`metal` must stay in step with iced (`AGENTS.md`: iced 0.14 / wgpu 27,
+  wgpu must match iced). `paste` arrives through `metal`, which this repository also
+  declares directly for macOS, and `metal` 0.33 still requires `paste ^1`, so there
+  is no version to move to. Taking `lru` 0.18 would mean forking or patching a
+  third-party crate, which this repository forbids.
 - **Work:** re-check when iced publishes a release on a newer `wgpu` and a wider
   `lru`; the check is `cargo update --dry-run` plus an OSV query over `Cargo.lock`.
 - **Acceptance:** an OSV query over `Cargo.lock` returns no advisory that is not an
@@ -816,7 +818,7 @@ check that actually ran; `Action` is what is still owed and by whom.
 | Q02 | Performance | COMPLETE (SDR) | 4K 24.39 fps / 13.95 % CPU; paging; startup ~1.2 s. HDR removed 2026-11-03; its figures are history | — | — |
 | Q03 | Fidelity | COMPLETE | `step_7`, anamorphic test | the look | owner |
 | Q04 | Portability | COMPLETE | layout, `cfg` boundaries, `cargo check` for the Windows target | real Windows build | owner |
-| Q05 | Security and privacy | COMPLETE for this repository's code; six iced-tree advisories open | argument vectors, root canonicalisation, credential redaction tests, cast host allowlist; OSV over `Cargo.lock` shows one memory-safety advisory and five unmaintained notices, all transitive through iced | P2-09 | — |
+| Q05 | Security and privacy | COMPLETE for this repository's code; six iced-tree advisories open | argument vectors, root canonicalisation, credential redaction tests, cast host allowlist; OSV over `Cargo.lock` shows one memory-safety advisory and five unmaintained notices, all in the iced/wgpu/metal stack that iced 0.14 pins | P2-09 | — |
 | Q06 | Durability | COMPLETE | migration tests (v2–v9), restore atomicity, byte-identical failure test | — | — |
 | Q07 | Accessibility | COMPLETE for keyboard and focus; screen-reader bridge removed 2026-11-03 (ADR-005) | keyboard journey, action strip, focus tests, subtitle styling | — | — |
 | Q08 | Honest reporting | COMPLETE | this document set | — | — |
@@ -925,7 +927,7 @@ check that actually ran; `Action` is what is still owed and by whom.
 | Q02 | Performance | COMPLETE (SDR) | 4K 24.39 fps / 13.95 % CPU; paging; startup ~1.2 s. HDR removed 2026-11-03; its figures are history | — | — |
 | Q03 | Fidelity | COMPLETE | `step_7`, anamorphic test | the look | owner |
 | Q04 | Portability | COMPLETE | layout, `cfg` boundaries, `cargo check` for the Windows target | real Windows build | owner |
-| Q05 | Security and privacy | COMPLETE for this repository's code; six iced-tree advisories open | argument vectors, root canonicalisation, credential redaction tests, cast host allowlist; OSV over `Cargo.lock` shows one memory-safety advisory and five unmaintained notices, all transitive through iced | P2-09 | — |
+| Q05 | Security and privacy | COMPLETE for this repository's code; six iced-tree advisories open | argument vectors, root canonicalisation, credential redaction tests, cast host allowlist; OSV over `Cargo.lock` shows one memory-safety advisory and five unmaintained notices, all in the iced/wgpu/metal stack that iced 0.14 pins | P2-09 | — |
 | Q06 | Durability | COMPLETE | migration tests (v2–v9), restore atomicity, byte-identical failure test | — | — |
 | Q07 | Accessibility | COMPLETE for keyboard and focus; screen-reader bridge removed 2026-11-03 (ADR-005) | keyboard journey, action strip, focus tests, subtitle styling | — | — |
 | Q08 | Honest reporting | COMPLETE | this document set | — | — |

@@ -15,16 +15,18 @@ hardware and its output has been pasted into `IMPLEMENTATION_STATUS.md`.
 macOS: `libsqlite3-sys` builds bundled SQLite from C, and that needs the MSVC SDK's
 headers (`fatal error: 'stdlib.h' file not found`). This is a toolchain boundary,
 not a code failure, and its consequence is the important part: **every
-`cfg!(windows)` branch in the tree is unbuilt as well as unrun** — the libmpv
-candidate names, the D3D11 bridge choice, the Windows path rules and the
+`cfg!(windows)` branch in the core and the desktop is unbuilt as well as unrun** —
+the D3D11 bridge choice, the Windows path rules and the
 `BundleLayout::WindowsPortable` folder logic.
 
 **Measured on 2026-11-04, which narrows the boundary by one crate:**
 `cargo check -p screenroom-player --target x86_64-pc-windows-msvc` **succeeds** on
-this Mac (`Finished dev profile`), because the player has no C dependency; the
-workspace and `screenroom-core` still stop at the SQLite C build as above. So the
-player's `cfg!(windows)` libmpv-name and layout branches do type-check here; the
-core and desktop ones do not.
+this Mac (`Finished dev profile`), because the player has no C dependency. The
+workspace and `screenroom-core` still fail, and they fail at two C builds rather
+than one: `ring` (rustls' backend) stops at `assert.h` and `libsqlite3-sys` stops at
+`stdlib.h`. So fixing SQLite alone would not make the core compile here — the
+player's `cfg!(windows)` libmpv-name and layout branches do type-check; the core and
+desktop ones do not.
 
 Three Windows defects were found and fixed on the Mac by reasoning about the rules
 rather than by running them (commits `0f0a3b9`, `6eff910`, plus the layout work in

@@ -164,7 +164,7 @@ through the toolchain that is already configured rather than by hand:
 | `sdb devices` | `List of devices attached` with nothing under it |
 
 So the set is **off**, on **another network**, or **out of developer mode**. Those three
-are the whole list, and the owner can settle each in one step:
+are the whole list.
 
 **Re-checked on 2026-11-04**, before a dependency upgrade that changes the toolchain
 that builds the TV bundle: nothing had changed. `ping 192.168.0.172` was 100 % loss,
@@ -174,6 +174,7 @@ still present and active in the toolchain's `profile/profiles.xml`, so the devic
 the only missing piece — the Vite 8 bundle has therefore **not** been exercised on the
 Tizen engine, and the host-side checks are all that back it.
 
+The owner can settle each in one step:
 
 1. Switch the TV on and connect it to the same network as this Mac.
 2. TV → **Settings → General → Network → Expert settings → IP Settings**, and note the
