@@ -63,6 +63,17 @@ mod tests {
     }
 
     #[test]
+    fn fingerprint_matches_the_recorded_digest() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("a.mkv");
+        let size = write(&path, b"same content");
+        assert_eq!(
+            media_fingerprint(&path, size).unwrap(),
+            "7388269ce4941f165ce5b746bafc95ce8d429f7ac3f088276d6a31f199db4378"
+        );
+    }
+
+    #[test]
     fn fingerprint_changes_with_size() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("a.mkv");
