@@ -9,6 +9,48 @@ install_into="${1:-}"
 app="$root/dist/Screenroom.app"
 bundle_id="com.screenroom.desktop"
 process="Screenroom"
+sparkle="$root/vendor/sparkle/Sparkle.framework"
+public_key_file="$root/apps/desktop/updater/ed25519_public_key.txt"
+feed_url="${SCREENROOM_UPDATE_FEED_URL:-https://github.com/Dropout-Studio-Co/screenroom/releases/latest/download/appcast.xml}"
+sign_identity="${SCREENROOM_CODESIGN_IDENTITY:--}"
+minimum_macos="12.0"
+
+if [ -n "${SCREENROOM_UPDATE_PUBLIC_KEY:-}" ]; then
+  if [ "${SCREENROOM_ALLOW_TEST_FEED:-0}" != "1" ]; then
+    echo "!! SCREENROOM_UPDATE_PUBLIC_KEY would replace the committed trust anchor; only an isolated test build may do that" >&2
+    exit 2
+  fi
+  public_key="$SCREENROOM_UPDATE_PUBLIC_KEY"
+elif [ -f "$public_key_file" ]; then
+  public_key="$(tr -d '\n\r ' <"$public_key_file")"
+else
+  public_key=""
+fi
+
+case "$feed_url" in
+  https://*) ;;
+  file://* | http://127.0.0.1:* | http://localhost:*)
+    if [ "${SCREENROOM_ALLOW_TEST_FEED:-0}" != "1" ]; then
+      echo "!! $feed_url is not https; set SCREENROOM_ALLOW_TEST_FEED=1 only for an isolated test build" >&2
+      exit 2
+    fi
+    ;;
+  *)
+    echo "!! the update feed must be https, not $feed_url" >&2
+    exit 2
+    ;;
+esac
+
+if [ -z "$public_key" ]; then
+  echo "!! no update public key; refusing to build a bundle whose updates cannot be verified" >&2
+  echo "   apps/desktop/updater/ed25519_public_key.txt is the committed trust anchor" >&2
+  exit 2
+fi
+
+if [ ! -d "$sparkle" ]; then
+  echo "!! Sparkle.framework is absent; run scripts/fetch-sparkle.sh first" >&2
+  exit 2
+fi
 
 if [ "$(uname -s)" != "Darwin" ]; then
   echo "this script packages a macOS app; $(uname -s) is not macOS" >&2
@@ -73,6 +115,26 @@ fi
 version="$(grep -m1 '^version' "$root/Cargo.toml" | sed -E 's/.*"(.*)".*/\1/')"
 version="${version:-0.1.0}"
 
+if [ "${SCREENROOM_ALLOW_TEST_FEED:-0}" = "1" ] && [ -n "${SCREENROOM_VERSION:-}" ]; then
+  version="$SCREENROOM_VERSION"
+fi
+
+build_number="${SCREENROOM_BUILD_NUMBER:-$version}"
+build_number="$(printf '%s' "$build_number" | sed -E 's/[^0-9]+/./g; s/^\.//; s/\.$//')"
+if [ -z "$build_number" ]; then
+  echo "!! $version cannot become a CFBundleVersion" >&2
+  exit 1
+fi
+
+test_transport=""
+if [ "${SCREENROOM_ALLOW_TEST_FEED:-0}" = "1" ]; then
+  test_transport="  <key>NSAppTransportSecurity</key>
+  <dict><key>NSAllowsLocalNetworking</key><true/></dict>"
+fi
+
+echo "==> embedding $sparkle"
+ditto "$sparkle" "$app/Contents/Frameworks/Sparkle.framework"
+
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -82,15 +144,26 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>Screenroom</string>
   <key>CFBundleIdentifier</key><string>$bundle_id</string>
   <key>CFBundleExecutable</key><string>$process</string>
-  <key>CFBundleVersion</key><string>$version</string>
+  <key>CFBundleVersion</key><string>$build_number</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>LSMinimumSystemVersion</key><string>$minimum_macos</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.video</string>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
   <key>CFBundleIconFile</key><string>Screenroom</string>
+  <key>SUFeedURL</key><string>$feed_url</string>
+  <key>SUPublicEDKey</key><string>$public_key</string>
+  <key>SUEnableAutomaticChecks</key><true/>
+  <key>SUScheduledCheckInterval</key><integer>86400</integer>
+  <key>SUAutomaticallyUpdate</key><true/>
+  <key>SUAllowsAutomaticUpdates</key><true/>
+  <key>SUVerifyUpdateBeforeExtraction</key><true/>
+  <key>SURequireSignedFeed</key><true/>
+  <key>SUSignedFeedFailureExpirationInterval</key><integer>0</integer>
+  <key>SUEnableSystemProfiling</key><false/>
+$test_transport
   <key>NSRemovableVolumesUsageDescription</key><string>Screenroom reads the films and shows on drives you add to its library. It never changes them.</string>
   <key>NSDocumentsFolderUsageDescription</key><string>Screenroom reads media folders and writes backups only where you choose.</string>
   <key>NSLocalNetworkUsageDescription</key><string>Screenroom looks for cast receivers on your network only when you press the button, and then serves the one file you chose from a temporary endpoint that closes itself.</string>
@@ -113,11 +186,19 @@ for tool in ffmpeg ffprobe; do
 done
 
 if [ -f "$app/Contents/Frameworks/libmpv.2.dylib" ]; then
-  codesign --force --sign - "$app/Contents/Frameworks/libmpv.2.dylib"
+  codesign --force --sign "$sign_identity" "$app/Contents/Frameworks/libmpv.2.dylib"
 fi
-codesign --force --sign - "$app"
+
+echo "==> signing Sparkle's own helpers, then the framework"
+sparkle_root="$app/Contents/Frameworks/Sparkle.framework/Versions/B"
+for helper in "$sparkle_root/Autoupdate" "$sparkle_root/XPCServices/Downloader.xpc" "$sparkle_root/XPCServices/Installer.xpc" "$sparkle_root/Updater.app"; do
+  [ -e "$helper" ] || continue
+  codesign --force --deep --sign "$sign_identity" "$helper"
+done
+codesign --force --sign "$sign_identity" "$app/Contents/Frameworks/Sparkle.framework"
+codesign --force --sign "$sign_identity" "$app"
 codesign --verify --deep --strict "$app"
-echo "==> ad-hoc signed and verified"
+echo "==> signed with '$sign_identity' and verified"
 
 echo "==> built $app"
 plutil -lint "$app/Contents/Info.plist" >/dev/null && echo "    Info.plist is valid"

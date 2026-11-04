@@ -266,6 +266,11 @@ A platform label is not a capability. Each capability is recorded per device in
 - Secrets are never persisted in the library, backups or logs; provider
   credentials are session-scoped until a platform secure store is implemented.
 - No privileged web view, no arbitrary URL loading, no localhost server.
+- Updates arrive only from the HTTPS appcast named in `Info.plist`, and only from
+  an archive whose Ed25519 signature matches the committed public key
+  ([`ADR-006`](ADR-006_AUTOMATIC_UPDATES.md)). Sparkle verifies the feed and the
+  archive before extraction; the application itself never writes into its own
+  bundle.
 
 ## Delivery
 
@@ -283,6 +288,12 @@ playing when the Homebrew prefix changes or a development copy disappears. libmp
 transitive dependencies still resolve by absolute Homebrew path and the bundle is
 unsigned: both are deliberate for a personal install and are reported by the script
 rather than papered over.
+
+**Updates are a boundary, not a feature of the core.** `apps/desktop/native`
+holds the only Objective-C in the repository and the only import of Sparkle;
+`apps/desktop/src/updater.rs` decides *when* anything may happen and is tested
+without the framework. The core, the player and the library know nothing about
+updates, and no update path can open, move or rewrite user media.
 
 **Exit is a state transition.** The window's close request runs the same graceful
 path as Back — final checkpoint, then `end_session`. ⌘Q terminates the process

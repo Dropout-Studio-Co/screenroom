@@ -359,6 +359,45 @@ real hardware. Those are device runs, not database tests, and this stays PARTIAL
 
 ---
 
+## G10 — macOS automatic updates
+
+**Status: PASSED on this MacBook Air M4 against an isolated signed feed
+(2026-11-05). Public publication is separately BLOCKED.**
+
+What the gate asks: does an installed Screenroom find a genuine newer release,
+verify it, and replace itself without Git, Cargo, a compiler, a hosted update
+server or the owner's involvement — and without touching playback or data?
+
+`scripts/check-updater.sh` builds signed 0.1.0 and 0.2.0 bundles, serves a signed
+appcast over `127.0.0.1`, installs 0.1.0 into a temporary directory and runs the
+real installed binary with `SCREENROOM_WINDOW=hidden`:
+
+| Case | Observed |
+| --- | --- |
+| signed 0.2.0 on the feed | found, downloaded, verified, extracted, ready; installed on quit; bundle reports 0.2.0 |
+| library database after the upgrade | `pragma integrity_check` → `ok`, file untouched |
+| relaunch after install | none; the app did not come back |
+| the user-approved **Update now** action | installed 0.2.0 without waiting for a quit, and did not relaunch |
+| an unreachable feed | `failed`, reported, installation unchanged |
+| feed carrying only 0.1.0 while 0.2.0 runs | `up_to_date`, no download, no failure |
+| archive altered after signing | `failed`, error 4005 "The update is improperly signed and could not be validated", version stays 0.1.0 |
+| feed with its signatures removed | `failed`, error 1000 "The update feed is improperly signed and could not be validated", version stays 0.1.0 |
+
+**Not covered by this gate, and not claimed:**
+
+- a release served from `github.com`'s `releases/latest/download` redirect (the URL
+  is what the bundle carries; the redirect itself has not been exercised, because a
+  public release is blocked by `LICENSING.md`);
+- a paid Developer ID signature, hardened runtime or notarisation (no certificate
+  exists on this machine);
+- a person pressing the visible "Update now" button: the action it sends is
+  exercised headlessly and installs correctly, but no one has clicked it on screen;
+- a GitHub Actions run of the updated workflow.
+
+Those stay PENDING or BLOCKED. A passing local run is not a published release.
+
+---
+
 ## How to record a gate
 
 Append to [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md):

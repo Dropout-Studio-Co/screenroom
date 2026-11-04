@@ -14,12 +14,14 @@ this file is the short version.
   `SCREENROOM_MACOS_RUNNER=true`, by hand, or as a reusable workflow. It does not
   trigger on a push, so an offline Mac leaves no queued check behind.
   **No secrets.**
-- `release.yml` — on a push to `main`, on a `v*` tag, and by hand: builds and
-  archives the macOS `.app` on GitHub's hosted `macos-latest` runner, builds Windows
-  when that runner exists, packages the television when enabled, and publishes
-  GitHub Release `v<version>` with `manifest.json` and an optional Ed25519 signature
-  **only** for a `v*` tag or a manual run with `publish` ticked. A push to `main`
-  publishes nothing.
+- `release.yml` — on a push to `main`, on a `v*` tag, and by hand: fetches the
+  pinned Sparkle framework, builds and archives the macOS `.app` on GitHub's hosted
+  `macos-latest` runner, signs the update appcast, builds Windows when that runner
+  exists, packages the television when enabled, and publishes GitHub Release
+  `v<version>` with the zip, `appcast.xml`, `manifest.json` and an optional Ed25519
+  signature **only** for a `v*` tag or a manual run with `publish` ticked. A push to
+  `main` publishes nothing, and an existing asset is never replaced with different
+  bytes.
 - `scripts/ship.sh` — the same three lanes from a terminal, with no GitHub involved.
 
 ## The one-time setup
@@ -34,7 +36,10 @@ The steps below are for the device lanes and for the optional macOS test gate.
 3. Keep `/opt/homebrew/bin` and `~/.cargo/bin` populated — the `tv` job adds both to
    `PATH` itself.
 4. Run it as a service: `./svc.sh install "$USER"` then `./svc.sh start`.
-5. Set the optional secret `SCREENROOM_ED25519_KEY` (a passphrase-less Ed25519
+5. Set the required secret `SCREENROOM_SPARKLE_ED_KEY` (the base64 Sparkle Ed25519
+   private key, account `screenroom` in the owner's Keychain). Without it the
+   `macos` job fails, because a bundle whose updates cannot be signed is not
+   shippable. Set the optional secret `SCREENROOM_ED25519_KEY` (a passphrase-less Ed25519
    private key in OpenSSH format) to sign `manifest.json`. With it unset the
    manifest is published unsigned and the job still succeeds.
 6. Set the repository variables only when the device exists:

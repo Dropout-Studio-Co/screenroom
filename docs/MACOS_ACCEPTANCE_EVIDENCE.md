@@ -248,3 +248,65 @@ Ordered so the owner can stop early. Time is dominated by waiting, not by work.
 
 Steps 9–11, 13 and 14 no longer need anything from a person: they are asserted
 against the real application, its real database and a real player.
+
+## Automatic updates, against a local signed feed (2026-11-05)
+
+Machine: the owner's MacBook Air M4, macOS 27.2, Command Line Tools 21.0.0.
+`scripts/check-updater.sh` (real installed bundles, hidden window, isolated
+`SCREENROOM_LIBRARY`, no server on the internet):
+
+```
+==> building the two signed versions
+  ok:   0.1.0 packaged and archived
+  ok:   0.2.0 packaged and archived (CFBundleShortVersionString 0.2.0)
+  ok:   signed feed generated
+  ok:   lower-version feed generated
+  ok:   tampered archive prepared
+  ok:   unsigned feed prepared
+  ok:   local feed served from http://127.0.0.1:<port>
+
+==> case: a signed newer version is accepted and installs on quit
+  ok:   the update was reported ready before anything installed
+  ok:   the quit-time installation was armed before the application exited
+  ok:   the installed bundle is 0.2.0 after the update
+  ok:   the library database survived the upgrade intact
+  ok:   the update did not relaunch Screenroom
+
+==> case: the visible Update now path installs without relaunching
+  ok:   an approved install replaced the bundle without waiting for a quit
+  ok:   the approved install did not relaunch the application
+
+==> case: an unreachable feed fails without touching the installation
+  ok:   an unreachable feed left the installed version alone
+  ok:   the failure was reported rather than swallowed
+
+==> case: a lower version is not offered
+  ok:   the running newer version was left alone
+  ok:   no failure was reported for a feed that only carries an older version
+
+==> case: a tampered archive is refused
+  ok:   the tampered archive was refused; the installed version stayed 0.1.0
+  ok:   the refusal named the signature, not a network or disk fault
+
+==> case: an unsigned feed is refused
+  ok:   the unsigned feed was refused; the installed version stayed 0.1.0
+  ok:   the refusal named the feed signature, and no unsigned fallback was used
+
+All updater checks passed.
+```
+
+The receipt the installed app wrote during the accepted run, in order: `check_requested`,
+`available` (0.2.0), `download_requested`, `extracting`, `ready`, `quit_requested`,
+`quit_ready`. Sparkle's own events carried the same sequence. The approved-install
+case reached `ready` and then installed immediately at about 3 s in, without a
+relaunch.
+
+The refusal messages are Sparkle's, not ours: `4005 The update is improperly signed
+and could not be validated` for the altered archive, and `1000 The update feed is
+improperly signed and could not be validated` for the unsigned feed. Both arrived
+before any extraction, which is what `SUVerifyUpdateBeforeExtraction` promises.
+
+**Not run, and not claimed:** an update delivered from a real GitHub release
+(publication is BLOCKED by [`LICENSING.md`](LICENSING.md)), a Developer ID signature,
+notarisation, a person clicking the visible "Update now" button (the action it sends
+is proved headlessly), and any GitHub Actions run of the new steps.

@@ -97,6 +97,82 @@ else
 fi
 
 echo
+echo "==> the update framework"
+framework="$app/Contents/Frameworks/Sparkle.framework"
+if [ -d "$framework" ]; then
+  ok "Sparkle.framework is embedded"
+  if [ -L "$framework/Versions/Current" ]; then
+    ok "the framework's symlinks survived archiving"
+  else
+    fail "Versions/Current is not a symlink, so the framework was flattened"
+  fi
+  if file "$framework/Versions/B/Sparkle" | grep -q 'Mach-O'; then
+    ok "the framework binary is Mach-O ($(lipo -archs "$framework/Versions/B/Sparkle" 2>/dev/null || echo unknown))"
+  else
+    fail "the framework binary is not Mach-O"
+  fi
+  for helper in Autoupdate Updater.app/Contents/MacOS/Updater XPCServices/Installer.xpc/Contents/MacOS/Installer; do
+    if [ -e "$framework/Versions/B/$helper" ]; then
+      ok "the helper $helper is present"
+    else
+      fail "the helper $helper is missing from the framework"
+    fi
+  done
+else
+  fail "Contents/Frameworks/Sparkle.framework is missing, so updates cannot run"
+fi
+
+echo
+echo "==> update configuration"
+feed="$(plutil -extract SUFeedURL raw "$app/Contents/Info.plist" 2>/dev/null || true)"
+key="$(plutil -extract SUPublicEDKey raw "$app/Contents/Info.plist" 2>/dev/null || true)"
+case "$feed" in
+  https://*) ok "the feed is https ($feed)" ;;
+  http://127.0.0.1:*|http://localhost:*|file://*)
+    if [ "${SCREENROOM_ALLOW_TEST_FEED:-0}" = "1" ]; then
+      echo "  note: the feed is a local test address ($feed)"
+    else
+      fail "the feed is not https: ${feed:-unset}"
+    fi
+    ;;
+  *) fail "the feed is not https: ${feed:-unset}" ;;
+esac
+if [ -n "$key" ]; then
+  ok "an Ed25519 public key is embedded"
+else
+  fail "no SUPublicEDKey, so no update could ever be verified"
+fi
+for requirement in SURequireSignedFeed SUVerifyUpdateBeforeExtraction SUEnableAutomaticChecks; do
+  value="$(plutil -extract "$requirement" raw "$app/Contents/Info.plist" 2>/dev/null || true)"
+  if [ "$value" = "true" ]; then
+    ok "$requirement is on"
+  else
+    fail "$requirement is '${value:-unset}'"
+  fi
+done
+expiry="$(plutil -extract SUSignedFeedFailureExpirationInterval raw "$app/Contents/Info.plist" 2>/dev/null || true)"
+if [ "$expiry" = "0" ]; then
+  ok "a failed feed signature never expires into an unsigned fallback"
+else
+  fail "SUSignedFeedFailureExpirationInterval is '${expiry:-unset}', not 0"
+fi
+minimum="$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist" 2>/dev/null || true)"
+case "$minimum" in
+  1[2-9].*|2[0-9].*) ok "LSMinimumSystemVersion is $minimum, which the framework needs" ;;
+  *) fail "LSMinimumSystemVersion is '${minimum:-unset}'; Sparkle 2.10 needs 12.0" ;;
+esac
+if otool -L "$app/Contents/MacOS/$executable_name" | grep -q '@rpath/Sparkle.framework'; then
+  ok "the executable links the framework through @rpath"
+else
+  fail "the executable does not link Sparkle"
+fi
+if otool -l "$app/Contents/MacOS/$executable_name" | grep -A2 LC_RPATH | grep -q '@executable_path/../Frameworks'; then
+  ok "the runtime search path finds the bundled framework"
+else
+  fail "no @executable_path/../Frameworks runtime search path"
+fi
+
+echo
 echo "==> signature and permissions"
 if codesign --verify --deep --strict "$app" 2>/dev/null; then
   ok "the bundle's ad-hoc signature verifies, libmpv included"

@@ -161,6 +161,23 @@ pub fn default_backup_path() -> String {
         .to_string()
 }
 
+fn open_updater() -> (crate::updater::Updater, Box<dyn crate::updater::Backend>) {
+    let refusal = if cfg!(test) {
+        Some("the unit tests do not start the update framework")
+    } else if std::env::var("SCREENROOM_UPDATE_DISABLE").is_ok_and(|value| value == "1") {
+        Some("this launch asked the updater to stay off")
+    } else {
+        None
+    };
+    match refusal {
+        Some(reason) => (
+            crate::updater::Updater::unavailable(reason),
+            Box::new(crate::updater::UnavailableBackend::new(reason)),
+        ),
+        None => crate::updater::open(crate::updater::feed_override_from_environment().as_deref()),
+    }
+}
+
 fn default_conversion_folder() -> String {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -643,6 +660,12 @@ pub struct App {
     watch_reconciled: bool,
     watch_reconcile_at: std::time::Instant,
     watch_deferred: Vec<DeferredPath>,
+
+    updater: crate::updater::Updater,
+    updater_backend: Box<dyn crate::updater::Backend>,
+    update_run: Option<crate::updater::CheckRun>,
+    leave_after_update_run: bool,
+    dismissed_update_status: Option<&'static str>,
 }
 
 #[derive(Debug, Clone)]
@@ -924,6 +947,22 @@ pub enum Message {
 
     CastDisconnect,
 
+    CheckForUpdates,
+
+    InstallUpdate,
+
+    InstallUpdateOnQuit,
+
+    CancelUpdateDownload,
+
+    DismissUpdate,
+
+    ToggleAutomaticUpdateChecks(bool),
+
+    ToggleAutomaticUpdateDownloads(bool),
+
+    OpenUpdateSettings,
+
     Close,
 }
 
@@ -1150,6 +1189,25 @@ impl App {
         app.open_requested_screen();
         app.ensure_artwork();
         app.start_durations();
+
+        if crate::updater::check_requested() && app.updater.is_unavailable() {
+            app.update_run = None;
+            if let Some(path) = std::env::var_os(crate::updater::CHECK_ENV) {
+                let reason = match app.updater.status() {
+                    crate::updater::UpdateStatus::Unavailable { reason } => reason.clone(),
+                    _ => "no update framework".to_string(),
+                };
+                let _ = std::fs::write(
+                    PathBuf::from(path),
+                    format!(
+                        "{{\"status\":\"unavailable\",\"reason\":\"{}\"}}\n",
+                        reason.replace('"', "'")
+                    ),
+                );
+            }
+            return (app, iced::exit());
+        }
+
         (app, task)
     }
 
@@ -1191,6 +1249,8 @@ impl App {
 
     pub fn with_library(library: Library, error: Option<String>, library_label: String) -> Self {
         let library = Arc::new(library);
+
+        let (updater, updater_backend) = open_updater();
 
         let preferences = library.preferences().unwrap_or_default();
         let metadata_capability =
@@ -1328,6 +1388,12 @@ impl App {
             watch_reconciled: false,
             watch_reconcile_at: std::time::Instant::now(),
             watch_deferred: Vec::new(),
+
+            updater,
+            updater_backend,
+            update_run: crate::updater::CheckRun::from_environment(),
+            leave_after_update_run: false,
+            dismissed_update_status: None,
         };
         app.sync_language_inputs();
         app.reload();
@@ -2946,6 +3012,8 @@ impl App {
     }
 
     fn poll(&mut self) {
+        self.drain_updater();
+        self.drive_update_run();
         if self
             .mode_change
             .is_some_and(|(_, since)| since.elapsed() >= MODE_SETTLE)
@@ -3356,6 +3424,69 @@ impl App {
         match self.library.set_preferences(&preferences) {
             Ok(()) => self.preferences = preferences,
             Err(error) => self.report(&error),
+        }
+    }
+
+    fn update_playback(&self) -> crate::updater::Playback {
+        if self.screen == Screen::Player {
+            crate::updater::Playback::Playing
+        } else {
+            crate::updater::Playback::Idle
+        }
+    }
+
+    fn perform_update_actions(&mut self, actions: Vec<crate::updater::Action>) {
+        for action in actions {
+            let accepted = self.updater_backend.perform(action);
+            if !accepted && std::env::var("SCREENROOM_UPDATE_DEBUG").is_ok() {
+                eprintln!("screenroom: the updater refused {action:?}");
+            }
+            if accepted {
+                continue;
+            }
+            match action {
+                crate::updater::Action::InstallNow => {
+                    self.status = Some(
+                        "The download is not ready to install yet. Check again in a moment."
+                            .to_string(),
+                    );
+                }
+                crate::updater::Action::CheckNow => {}
+                crate::updater::Action::CancelDownload => {}
+                crate::updater::Action::Dismiss => {}
+                crate::updater::Action::InstallOnQuit => {}
+                crate::updater::Action::SetAutomaticChecks(_) => {}
+                crate::updater::Action::SetAutomaticDownloads(_) => {}
+            }
+        }
+    }
+
+    fn drain_updater(&mut self) {
+        let documents = crate::updater::drain_events();
+        for document in documents {
+            if std::env::var("SCREENROOM_UPDATE_DEBUG").is_ok() {
+                eprintln!("screenroom: updater event {document}");
+            }
+            let Some(event) = crate::updater::Updater::decode(&document) else {
+                continue;
+            };
+            let _ = self.updater.feed(event);
+        }
+    }
+
+    fn drive_update_run(&mut self) {
+        let Some(run) = self.update_run.as_mut() else {
+            return;
+        };
+        if run.finished() {
+            self.leave_after_update_run = true;
+            return;
+        }
+        if let Some(action) = run.step(&self.updater) {
+            self.perform_update_actions(Vec::from([action]));
+        }
+        if self.update_run.as_ref().is_some_and(|run| run.finished()) {
+            self.leave_after_update_run = true;
         }
     }
 
@@ -4624,6 +4755,83 @@ impl App {
         )
     }
 
+    fn update_strip(&self) -> Option<Element<'_, Message>> {
+        if self.update_playback() == crate::updater::Playback::Playing {
+            return None;
+        }
+        if self.updater.is_unavailable() {
+            return None;
+        }
+        let status = self.updater.status();
+        if self.dismissed_update_status == Some(status.name()) {
+            return None;
+        }
+        let showable = matches!(
+            status,
+            crate::updater::UpdateStatus::Available
+                | crate::updater::UpdateStatus::Downloading { .. }
+                | crate::updater::UpdateStatus::Extracting { .. }
+                | crate::updater::UpdateStatus::Ready { .. }
+        );
+        if !showable {
+            return None;
+        }
+        let headline = self.updater.headline()?;
+        let tokens = design::tokens();
+        let mut actions = row![].spacing(tokens.spacing.field_x);
+        if self.updater.may_install(crate::updater::Playback::Idle) {
+            actions = actions.push(
+                button(text("Update now").size(tokens.type_scale.caption))
+                    .on_press(Message::InstallUpdate)
+                    .style(design::action_style(true))
+                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+            );
+        }
+        if status.is_ready() {
+            actions = actions.push(
+                button(text("Install when I quit").size(tokens.type_scale.caption))
+                    .on_press(Message::InstallUpdateOnQuit)
+                    .style(design::quiet_style(false))
+                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+            );
+        }
+        if matches!(status, crate::updater::UpdateStatus::Downloading { .. }) {
+            actions = actions.push(
+                button(text("Stop the download").size(tokens.type_scale.caption))
+                    .on_press(Message::CancelUpdateDownload)
+                    .style(design::quiet_style(false))
+                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+            );
+        }
+        actions = actions.push(
+            button(text("Later").size(tokens.type_scale.caption))
+                .on_press(Message::DismissUpdate)
+                .style(design::quiet_style(false))
+                .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+        );
+        actions = actions.push(
+            button(text("Change settings").size(tokens.type_scale.caption))
+                .on_press(Message::OpenUpdateSettings)
+                .style(design::quiet_style(false))
+                .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
+        );
+        Some(
+            container(
+                row![
+                    text(headline).size(tokens.type_scale.label),
+                    Space::new().width(Length::Fill),
+                    actions,
+                ]
+                .spacing(tokens.spacing.field_x)
+                .align_y(Alignment::Center),
+            )
+            .style(|_theme| design::container_style(Level::Panel, false))
+            .padding(tokens.spacing.field_y)
+            .width(Length::Fill)
+            .into(),
+        )
+    }
+
     fn update(&mut self, message: Message) -> Task<Message> {
         let before = self.screen;
         let task = self.dispatch(message);
@@ -4813,6 +5021,18 @@ impl App {
                 self.settings_section = section;
                 self.settings_focus = 0;
             }
+            Message::OpenUpdateSettings => {
+                let leave = self.end_viewing();
+                self.settings_section = ui::screens::settings::Section::Updates;
+                self.settings_focus = 0;
+                self.navigate(Screen::Settings);
+                self.focus_card(0);
+                self.armed_remove = None;
+                self.armed_restore = None;
+                self.armed_profile = None;
+                self.reload_administration();
+                return leave;
+            }
             Message::Play(file_id) => self.open_player(&file_id, false),
             Message::Restart(file_id) => self.open_player(&file_id, true),
             Message::ToggleFavorite(work_id) => {
@@ -4976,6 +5196,34 @@ impl App {
             Message::CastPause => self.cast_action(CastAction::Pause),
             Message::CastStop => self.cast_action(CastAction::Stop),
             Message::CastDisconnect => self.cast_action(CastAction::Disconnect),
+            Message::CheckForUpdates => {
+                let actions = self.updater.request_check(self.update_playback());
+                self.perform_update_actions(actions);
+            }
+            Message::InstallUpdate => {
+                let actions = self.updater.request_install(self.update_playback());
+                self.perform_update_actions(actions);
+            }
+            Message::InstallUpdateOnQuit => {
+                let actions = self.updater.request_install_on_quit(self.update_playback());
+                self.perform_update_actions(actions);
+            }
+            Message::CancelUpdateDownload => {
+                self.perform_update_actions(Vec::from([crate::updater::Action::CancelDownload]))
+            }
+            Message::DismissUpdate => {
+                self.dismissed_update_status = Some(self.updater.status().name());
+                let actions = self.updater.request_dismiss();
+                self.perform_update_actions(actions);
+            }
+            Message::ToggleAutomaticUpdateChecks(enabled) => {
+                let actions = self.updater.request_automatic_checks(enabled);
+                self.perform_update_actions(actions);
+            }
+            Message::ToggleAutomaticUpdateDownloads(enabled) => {
+                let actions = self.updater.request_automatic_downloads(enabled);
+                self.perform_update_actions(actions);
+            }
             Message::CancelBackup => self.cancel_backup(),
             Message::RestorePathChanged(value) => {
                 self.restore_path = value;
@@ -5115,6 +5363,10 @@ impl App {
                 if self.drive_play_check() {
                     return iced::exit();
                 }
+                if self.leave_after_update_run {
+                    self.updater_backend.confirm_quit_install();
+                    return iced::exit();
+                }
                 return Task::none();
             }
             Message::Keyboard(event) => {
@@ -5131,6 +5383,7 @@ impl App {
                     .map(|player| player.snapshot().position);
                 self.stop_playback();
                 self.record_terminate_check(reached);
+                self.updater_backend.confirm_quit_install();
                 return iced::exit();
             }
         }
@@ -5509,6 +5762,12 @@ impl App {
         }
 
         let mut content = body;
+        if let Some(strip) = self.update_strip() {
+            content = column![self.gutter(strip), content]
+                .spacing(design::tokens().spacing.content_pad)
+                .width(Length::Fill)
+                .into();
+        }
         if let Some(strip) = self.scan_strip() {
             content = column![self.gutter(strip), content]
                 .spacing(design::tokens().spacing.content_pad)
@@ -6256,6 +6515,105 @@ impl App {
                     value: format!("{}%", preferences.subtitle_position_percent),
                 });
             }
+            ui::screens::settings::Section::Updates => {
+                rows.push(Row::Value {
+                    label: "This version",
+                    value: crate::updater::CURRENT_VERSION.to_string(),
+                });
+                rows.push(Row::Value {
+                    label: "State",
+                    value: self
+                        .updater
+                        .headline()
+                        .unwrap_or_else(|| "No check has run since Screenroom opened.".to_string()),
+                });
+                if let crate::updater::UpdateStatus::Unavailable { reason } = self.updater.status()
+                {
+                    rows.push(Row::Value {
+                        label: "Updates are unavailable in this launch",
+                        value: reason.clone(),
+                    });
+                } else {
+                    let playback = self.update_playback();
+                    let can_check = !self.updater.status().is_busy()
+                        && playback == crate::updater::Playback::Idle;
+                    rows.push(Row::Action {
+                        label: "Look for a new version now",
+                        hint: Some("One request, and never while a film is playing."),
+                        action: "Check now",
+                        on_press: can_check.then_some(Message::CheckForUpdates),
+                    });
+                    if self.updater.may_install(playback) {
+                        rows.push(Row::Action {
+                            label: "Install the update now",
+                            hint: Some(
+                                "Screenroom closes first and stores your place, then reopens when \
+                                 you do.",
+                            ),
+                            action: "Update now",
+                            on_press: Some(Message::InstallUpdate),
+                        });
+                    }
+                    if self.updater.status().is_ready() {
+                        rows.push(Row::Action {
+                            label: "Install when I quit",
+                            hint: Some(
+                                "Screenroom closes and the new version waits for next time.",
+                            ),
+                            action: "Install on quit",
+                            on_press: Some(Message::InstallUpdateOnQuit),
+                        });
+                    }
+                    if matches!(
+                        self.updater.status(),
+                        crate::updater::UpdateStatus::Downloading { .. }
+                    ) {
+                        rows.push(Row::Action {
+                            label: "Stop the download",
+                            hint: Some("Nothing half downloaded is kept."),
+                            action: "Cancel",
+                            on_press: Some(Message::CancelUpdateDownload),
+                        });
+                    }
+                    let settings = self.updater.settings();
+                    rows.push(Row::Toggle {
+                        label: "Look for a new version once a day",
+                        hint: Some("One scheduled check a day, and only while Screenroom runs."),
+                        on: settings.automatic_checks,
+                        message: Message::ToggleAutomaticUpdateChecks(!settings.automatic_checks),
+                    });
+                    if settings.allows_automatic_updates {
+                        rows.push(Row::Toggle {
+                            label: "Download a new version in the background",
+                            hint: Some("It installs when you quit, never while a film is playing."),
+                            on: settings.automatic_downloads,
+                            message: Message::ToggleAutomaticUpdateDownloads(
+                                !settings.automatic_downloads,
+                            ),
+                        });
+                    }
+                    if let Some(update) = self.updater.update() {
+                        rows.push(Row::Value {
+                            label: "New version",
+                            value: format!("{} ({})", update.display_version, update.version),
+                        });
+                        rows.push(Row::Value {
+                            label: "Signature",
+                            value: crate::updater::describe_feed_signing(&update.feed_signing),
+                        });
+                    }
+                    if let Some(failure) = self.updater.last_failure() {
+                        rows.push(Row::Value {
+                            label: "Last failure",
+                            value: failure.to_string(),
+                        });
+                    }
+                }
+                rows.push(Row::Value {
+                    label: "Feed",
+                    value: crate::updater::feed_label(),
+                });
+            }
             ui::screens::settings::Section::Data => {
                 rows.push(Row::Value {
                     label: "Backup file",
@@ -6517,6 +6875,24 @@ impl App {
                 "Reduce motion also stops browse previews, so no preview decoder is opened."
                     .to_string()
             )]
+            .width(Length::Fill)
+            .into(),
+            Section::Updates => column![
+                note(
+                    "Screenroom asks GitHub for the newest published version about once a day. \
+                     A new version downloads in the background, is checked against the owner's \
+                     Ed25519 signature before it is unpacked, and installs when you quit or when \
+                     you press Update now. Nothing installs while a film is playing, and nothing \
+                     touches your library, posters, subtitle files or media."
+                        .to_string(),
+                ),
+                note(
+                    "The installed app needs no Git, Cargo or compiler: the new version arrives as \
+                     a finished signed application and replaces this one in place."
+                        .to_string(),
+                ),
+            ]
+            .spacing(tokens.spacing.field_y)
             .width(Length::Fill)
             .into(),
             Section::Data => column![

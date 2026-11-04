@@ -62,6 +62,7 @@ pub enum Section {
     Online,
     Subtitles,
     Accessibility,
+    Updates,
     Data,
     About,
 }
@@ -75,6 +76,7 @@ impl Section {
         Section::Online,
         Section::Subtitles,
         Section::Accessibility,
+        Section::Updates,
         Section::Data,
         Section::About,
     ];
@@ -88,6 +90,7 @@ impl Section {
             Section::Online => "Online metadata",
             Section::Subtitles => "Subtitles",
             Section::Accessibility => "Accessibility",
+            Section::Updates => "Updates",
             Section::Data => "Data and backups",
             Section::About => "About",
         }
@@ -607,7 +610,7 @@ mod tests {
     #[test]
     fn every_settings_action_has_a_row_somewhere() {
         let sections = Section::ALL;
-        assert_eq!(sections.len(), 9);
+        assert_eq!(sections.len(), 10);
         let labels: Vec<&str> = sections.iter().map(|s| s.label()).collect();
         assert!(labels.contains(&"Casting") && labels.contains(&"Profiles"));
     }

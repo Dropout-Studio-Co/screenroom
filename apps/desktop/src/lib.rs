@@ -16,5 +16,6 @@ pub mod probe;
 pub mod quit;
 pub mod sidecar;
 pub mod ui;
+pub mod updater;
 pub mod video_surface;
 pub mod watch;

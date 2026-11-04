@@ -2400,3 +2400,23 @@ the mounted library and reports what it proves. On the owner's 916 GB exFAT driv
 - Real playback of a 1080p HEVC film measured **24.09 fps** sustained through
   VideoToolbox, 14 % CPU, 72–86 MB resident, first frame at 1.0 s.
 - The drive is only ever read. Nothing in this check writes to it.
+
+## Automatic updates (2026-11-05)
+
+Sparkle 2.10.1 is embedded and driven by a custom `SPUUserDriver` that renders
+nothing; `apps/desktop/src/updater.rs` owns the state machine, and Settings →
+Updates is the only place an update can be acted on. `LSMinimumSystemVersion` moved
+from 11.0 to 12.0 because Sparkle 2.10 requires it.
+
+G10 (see [`FEASIBILITY_GATES.md`](FEASIBILITY_GATES.md)) passed on this MacBook
+against a local signed feed: 0.1.0 found and installed 0.2.0 on quit, the library
+database survived, nothing relaunched, an altered archive and an unsigned feed were
+both refused with Sparkle's own signature errors, and an older feed was ignored.
+
+`cargo test --workspace` is 820 tests after this change (24 new: 15 for the state
+machine and event decoding, 9 for Settings, the banner, the playback guard and the
+quit path).
+
+Two things remain outside what any local run can settle: a release served from
+GitHub, and the public-publishing decision. Both are recorded as BLOCKED or PENDING
+rather than folded into the result above.

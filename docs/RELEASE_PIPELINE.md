@@ -109,6 +109,9 @@ A release happens only when someone pushes a `v*` tag at the commit whose
 
 ### Signing
 
+The application's update archives and its appcast are signed with Sparkle's Ed25519
+key; the application bundle itself is **not** signed with a paid certificate.
+
 Nothing is signed with a paid certificate. The app stays **ad-hoc signed**, as
 `scripts/package-macos.sh` has always done it, and that is all the hosted runner
 can do: notarisation needs an Apple Developer ID certificate plus an
@@ -117,6 +120,8 @@ is therefore not notarised**, and the first launch on a machine that did not bui
 it shows Gatekeeper's "unidentified developer" prompt. Do not describe a release
 as signed or notarised until those credentials exist and the packaging script uses
 them.
+
+The **update channel** is separate from the manifest and is described in §7.
 
 The **manifest** can carry an Ed25519 detached signature:
 `ssh-keygen -Y sign -n screenroom`, verified with `ssh-keygen -Y verify`. That is
@@ -357,3 +362,95 @@ built is not a presented libmpv frame, a Windows `.exe` that built is not a deco
 frame on the Arc B580, and a `.wgt` that installed is not a television receipt. The
 Windows and Tizen gates remain **BLOCKED** until they pass on the real devices, and
 a skipped lane is never evidence of anything.
+
+## 7. The automatic update channel
+
+Design: [`ADR-006_AUTOMATIC_UPDATES.md`](ADR-006_AUTOMATIC_UPDATES.md).
+
+The installed app reads
+`https://github.com/Dropout-Studio-Co/screenroom/releases/latest/download/appcast.xml`.
+GitHub serves the newest **non-prerelease** release's `appcast.xml` asset through a
+redirect to the same HTTPS host, so there is no update server, no bucket and no
+process on the owner's Mac.
+
+### What a release must contain
+
+| Asset | Purpose |
+| --- | --- |
+| `Screenroom-<version>-macos-arm64.zip` | the update payload, and also the download a person takes by hand |
+| `appcast.xml` | the signed feed Sparkle reads |
+| `manifest.json`, `manifest.json.sig` | the SHA-256 record and its optional ssh-keygen signature; kept for humans and auditing, **not** used for updates |
+
+`scripts/release.sh macos --out DIR` builds the bundle, archives it and writes the
+manifest fragment. `scripts/release.sh appcast --out DIR --tag vX.Y.Z` runs
+Sparkle's `generate_appcast` over the archives in `DIR`, signs the feed and **fails
+if the result carries no `sparkle-signatures` block or if no key is configured**. It
+never writes an unsigned feed.
+
+### The signing key
+
+- Generated once with `vendor/sparkle/bin/generate_keys --account screenroom`.
+- The private key lives in the owner's login Keychain under account `screenroom`,
+  and, base64, in the repository secret **`SCREENROOM_SPARKLE_ED_KEY`**. The release
+  job passes it on standard input (`--ed-key-file -`); it is never written to a
+  file, an artefact or a log.
+- The public key is committed at
+  `apps/desktop/updater/ed25519_public_key.txt`. It is the trust anchor: changing it
+  changes what every future update must be signed with.
+- **Recovery.** Restore `SCREENROOM_SPARKLE_ED_KEY` from the Keychain with
+  `vendor/sparkle/bin/generate_keys --account screenroom -x /secure/place/key`, keep
+  it out of Git, and re-set the secret with `gh secret set
+  SCREENROOM_SPARKLE_ED_KEY < /secure/place/key`.
+- **Rotation.** Publish one release signed with the old key whose app bundle carries
+  the new `SUPublicEDKey`, then sign every later release with the new key. Sparkle
+  accepts a key change only through such a signed release, and with
+  `SUVerifyUpdateBeforeExtraction` on it must be a Developer ID signed disk image;
+  until a Developer ID exists, rotation is a re-install, not an update. Say so
+  instead of pretending otherwise.
+
+### First release, from nothing
+
+The repository has never published a release, so the first tag is a bootstrap:
+
+1. The version in `Cargo.toml` is the version that ships. Tagging `v0.1.0` on that
+   tree publishes 0.1.0 with an appcast whose single item is 0.1.0. An installed
+   0.1.0 offers nothing, which is correct.
+2. Bump the version (for example `0.1.1`), commit, and tag `v0.1.1`. That release's
+   appcast is the first one that can update an installed copy.
+3. Never reuse a tag with different bytes: the publish job downloads an existing
+   asset and compares it, and refuses to replace it.
+
+**None of this has been executed.** No release, no tag and no Actions run exists,
+because publishing the current bundle redistributes a GPL-linked libmpv
+([`LICENSING.md`](LICENSING.md)). The local equivalent is
+`scripts/check-updater.sh`, which does exactly the same packaging, signing and
+installation against `127.0.0.1`.
+
+### The knobs, and which of them a release may use
+
+| Variable | Read by | Effect |
+| --- | --- | --- |
+| `SCREENROOM_UPDATE_FEED_URL` | `package-macos.sh` | the feed baked into `Info.plist`; must be HTTPS unless the test flag is set |
+| `SCREENROOM_VERSION` | `package-macos.sh` | overrides the version, **only** with `SCREENROOM_ALLOW_TEST_FEED=1` |
+| `SCREENROOM_UPDATE_PUBLIC_KEY` | `package-macos.sh` | overrides the trust anchor, **only** with the test flag |
+| `SCREENROOM_ALLOW_TEST_FEED` | `package-macos.sh` | permits a `file://` or `127.0.0.1` feed, a version override and a key override, and adds the local-networking ATS exception |
+| `SCREENROOM_CODESIGN_IDENTITY` | `package-macos.sh` | signs the app and every nested component; defaults to ad-hoc |
+| `SCREENROOM_SPARKLE_ED_KEY` | `release.sh appcast` | the base64 private key, passed on stdin |
+| `SCREENROOM_SPARKLE_KEY_FILE` | `release.sh appcast` | a private-key file instead of the environment variable |
+| `SCREENROOM_SPARKLE_ACCOUNT` | `check-updater.sh` | the Keychain account to export the key from |
+| `SCREENROOM_UPDATE_FEED` | the running app | a test-only feed override; signatures are still enforced |
+| `SCREENROOM_UPDATE_CHECK`, `_INSTALL`, `_TIMEOUT`, `_DEBUG` | the running app | the headless harness: receipt path, `stop`/`now`/`quit`, seconds, verbose events |
+| `SCREENROOM_UPDATE_DISABLE` | the running app | start with updates unavailable |
+
+A release sets none of the test variables; the workflow exports only
+`SCREENROOM_SPARKLE_ED_KEY`.
+
+### What the workflow now does
+
+- `macos` — fetch Sparkle at its pinned hash, name the release, build and archive,
+  then **sign the appcast** with `secrets.SCREENROOM_SPARKLE_ED_KEY`. A missing
+  secret fails the job instead of producing an update nobody can verify.
+- `publish` — refuse a tag older than the newest published one, merge and sign the
+  SHA-256 manifest, then upload only files that are absent, or byte-identical to
+  what is already published. `--clobber` is gone.
+- Every push to `main` still publishes nothing.

@@ -24,7 +24,10 @@ pub fn requests_hidden_window() -> bool {
     if std::env::var(WINDOW_ENV).is_ok_and(|value| value == "hidden") {
         return true;
     }
-    (requested() || crate::quit::check_requested() || crate::quit::terminate_check_requested())
+    (requested()
+        || crate::quit::check_requested()
+        || crate::quit::terminate_check_requested()
+        || crate::updater::check_requested())
         && !visible_requested()
 }
 

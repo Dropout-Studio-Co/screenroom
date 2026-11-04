@@ -97,6 +97,28 @@ version requires them. Do not ship a GPL-linked binary behind MIT-only notices.
 
 Codec patents and platform store terms are separate from open-source copyright.
 
+## The update framework
+
+**Sparkle 2.10.1** (MIT) is embedded as `Contents/Frameworks/Sparkle.framework`,
+fetched by `scripts/fetch-sparkle.sh` at a pinned SHA-256 and never committed. The
+framework carries its own `LICENSE`, which ships inside the bundle; Sparkle's MIT
+notice must stay with it. It brings no GPL obligation and no service dependency.
+
+Sparkle's tools (`generate_appcast`, `sign_update`, `generate_keys`) run only on the
+build machine. They are not shipped in the application.
+
+The update *contents* are Screenroom itself, so the libmpv obligation below applies
+to everything Sparkle delivers exactly as it applies to the first download. An
+updater does not launder a licence.
+
+Because of that, the automatic update channel is implemented, signed and proved
+against a local feed, while **publication stays blocked**: the only libmpv on this
+machine is Homebrew's GPL build, and an audited LGPL-only mpv + FFmpeg pair would
+need a meson/nasm toolchain, a full rebuild and a re-verification of the render
+bridge that nothing here has done. Substituting it silently would trade one
+unverified risk for another, so the decision is recorded as open rather than
+assumed.
+
 ## TV clients
 
 The Lightning 3 renderer and Blits are MIT-licensed JavaScript packages

@@ -297,7 +297,10 @@ while [ "$rounds" -lt 20 ]; do
   started="$(date +%s)"
 
   failed=""
-  if ! scripts/package-macos.sh >"$log" 2>&1; then
+  if [ ! -d "$root/vendor/sparkle/Sparkle.framework" ] \
+    && ! scripts/fetch-sparkle.sh >>"$log" 2>&1; then
+    failed="the update framework could not be fetched"
+  elif ! scripts/package-macos.sh >>"$log" 2>&1; then
     failed="package failed"
   elif ! scripts/verify-bundle.sh "$dist" >>"$log" 2>&1; then
     failed="verify failed"

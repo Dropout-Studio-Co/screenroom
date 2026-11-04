@@ -970,3 +970,24 @@ shipped default until `SCREENROOM_PLAY_CHECK` on the application itself reports
 Everything in §5 marked `BLOCKED` needs something only the owner can supply — a
 provider account, a receiver, the SSD, or a physical observation — and each says
 exactly what.
+
+## Automatic updates, added 2026-11-05
+
+Not in the original 50 rows: the owner asked for a complete automatic updater after
+this backlog was written. Its design decision is
+[`ADR-006`](ADR-006_AUTOMATIC_UPDATES.md), its gate is **G10** in
+[`FEASIBILITY_GATES.md`](FEASIBILITY_GATES.md), and its evidence is in
+[`MACOS_ACCEPTANCE_EVIDENCE.md`](MACOS_ACCEPTANCE_EVIDENCE.md).
+
+| Row | Status | What settles it |
+| --- | --- | --- |
+| Check, download, verify and install a signed newer version | **COMPLETE** | `scripts/check-updater.sh`: 0.1.0 → 0.2.0 through the real installed binary |
+| Refuse a tampered archive, an unsigned feed and a downgrade | **COMPLETE** | the same script, three negative cases |
+| Settings → Updates, keyboard-operable, with a banner that never covers a film | **COMPLETE** | `apps/desktop/src/app/acceptance.rs`, six tests |
+| Serve the feed from GitHub Releases | **BLOCKED** | a public release needs a cleared libmpv; `LICENSING.md` governs |
+| Developer ID signature and notarisation | **BLOCKED** | no Apple certificate on this machine, and none is to be purchased |
+| The `Update now` action | **COMPLETE** | the action installs on demand without relaunching; only a person clicking the drawn button is unobserved |
+| A GitHub Actions run of the updated release job | **PENDING** | the workflow has only been linted and read, never executed by GitHub |
+
+The updater does not change any other row: playback, scanning, subtitles, casting,
+backup and the design system are untouched, and `cargo test --workspace` is green.

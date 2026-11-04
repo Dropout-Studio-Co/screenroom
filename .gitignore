@@ -8,6 +8,9 @@ tmp_screenshots/
 # Private proprietary Dropout Design System material stays local.
 /src/lib/ds/
 /vendor/dropout-design-system/
+# The pinned Sparkle distribution is fetched, not committed; scripts/fetch-sparkle.sh
+# verifies its sha256 before it lands here.
+/vendor/sparkle/
 **/design/dropout_tokens.g.dart
 # Private token values generated from the pinned design system are never committed.
 /apps/desktop/src/design/ds_pinned.rs

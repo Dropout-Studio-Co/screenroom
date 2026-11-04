@@ -2650,3 +2650,303 @@ fn the_online_panels_explain_themselves_and_never_start_a_call_they_cannot_make(
         "the artwork retention choice must be reachable: {actions:?}"
     );
 }
+
+struct RecordingBackend {
+    seen: std::sync::Arc<std::sync::Mutex<Vec<crate::updater::Action>>>,
+}
+
+impl crate::updater::Backend for RecordingBackend {
+    fn perform(&mut self, action: crate::updater::Action) -> bool {
+        self.seen.lock().expect("action log").push(action);
+        true
+    }
+
+    fn reason(&self) -> Option<&str> {
+        None
+    }
+}
+
+fn app_with_recording_backend() -> (
+    App,
+    std::sync::Arc<std::sync::Mutex<Vec<crate::updater::Action>>>,
+) {
+    let mut app = app_with_offered_update();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    app.updater_backend = Box::new(RecordingBackend { seen: seen.clone() });
+    (app, seen)
+}
+
+fn app_with_offered_update() -> App {
+    use crate::updater::{AvailableUpdate, Event, Stage};
+    let mut app = fresh_app();
+    app.updater = crate::updater::Updater::new();
+    app.updater.feed(Event::Found {
+        update: AvailableUpdate {
+            version: "99.0.0".to_string(),
+            display_version: "99.0.0".to_string(),
+            notes: "A quieter library.".to_string(),
+            critical: false,
+            informational: false,
+            feed_signing: "succeeded".to_string(),
+        },
+        stage: Stage::NotDownloaded,
+        user_initiated: true,
+    });
+    app
+}
+
+#[test]
+fn the_update_banner_appears_outside_playback_and_never_inside_it() {
+    let mut app = app_with_offered_update();
+    app.screen = Screen::Home;
+    assert!(
+        app.update_strip().is_some(),
+        "an offered update must be visible on Home"
+    );
+    app.screen = Screen::Settings;
+    assert!(
+        app.update_strip().is_some(),
+        "an offered update must stay visible in Settings"
+    );
+    app.screen = Screen::Player;
+    assert!(
+        app.update_strip().is_none(),
+        "no update banner may be drawn over a playing film"
+    );
+}
+
+#[test]
+fn an_unavailable_updater_draws_no_banner_and_no_dead_action() {
+    let mut app = fresh_app();
+    app.screen = Screen::Home;
+    assert!(app.updater.is_unavailable());
+    assert!(
+        app.update_strip().is_none(),
+        "a build without the framework must not pretend an update exists"
+    );
+    app.screen = Screen::Settings;
+    app.settings_section = Section::Updates;
+    let labels = app.settings_labels();
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.contains("unavailable in this launch")),
+        "Settings must say why updates cannot run: {labels:?}"
+    );
+    assert!(
+        !labels.iter().any(|label| label.contains("Check now")),
+        "a check that cannot run must not be offered: {labels:?}"
+    );
+}
+
+#[test]
+fn the_updates_section_states_the_version_and_offers_the_actions_by_keyboard() {
+    let mut app = app_with_offered_update();
+    app.screen = Screen::Settings;
+    app.settings_section = Section::Updates;
+    let labels = app.settings_labels();
+    let stated = app.settings_rows().into_iter().any(|row| {
+        matches!(
+            row,
+            ui::screens::settings::Row::Value { label: "This version", value }
+                if value == crate::updater::CURRENT_VERSION
+        )
+    });
+    assert!(stated, "the running version must be stated: {labels:?}");
+    let check = labels
+        .iter()
+        .position(|label| label.contains("Look for a new version now"))
+        .expect("the manual check row must exist");
+    let install = labels
+        .iter()
+        .position(|label| label.contains("Install the update now"))
+        .expect("the install row must exist");
+    let activations = app.settings_activations();
+    assert!(matches!(
+        activations.get(check).cloned().flatten(),
+        Some(Message::CheckForUpdates)
+    ));
+    assert!(matches!(
+        activations.get(install).cloned().flatten(),
+        Some(Message::InstallUpdate)
+    ));
+    let (mut app, seen) = {
+        let (mut app, seen) = app_with_recording_backend();
+        app.screen = Screen::Settings;
+        app.settings_section = Section::Updates;
+        (app, seen)
+    };
+    let check = app
+        .settings_labels()
+        .iter()
+        .position(|label| label.contains("Look for a new version now"))
+        .expect("the manual check row must exist");
+    app.settings_focus = check;
+    let _ = app.update(key("enter"));
+    assert_eq!(
+        seen.lock().expect("action log").as_slice(),
+        &[crate::updater::Action::CheckNow],
+        "Enter must run the focused check instead of doing nothing"
+    );
+}
+
+#[test]
+fn an_install_pressed_while_a_film_plays_changes_nothing() {
+    let (mut app, seen) = app_with_recording_backend();
+    app.screen = Screen::Player;
+    assert_eq!(app.update_playback(), crate::updater::Playback::Playing);
+    let before = app.updater.status().clone();
+    app.settings_section = Section::Updates;
+    let labels = app.settings_labels();
+    assert!(
+        !labels
+            .iter()
+            .any(|label| label.contains("Install the update now")),
+        "Settings must not offer an install that would interrupt playback: {labels:?}"
+    );
+    let _ = app.update(Message::InstallUpdate);
+    assert_eq!(
+        app.updater.status(),
+        &before,
+        "an install request during playback must be refused, not silently accepted"
+    );
+    assert!(
+        seen.lock().expect("action log").is_empty(),
+        "nothing may reach the updater while a film is playing"
+    );
+}
+
+#[test]
+fn a_failed_update_is_reported_where_it_can_be_read_without_stopping_playback() {
+    use crate::updater::Event;
+    let mut app = app_with_offered_update();
+    app.updater.feed(Event::Failed {
+        message: "The download was cut off.".to_string(),
+    });
+    app.screen = Screen::Player;
+    assert!(
+        app.update_strip().is_none(),
+        "a failure must never take over a playing film"
+    );
+    app.screen = Screen::Settings;
+    app.settings_section = Section::Updates;
+    let stated = app.settings_rows().into_iter().any(|row| {
+        matches!(
+            row,
+            ui::screens::settings::Row::Value { label: "Last failure", value }
+                if value.contains("The download was cut off.")
+        )
+    });
+    assert!(stated, "the failure must be readable in Settings");
+}
+
+#[test]
+fn an_update_that_is_ready_offers_both_install_paths_and_never_relaunches_by_itself() {
+    use crate::updater::{AvailableUpdate, Event};
+    let mut app = fresh_app();
+    app.updater = crate::updater::Updater::new();
+    app.updater.feed(Event::Ready {
+        update: AvailableUpdate {
+            version: "99.0.0".to_string(),
+            display_version: "99.0.0".to_string(),
+            notes: String::new(),
+            critical: false,
+            informational: false,
+            feed_signing: "succeeded".to_string(),
+        },
+        deferred_to_quit: false,
+    });
+    app.screen = Screen::Settings;
+    app.settings_section = Section::Updates;
+    let labels = app.settings_labels();
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.contains("Install the update now"))
+    );
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.contains("Install when I quit"))
+    );
+    let strip = app
+        .update_strip()
+        .expect("a ready update is worth a banner");
+    let _ = strip;
+}
+
+#[test]
+fn the_banner_s_settings_action_reaches_the_updates_section() {
+    let mut app = app_with_offered_update();
+    app.screen = Screen::Home;
+    assert!(app.update_strip().is_some());
+    let _ = app.update(Message::OpenUpdateSettings);
+    assert_eq!(app.screen, Screen::Settings);
+    assert_eq!(app.settings_section, Section::Updates);
+    assert!(
+        app.settings_labels()
+            .iter()
+            .any(|label| label.contains("Look for a new version now")),
+        "the banner's action must land on a screen that can act on the update"
+    );
+}
+
+#[test]
+fn later_hides_the_banner_without_cancelling_the_update() {
+    let mut app = app_with_offered_update();
+    app.screen = Screen::Home;
+    assert!(app.update_strip().is_some());
+    let _ = app.update(Message::DismissUpdate);
+    assert!(
+        app.update_strip().is_none(),
+        "Later must take the banner away instead of leaving it on screen"
+    );
+    app.updater.feed(crate::updater::Event::Downloading {
+        received: 1,
+        expected: 2,
+    });
+    app.drain_updater();
+    let _ = app.update(Message::Tick);
+    assert!(
+        app.update_strip().is_some(),
+        "progress after Later must bring the banner back rather than hide the download"
+    );
+}
+
+#[test]
+fn the_banner_returns_after_a_film_even_though_the_player_handle_stays() {
+    use crate::updater::{AvailableUpdate, Event, Stage};
+    if !player_ready() {
+        return;
+    }
+    let media = Media::new();
+    let film = media.path("Film (2020)/Film (2020).mkv");
+    assert!(clip(&film, 12.0), "film fixture");
+    let mut app = fresh_app();
+    scan_folder(&mut app, &media.root);
+    let id = app.browse.items[0].id.clone();
+    assert!(play(&mut app, &id), "the film must start");
+    let _ = app.update(Message::BackFromPlayer);
+    assert!(
+        app.player.is_some(),
+        "the player handle is retained after playback, which is what used to hide the banner"
+    );
+    app.updater = crate::updater::Updater::new();
+    app.updater.feed(Event::Found {
+        update: AvailableUpdate {
+            version: "99.0.0".to_string(),
+            display_version: "99.0.0".to_string(),
+            notes: String::new(),
+            critical: false,
+            informational: false,
+            feed_signing: "succeeded".to_string(),
+        },
+        stage: Stage::NotDownloaded,
+        user_initiated: true,
+    });
+    app.screen = Screen::Home;
+    assert!(
+        app.update_strip().is_some(),
+        "a retained player handle must not silence the update banner on Home"
+    );
+}

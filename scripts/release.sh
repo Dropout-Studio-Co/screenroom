@@ -7,6 +7,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 out_dir="$root/dist/release"
 install_dir=""
 app_path="$root/dist/Screenroom.app"
+tag=""
 archive=1
 
 usage() {
@@ -14,6 +15,7 @@ usage() {
 usage: scripts/release.sh macos [--out DIR] [--install DIR] [--no-archive]
        scripts/release.sh install [--app PATH] [--install DIR]
        scripts/release.sh manifest [--out DIR]
+       scripts/release.sh appcast [--out DIR] [--tag TAG]
        scripts/release.sh version
 
 macos     build dist/Screenroom.app, archive it and write its manifest fragment
@@ -25,6 +27,10 @@ The archive lands in DIR (default dist/release). The manifest fragment is
 DIR/manifest-macos-<arch>.json and the merged document is DIR/manifest.json.
 Signing uses SCREENROOM_SIGNING_KEY_FILE with ssh-keygen in the screenroom
 namespace; with no key configured the manifest is published unsigned.
+
+appcast writes DIR/appcast.xml from the archives in DIR and signs it with the
+Sparkle Ed25519 key, read from SCREENROOM_SPARKLE_ED_KEY or the file named by
+SCREENROOM_SPARKLE_KEY_FILE. It refuses to write an unsigned feed.
 TEXT
 }
 
@@ -142,6 +148,48 @@ sign_manifest() {
   printf 'manifest signed: %s.sig\n' "$manifest"
 }
 
+build_appcast() {
+  local directory="$1" tag="$2"
+  local generator="$root/vendor/sparkle/bin/generate_appcast"
+  [ -x "$generator" ] || fail "no Sparkle tools; run scripts/fetch-sparkle.sh first"
+  local base="${SCREENROOM_UPDATE_BASE_URL:-}"
+  if [ -z "$base" ]; then
+    [ -n "$tag" ] || fail "an appcast needs the release tag it will be served under"
+    base="https://github.com/Dropout-Studio-Co/screenroom/releases/download/$tag"
+  fi
+  base="${base%/}/"
+  local key_file="${SCREENROOM_SPARKLE_KEY_FILE:-}"
+  local archives="$directory"
+  find "$archives" -maxdepth 1 -name '*.zip' -type f | grep -q . \
+    || fail "no update archive is in $archives"
+
+  if [ -n "${SCREENROOM_SPARKLE_ED_KEY:-}" ]; then
+    printf '%s\n' "$SCREENROOM_SPARKLE_ED_KEY" | "$generator" \
+      --ed-key-file - \
+      --maximum-deltas 0 \
+      --maximum-versions 1 \
+      --download-url-prefix "$base" \
+      --link "https://github.com/Dropout-Studio-Co/screenroom" \
+      -o "$archives/appcast.xml" \
+      "$archives"
+  elif [ -n "$key_file" ] && [ -s "$key_file" ]; then
+    "$generator" \
+      --ed-key-file "$key_file" \
+      --maximum-deltas 0 \
+      --maximum-versions 1 \
+      --download-url-prefix "$base" \
+      --link "https://github.com/Dropout-Studio-Co/screenroom" \
+      -o "$archives/appcast.xml" \
+      "$archives"
+  else
+    fail "no update signing key; refusing to write an unsigned appcast"
+  fi
+
+  grep -q 'sparkle-signatures:' "$archives/appcast.xml" \
+    || fail "the generated appcast carries no feed signature"
+  printf 'appcast %s\n' "$archives/appcast.xml"
+}
+
 install_bundle() {
   local source_app="$1" destination="$2"
   [ -d "$source_app/Contents/MacOS" ] || fail "no application bundle at $source_app"
@@ -160,6 +208,9 @@ install_bundle() {
 
 build_macos() {
   [ "$(uname -s)" = "Darwin" ] || fail "a macOS bundle can only be assembled on macOS"
+  if [ ! -d "$root/vendor/sparkle/Sparkle.framework" ]; then
+    "$root/scripts/fetch-sparkle.sh" || fail "the pinned update framework could not be fetched"
+  fi
   local version arch filename zip digest bytes fragment
   version="$(resolve_version)"
   [ -n "$version" ] || fail "could not read the version from apps/desktop/Cargo.toml or Cargo.toml"
@@ -207,6 +258,11 @@ while [ "$#" -gt 0 ]; do
       app_path="$2"
       shift 2
       ;;
+    --tag)
+      [ -n "${2:-}" ] || fail "--tag needs the release tag"
+      tag="$2"
+      shift 2
+      ;;
     --no-archive)
       archive=0
       shift
@@ -236,6 +292,10 @@ case "$command_name" in
     target="$(merge_manifest "$out_dir" "$version")"
     printf 'manifest %s\n' "$target"
     sign_manifest "$target"
+    ;;
+  appcast)
+    mkdir -p "$out_dir"
+    build_appcast "$out_dir" "$tag"
     ;;
   version)
     resolve_version

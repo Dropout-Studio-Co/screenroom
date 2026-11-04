@@ -46,8 +46,29 @@ jobs:
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
         run: brew install mpv ffmpeg
 
+      - name: Fetch the pinned update framework
+        run: scripts/fetch-sparkle.sh
+
+      - name: Name the release this run carries
+        id: release
+        run: |
+          version="$(scripts/release.sh version)"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="v$version"
+          fi
+          printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$tag" >>"$GITHUB_OUTPUT"
+          printf 'building %s for %s\n' "$version" "$tag"
+
       - name: Build the application and its manifest fragment
         run: scripts/release.sh macos --out artifacts
+
+      - name: Sign the update feed
+        env:
+          SCREENROOM_SPARKLE_ED_KEY: ${{ secrets.SCREENROOM_SPARKLE_ED_KEY }}
+        run: scripts/release.sh appcast --out artifacts --tag "${{ steps.release.outputs.tag }}"
 
       - name: Keep the artefacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -187,6 +208,26 @@ jobs:
             exit 1
           fi
 
+      - name: Refuse a version that goes backwards
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v$(scripts/release.sh version)"
+          latest="$(gh release list --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // ""')"
+          if [ -z "$latest" ]; then
+            printf 'no release has been published yet; %s bootstraps the feed\n' "$tag"
+            exit 0
+          fi
+          if [ "$latest" = "$tag" ]; then
+            printf '%s is already published; this run may only add byte-identical assets\n' "$tag"
+            exit 0
+          fi
+          newest="$(printf '%s\n%s\n' "$latest" "$tag" | sort -V | tail -1)"
+          if [ "$newest" != "$tag" ]; then
+            printf '%s is not newer than the published %s\n' "$tag" "$latest" >&2
+            exit 1
+          fi
+
       - name: Merge and sign the manifest
         env:
           SIGNING_KEY: ${{ secrets.SCREENROOM_ED25519_KEY }}
@@ -205,23 +246,45 @@ jobs:
             scripts/release.sh manifest --out artifacts
           fi
 
-      - name: Publish the GitHub release
+      - name: Publish the GitHub release without replacing published bytes
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="$(scripts/release.sh version)"
           tag="v$version"
           files=()
-          for candidate in artifacts/*.zip artifacts/manifest.json artifacts/manifest.json.sig; do
+          for candidate in artifacts/*macos*.zip artifacts/appcast.xml artifacts/manifest.json artifacts/manifest.json.sig; do
             if [ -f "$candidate" ]; then
               files+=("$candidate")
             fi
           done
+          [ "${#files[@]}" -gt 0 ] || { printf 'nothing to publish\n' >&2; exit 1; }
           notes="Screenroom $version, built from $GITHUB_SHA on $GITHUB_REF_NAME."
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "${files[@]}" --clobber
-          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            gh release create "$tag" "${files[@]}" --title "Screenroom $version" --notes "$notes"
-          else
-            gh release create "$tag" "${files[@]}" --title "Screenroom $version" --notes "$notes" --target "$GITHUB_SHA"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+              gh release create "$tag" "${files[@]}" --title "Screenroom $version" --notes "$notes"
+            else
+              gh release create "$tag" "${files[@]}" --title "Screenroom $version" --notes "$notes" --target "$GITHUB_SHA"
+            fi
+            exit 0
+          fi
+          missing=()
+          for file in "${files[@]}"; do
+            name="$(basename "$file")"
+            if gh release view "$tag" --json assets --jq '.assets[].name' | grep -qx "$name"; then
+              scratch="$RUNNER_TEMP/published-$name"
+              rm -rf "$scratch"
+              mkdir -p "$scratch"
+              gh release download "$tag" --pattern "$name" --dir "$scratch"
+              if ! cmp -s "$file" "$scratch/$name"; then
+                printf 'refusing to overwrite %s: the published asset is different\n' "$name" >&2
+                exit 1
+              fi
+              printf '%s is already published and identical\n' "$name"
+            else
+              missing+=("$file")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            gh release upload "$tag" "${missing[@]}"
           fi

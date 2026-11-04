@@ -233,6 +233,11 @@ capability and per device, never per framework:
    committed.
 4. **Concurrency and durability** — interruption, power loss, low storage and
    stale player callbacks on the real device.
+5. **macOS automatic updates** (G10) — a signed newer bundle found, verified and
+   installed through the real installed app, plus refusal of an altered archive,
+   an unsigned feed and a downgrade. A local signed feed counts; a public release
+   needs the libmpv licence cleared first and is not evidence of anything until it
+   exists.
 
 Retired gates: LG webOS, Android TV (ADR-004) and iOS (ADR-003). Do not reopen one
 without a new ADR.
