@@ -166,6 +166,15 @@ through the toolchain that is already configured rather than by hand:
 So the set is **off**, on **another network**, or **out of developer mode**. Those three
 are the whole list, and the owner can settle each in one step:
 
+**Re-checked on 2026-11-04**, before a dependency upgrade that changes the toolchain
+that builds the TV bundle: nothing had changed. `ping 192.168.0.172` was 100 % loss,
+TCP 26101 on that address was closed, a 254-host sweep of `192.168.0.0/24` on 26101
+found no host, and `sdb devices` listed nothing. The signing profile `screenroom` is
+still present and active in the toolchain's `profile/profiles.xml`, so the device is
+the only missing piece — the Vite 8 bundle has therefore **not** been exercised on the
+Tizen engine, and the host-side checks are all that back it.
+
+
 1. Switch the TV on and connect it to the same network as this Mac.
 2. TV → **Settings → General → Network → Expert settings → IP Settings**, and note the
    address; the app's SDB port is 26101.

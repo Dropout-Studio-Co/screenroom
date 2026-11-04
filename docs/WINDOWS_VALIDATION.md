@@ -11,13 +11,20 @@ hardware and its output has been pasted into `IMPLEMENTATION_STATUS.md`.
 
 ## Why Windows is blocked from the Mac that develops this
 
-`cargo check --target x86_64-pc-windows-msvc` cannot compile at all from macOS:
-`libsqlite3-sys` builds bundled SQLite from C, and that needs the MSVC SDK's
+`cargo check --target x86_64-pc-windows-msvc` cannot compile the whole workspace from
+macOS: `libsqlite3-sys` builds bundled SQLite from C, and that needs the MSVC SDK's
 headers (`fatal error: 'stdlib.h' file not found`). This is a toolchain boundary,
 not a code failure, and its consequence is the important part: **every
 `cfg!(windows)` branch in the tree is unbuilt as well as unrun** — the libmpv
 candidate names, the D3D11 bridge choice, the Windows path rules and the
 `BundleLayout::WindowsPortable` folder logic.
+
+**Measured on 2026-11-04, which narrows the boundary by one crate:**
+`cargo check -p screenroom-player --target x86_64-pc-windows-msvc` **succeeds** on
+this Mac (`Finished dev profile`), because the player has no C dependency; the
+workspace and `screenroom-core` still stop at the SQLite C build as above. So the
+player's `cfg!(windows)` libmpv-name and layout branches do type-check here; the
+core and desktop ones do not.
 
 Three Windows defects were found and fixed on the Mac by reasoning about the rules
 rather than by running them (commits `0f0a3b9`, `6eff910`, plus the layout work in
