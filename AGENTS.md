@@ -18,6 +18,18 @@ Samsung UA50AU8000RXER television. Linux, LG webOS, Android TV, phones and
 tablets, Apple TV, Roku, UNiFFI, the Flutter fallback, public distribution and
 commercial infrastructure are out of scope (ADR-004).
 
+**Development priority (2026-11-05): macOS first, and only macOS until the owner
+says otherwise.** The sole active objective is making Screenroom complete, polished,
+stable and production-ready on the owner's MacBook Air M4. Everything a session does
+— features, UI and UX, performance, bug fixes, tests, evidence, reviews — is scoped
+to macOS. The Windows desktop and the Samsung television are **deferred**: preserve
+their existing code, contracts, adapters and documentation, but do not plan,
+implement, tune, install or verify anything for them, and do not proactively revisit
+them or propose work on their behalf. Their gates stay `BLOCKED` (never `PENDING`)
+and no session may claim progress on them until the owner asks for that platform
+explicitly. If a request would require work on another platform, do the macOS part
+and say plainly that the rest is deferred rather than starting it.
+
 Rust-first: shared Rust core, iced + wgpu + libmpv on desktop, LightningJS 3 +
 Blits + TypeScript with Tizen AVPlay playback on the TV (WebGL/Canvas rendering),
 SQLite where supported, FFmpeg/FFprobe for media work, Dropout Design System for
