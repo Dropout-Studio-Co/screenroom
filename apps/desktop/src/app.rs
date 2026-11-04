@@ -4815,20 +4815,28 @@ impl App {
                 .style(design::quiet_style(false))
                 .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
         );
+        let narrow = ui::theme::Breakpoint::at(self.window_width) == ui::theme::Breakpoint::Narrow;
+        let body: Element<'_, Message> = if narrow {
+            column![text(headline).size(tokens.type_scale.label), actions,]
+                .spacing(tokens.spacing.field_y)
+                .width(Length::Fill)
+                .into()
+        } else {
+            row![
+                text(headline).size(tokens.type_scale.label),
+                Space::new().width(Length::Fill),
+                actions,
+            ]
+            .spacing(tokens.spacing.field_x)
+            .align_y(Alignment::Center)
+            .into()
+        };
         Some(
-            container(
-                row![
-                    text(headline).size(tokens.type_scale.label),
-                    Space::new().width(Length::Fill),
-                    actions,
-                ]
-                .spacing(tokens.spacing.field_x)
-                .align_y(Alignment::Center),
-            )
-            .style(|_theme| design::container_style(Level::Panel, false))
-            .padding(tokens.spacing.field_y)
-            .width(Length::Fill)
-            .into(),
+            container(body)
+                .style(|_theme| design::container_style(Level::Panel, false))
+                .padding(tokens.spacing.field_y)
+                .width(Length::Fill)
+                .into(),
         )
     }
 

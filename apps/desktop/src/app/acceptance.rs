@@ -3000,3 +3000,16 @@ fn quitting_with_an_update_waiting_stores_the_place_before_handing_over() {
         "no install action may reach the updater through the quit path"
     );
 }
+
+#[test]
+fn the_update_banner_composes_at_every_breakpoint() {
+    let mut app = app_with_offered_update();
+    app.screen = Screen::Home;
+    for width in [640.0_f32, 900.0, 1280.0, 1920.0, 3440.0] {
+        app.window_width = width;
+        assert!(
+            app.update_strip().is_some(),
+            "the banner must compose at {width}px"
+        );
+    }
+}
