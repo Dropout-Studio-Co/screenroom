@@ -336,6 +336,11 @@ and watched it update from the published GitHub release:
 The redirect answered `200` from `release-assets.githubusercontent.com`, and the
 feed it served carried the `sparkle-signatures` block.
 
+The same script then ran again for `v0.1.1`, published with
+`scripts/publish-update.sh` alone, and a 0.1.0 build updated to 0.1.1 in eleven
+seconds: `available` → `ready` → `quit_ready` → installed, library intact, no
+relaunch.
+
 **Not run, and not claimed:** a Developer ID signature and notarisation (no
 certificate, and none is to be purchased), and a person clicking the visible
 "Update now" button. The button's own action is asserted
