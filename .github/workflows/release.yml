@@ -44,7 +44,7 @@ jobs:
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
-        run: brew install libass meson ninja vulkan-headers
+        run: brew install libass meson ninja vulkan-loader
 
       - name: Fetch the pinned update framework
         run: scripts/fetch-sparkle.sh
