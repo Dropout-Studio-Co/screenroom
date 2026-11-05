@@ -107,7 +107,8 @@ fi
 
 if [ "$only_if_changed" = "1" ] && [ "$publish" = "1" ]; then
   last_release="$(gh release list --limit 1 --json tagName --jq '.[0].tagName // ""' 2>/dev/null || true)"
-  if [ -n "$last_release" ] && git rev-parse -q --verify "$last_release" >/dev/null 2>&1; then
+  git fetch --quiet --tags origin >/dev/null 2>&1 || true
+  if [ -n "$last_release" ] && git rev-parse -q --verify "refs/tags/$last_release" >/dev/null 2>&1; then
     if git diff --quiet "$last_release" HEAD -- apps crates Cargo.toml Cargo.lock assets; then
       printf 'nothing in the application changed since %s; no release\n' "$last_release"
       exit 0
