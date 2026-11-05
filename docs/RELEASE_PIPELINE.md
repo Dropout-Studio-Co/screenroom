@@ -465,6 +465,30 @@ The pipeline is ready for a real certificate without a code change:
 cannot pretend to notarise an ad-hoc build. It has never been executed here, because
 no such certificate exists; it is reported as PENDING, never as passed.
 
+### The one command
+
+```bash
+scripts/publish-update.sh            # bump the patch, build, publish, reinstall here
+scripts/publish-update.sh --minor    # or a minor bump
+scripts/publish-update.sh --version 0.3.0
+scripts/publish-update.sh --dry-run  # everything except the upload
+```
+
+It refuses a dirty tree, a HEAD that is behind its upstream, and a version that
+already exists. Then it bumps `[workspace.package] version`, commits
+`chore(release): X`, builds the LGPL stack if it is missing, packages, signs the
+appcast with the key in the login keychain, attaches the media source, creates the
+GitHub release and reinstalls this Mac's copy. The installed application then finds
+the new version on its own.
+
+That is the whole release loop for a personal build. The tag-and-workflow path still
+exists for the day CI can finish a cold run; it is not required.
+
+**The app checks by itself.** Eight seconds after launch, if automatic checks are on
+and nothing is in progress, Screenroom asks GitHub for the newest version in the
+background. A new release therefore shows up as the banner — *Update now*, *Install
+when I quit*, *Later* — without opening Settings.
+
 ### The knobs, and which of them a release may use
 
 | Variable | Read by | Effect |

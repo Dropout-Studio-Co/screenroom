@@ -25,6 +25,8 @@ void screenroom_updater_destroy(ScreenroomUpdaterHandle handle);
 
 bool screenroom_updater_check_now(ScreenroomUpdaterHandle handle);
 
+bool screenroom_updater_check_in_background(ScreenroomUpdaterHandle handle);
+
 bool screenroom_updater_choose(ScreenroomUpdaterHandle handle, int choice);
 
 bool screenroom_updater_install_now(ScreenroomUpdaterHandle handle);

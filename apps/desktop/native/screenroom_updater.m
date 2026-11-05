@@ -479,6 +479,19 @@ bool screenroom_updater_check_now(ScreenroomUpdaterHandle handle)
     return true;
 }
 
+bool screenroom_updater_check_in_background(ScreenroomUpdaterHandle handle)
+{
+    if (!ScreenroomUpdaterIsReady(handle)) {
+        return false;
+    }
+    ScreenroomUpdateController *controller = (__bridge ScreenroomUpdateController *)handle;
+    if (controller.updater == nil) {
+        return false;
+    }
+    [controller.updater checkForUpdatesInBackground];
+    return true;
+}
+
 bool screenroom_updater_choose(ScreenroomUpdaterHandle handle, int choice)
 {
     if (!ScreenroomUpdaterIsReady(handle)) {

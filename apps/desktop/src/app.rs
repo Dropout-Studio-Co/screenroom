@@ -58,6 +58,8 @@ const SUGGESTIONS: i64 = 8;
 
 const QUIT_ROUTING_BUDGET: u8 = 40;
 
+const LAUNCH_CHECK_DELAY: Duration = Duration::from_secs(8);
+
 const MODE_SETTLE: Duration = Duration::from_millis(1_500);
 
 const TERMINATE_CHECK_DELAY: Duration = Duration::from_millis(1_800);
@@ -666,6 +668,7 @@ pub struct App {
     update_run: Option<crate::updater::CheckRun>,
     leave_after_update_run: bool,
     dismissed_update_status: Option<&'static str>,
+    launch_check_at: Option<std::time::Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -1394,6 +1397,7 @@ impl App {
             update_run: crate::updater::CheckRun::from_environment(),
             leave_after_update_run: false,
             dismissed_update_status: None,
+            launch_check_at: Some(std::time::Instant::now() + LAUNCH_CHECK_DELAY),
         };
         app.sync_language_inputs();
         app.reload();
@@ -3013,6 +3017,7 @@ impl App {
 
     fn poll(&mut self) {
         self.drain_updater();
+        self.drive_launch_check();
         self.drive_update_run();
         if self
             .mode_change
@@ -3452,6 +3457,7 @@ impl App {
                     );
                 }
                 crate::updater::Action::CheckNow => {}
+                crate::updater::Action::CheckInBackground => {}
                 crate::updater::Action::CancelDownload => {}
                 crate::updater::Action::Dismiss => {}
                 crate::updater::Action::InstallOnQuit => {}
@@ -3472,6 +3478,18 @@ impl App {
             };
             let _ = self.updater.feed(event);
         }
+    }
+
+    fn drive_launch_check(&mut self) {
+        let Some(at) = self.launch_check_at else {
+            return;
+        };
+        if std::time::Instant::now() < at {
+            return;
+        }
+        self.launch_check_at = None;
+        let actions = self.updater.request_background_check();
+        self.perform_update_actions(actions);
     }
 
     fn drive_update_run(&mut self) {

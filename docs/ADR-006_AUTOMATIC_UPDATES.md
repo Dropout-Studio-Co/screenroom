@@ -59,8 +59,9 @@ is the application's own interface, not a dialog.
 
 ### 3. What the owner sees, and when nothing may happen
 
-- One scheduled check a day (`SUScheduledCheckInterval` 86400) and no check on
-  every launch.
+- One scheduled check a day (`SUScheduledCheckInterval` 86400) plus one quiet
+  background check eight seconds after launch, so a new release appears without
+  anyone opening Settings.
 - A manual **Check now** in Settings → Updates (keyboard operable like every other
   Settings row), plus a single-line banner above the content on Home, Library,
   Detail and Settings.

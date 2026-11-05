@@ -3057,3 +3057,41 @@ fn a_ready_update_offers_installing_on_quit_beside_installing_now() {
     assert!(labels.contains(&"Update now"), "{labels:?}");
     assert!(labels.contains(&"Install when I quit"), "{labels:?}");
 }
+
+#[test]
+fn a_launch_looks_for_an_update_once_and_only_when_the_owner_allows_it() {
+    use crate::updater::Event;
+    let mut app = fresh_app();
+    app.updater = crate::updater::Updater::new();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    app.updater_backend = Box::new(RecordingBackend { seen: seen.clone() });
+
+    app.launch_check_at = Some(std::time::Instant::now());
+    app.poll();
+    assert!(
+        seen.lock()
+            .expect("action log")
+            .contains(&crate::updater::Action::CheckInBackground),
+        "a launch must look for a new version without being asked"
+    );
+    assert!(
+        app.launch_check_at.is_none(),
+        "the launch check must happen once, not on every tick"
+    );
+
+    let mut refused = fresh_app();
+    refused.updater = crate::updater::Updater::new();
+    refused.updater.feed(Event::Settings {
+        automatic_checks: false,
+        automatic_downloads: false,
+        allows_automatic_updates: false,
+    });
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    refused.updater_backend = Box::new(RecordingBackend { seen: seen.clone() });
+    refused.launch_check_at = Some(std::time::Instant::now());
+    refused.poll();
+    assert!(
+        seen.lock().expect("action log").is_empty(),
+        "with automatic checks off, a launch must stay quiet"
+    );
+}

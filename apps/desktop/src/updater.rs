@@ -139,6 +139,7 @@ pub enum Event {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     CheckNow,
+    CheckInBackground,
     InstallNow,
     InstallOnQuit,
     CancelDownload,
@@ -294,6 +295,16 @@ impl Updater {
             self.status,
             UpdateStatus::Available | UpdateStatus::Ready { .. }
         )
+    }
+
+    pub fn request_background_check(&mut self) -> Vec<Action> {
+        if self.is_unavailable() || self.status.is_busy() || self.update.is_some() {
+            return Vec::new();
+        }
+        if !self.settings.automatic_checks {
+            return Vec::new();
+        }
+        Vec::from([Action::CheckInBackground])
     }
 
     pub fn request_check(&mut self, playback: Playback) -> Vec<Action> {
@@ -635,6 +646,8 @@ mod sparkle {
 
         fn screenroom_updater_check_now(handle: Handle) -> bool;
 
+        fn screenroom_updater_check_in_background(handle: Handle) -> bool;
+
         fn screenroom_updater_install_now(handle: Handle) -> bool;
 
         fn screenroom_updater_defer_to_quit(handle: Handle) -> bool;
@@ -694,6 +707,9 @@ mod sparkle {
             unsafe {
                 match action {
                     Action::CheckNow => screenroom_updater_check_now(self.handle),
+                    Action::CheckInBackground => {
+                        screenroom_updater_check_in_background(self.handle)
+                    }
                     Action::InstallNow => screenroom_updater_install_now(self.handle),
                     Action::InstallOnQuit => screenroom_updater_defer_to_quit(self.handle),
                     Action::CancelDownload => screenroom_updater_cancel_download(self.handle),
