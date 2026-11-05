@@ -59,8 +59,9 @@ is the application's own interface, not a dialog.
 
 ### 3. What the owner sees, and when nothing may happen
 
-- One scheduled check an hour (`SUScheduledCheckInterval` 3600) plus one quiet
-  background check at launch, so a new release appears before the first film
+- One scheduled check an hour (`SUScheduledCheckInterval` 3600) plus a background
+  check on the first tick after launch, retried at 1 s, 3 s and 7 s if Sparkle was
+  still starting, so a new release appears before the first film
   without anyone opening Settings. Hourly costs one small request and means a long-running
   session notices a release the same day.
 - A manual **Check now** in Settings → Updates (keyboard operable like every other
