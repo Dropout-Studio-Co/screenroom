@@ -438,7 +438,8 @@ fn invitation() -> Element<'static, Message> {
 fn primary_button(label: &str, icon: Icon, message: Message) -> Element<'static, Message> {
     let tokens = design::tokens();
 
-    button(
+    button(crate::ui::components::centred_label(
+        tokens.control.lg,
         row![
             icons::icon(icon, 14.0, theme::signal_foreground()),
             text(label.to_string())
@@ -448,7 +449,7 @@ fn primary_button(label: &str, icon: Icon, message: Message) -> Element<'static,
         ]
         .spacing(theme::gap(Gap::Card))
         .align_y(Alignment::Center),
-    )
+    ))
     .on_press(message)
     .height(Length::Fixed(tokens.control.lg))
     .padding(Padding {
@@ -464,12 +465,13 @@ fn primary_button(label: &str, icon: Icon, message: Message) -> Element<'static,
 fn secondary_button(label: &str, message: Message) -> Element<'static, Message> {
     let tokens = design::tokens();
 
-    button(
+    button(crate::ui::components::centred_label(
+        tokens.control.lg,
         text(label.to_string())
             .size(tokens.type_scale.label)
             .font(theme::medium())
             .color(theme::ink()),
-    )
+    ))
     .on_press(message)
     .height(Length::Fixed(tokens.control.lg))
     .padding(Padding {

@@ -65,6 +65,18 @@ An unmistakably cinematic, quiet and fast personal film library with a high-end 
 | Corrupt import / no storage | Validation/error + non-destructive rollback / clear next action. |
 | Reduced-motion/low-end TV | Same controls, disabled video preview/fancy motion, readable stills. |
 
+## Controls
+
+- **A button's label is centred in the button, always.** iced places a button's
+  content at the top-left of the padded box, so a button given a fixed height shows
+  its label at the top unless the content fills that height and centres itself.
+  `ui::components::centred_label(height, content)` does exactly that and is the
+  only way a fixed-height button is built on this desktop. A label that sits high
+  in its own button is a bug, not a spacing choice.
+- A primary and its secondary in one row share one height and one radius, and
+  16px type is paired with a 10px icon gap; the secondary is an outline, never a
+  second filled pill.
+
 ## Accessibility, performance and QA
 
 - Target ≥4.5:1 ordinary text contrast and ≥3:1 for sufficiently large text and essential UI boundaries, subject to actual screen evaluation. Keyboard/TV focus always visible; accessible labels for icon-only actions, readable subtitle overlays with backgrounds/sizing, Unicode/Bengali handling.

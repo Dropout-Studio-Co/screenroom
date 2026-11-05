@@ -4,6 +4,20 @@ pub mod rail;
 pub use poster::Poster;
 pub use rail::rail;
 
+use iced::widget::container;
+use iced::{Alignment, Element, Length};
+
+pub fn centred_label<'a, Message: 'a>(
+    height: f32,
+    content: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    container(content)
+        .width(Length::Shrink)
+        .height(Length::Fixed(height))
+        .align_y(Alignment::Center)
+        .into()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::ui::components::poster;
