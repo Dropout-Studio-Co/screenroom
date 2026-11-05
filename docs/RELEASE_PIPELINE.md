@@ -1,16 +1,15 @@
 # Release and deployment pipeline
 
-> **Current state (2026-11-05, owner decision).** No CI runs on the owner's Mac:
-> the self-hosted runner `screenroom-macbook` was unregistered and its service
-> removed, and `SCREENROOM_MACOS_RUNNER` was deleted, so `ci.yml` never runs.
-> `release.yml` is **manual only** (`workflow_dispatch`); a push or a tag no longer
-> starts it. `ci-linux.yml` is the only automatic check, on every push to `main`
-> and every pull request, on GitHub's hosted runners. Source downloads in
-> `scripts/build-lgpl-media.sh` and `scripts/fetch-sparkle.sh` retry on any
-> error (`--retry-all-errors`), which is what failed the v0.1.5 and v0.1.6 tag
-> runs (`curl: (35) Connection reset by peer`), not the test time. Releases are
-> published by `scripts/publish-update.sh`. Statements below about push and tag
-> triggers or the self-hosted macOS gate are history.
+> **Current state (2026-11-05, owner decision): there is no CI.** Every GitHub
+> Actions workflow (`ci.yml`, `ci-linux.yml`, `release.yml`) and Dependabot were
+> removed, the self-hosted runner `screenroom-macbook` was unregistered, and the
+> repository secret `SCREENROOM_SPARKLE_ED_KEY` and variable
+> `SCREENROOM_MACOS_RUNNER` were deleted. Everything is built, checked and
+> published on the owner's Mac: the checks in `AGENTS.md` (`cargo test`, `clippy`,
+> `fmt`, `no_comments.py`) and `scripts/publish-update.sh`, which signs with the
+> Keychain key and uploads to GitHub Releases. GitHub hosts the source, the
+> releases and the update feed only. Everything below about workflows, runners and
+> secrets is history.
 
 - **Date:** 2026-11-02, revised the same day when packaging moved to a hosted runner.
 - **Owner of those files:** `.github/workflows/`, `scripts/release.sh`, `scripts/ship.sh`
