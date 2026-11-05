@@ -58,7 +58,7 @@ const SUGGESTIONS: i64 = 8;
 
 const QUIT_ROUTING_BUDGET: u8 = 40;
 
-const LAUNCH_CHECK_DELAY: Duration = Duration::from_secs(8);
+const LAUNCH_CHECK_DELAY: Duration = Duration::ZERO;
 
 const MODE_SETTLE: Duration = Duration::from_millis(1_500);
 

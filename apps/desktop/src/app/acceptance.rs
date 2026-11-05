@@ -3095,3 +3095,14 @@ fn a_launch_looks_for_an_update_once_and_only_when_the_owner_allows_it() {
         "with automatic checks off, a launch must stay quiet"
     );
 }
+
+#[test]
+fn the_launch_check_is_due_immediately_not_after_a_wait() {
+    let app = fresh_app();
+    let at = app.launch_check_at.expect("a launch schedules a check");
+    let waited = at.saturating_duration_since(std::time::Instant::now());
+    assert!(
+        waited <= std::time::Duration::from_millis(50),
+        "the first check must be due at once, not after {waited:?}"
+    );
+}

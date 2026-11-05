@@ -484,8 +484,7 @@ the new version on its own.
 That is the whole release loop for a personal build. The tag-and-workflow path still
 exists for the day CI can finish a cold run; it is not required.
 
-**The app checks by itself.** Eight seconds after launch, and then hourly while it
-stays open, Screenroom asks GitHub for the newest version in the background. A new
+**The app checks by itself.** At launch, and then hourly while it stays open, Screenroom asks GitHub for the newest version in the background. A new
 release shows up as the banner — *Update now*, *Install when I quit*, *Later* —
 without opening Settings. *Update now* closes the app, installs and reopens it on the
 new version, which is the whole interaction.
