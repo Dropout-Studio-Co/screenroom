@@ -961,6 +961,18 @@ impl CheckRun {
             self.append("\"status\":\"install_requested\"");
             return Some(Action::InstallNow);
         }
+        if self.mode == InstallMode::Quit
+            && matches!(
+                status,
+                UpdateStatus::Ready {
+                    deferred_to_quit: true
+                }
+            )
+        {
+            self.append("\"status\":\"quit_ready\"");
+            self.finished = true;
+            return None;
+        }
         if self.mode == InstallMode::Quit && status.is_ready() && !self.requested_install {
             self.requested_install = true;
             self.settle_until = Some(std::time::Instant::now() + std::time::Duration::from_secs(3));
