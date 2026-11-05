@@ -3013,3 +3013,47 @@ fn the_update_banner_composes_at_every_breakpoint() {
         );
     }
 }
+
+#[test]
+fn the_banner_s_first_button_is_the_one_that_installs() {
+    let app = app_with_offered_update();
+    let actions = app.update_banner_actions();
+    assert!(
+        matches!(actions.first(), Some((label, Message::InstallUpdate)) if *label == "Update now"),
+        "the drawn primary action must be the install message: {:?}",
+        actions.iter().map(|(label, _)| *label).collect::<Vec<_>>()
+    );
+    assert!(
+        actions.iter().any(|(label, _)| *label == "Later"),
+        "the banner must offer a way to postpone it"
+    );
+    assert!(
+        actions.iter().any(|(label, _)| *label == "Change settings"),
+        "the banner must lead to the settings that control it"
+    );
+}
+
+#[test]
+fn a_ready_update_offers_installing_on_quit_beside_installing_now() {
+    use crate::updater::{AvailableUpdate, Event};
+    let mut app = fresh_app();
+    app.updater = crate::updater::Updater::new();
+    app.updater.feed(Event::Ready {
+        update: AvailableUpdate {
+            version: "99.0.0".to_string(),
+            display_version: "99.0.0".to_string(),
+            notes: String::new(),
+            critical: false,
+            informational: false,
+            feed_signing: "succeeded".to_string(),
+        },
+        deferred_to_quit: false,
+    });
+    let labels: Vec<&str> = app
+        .update_banner_actions()
+        .iter()
+        .map(|(label, _)| *label)
+        .collect();
+    assert!(labels.contains(&"Update now"), "{labels:?}");
+    assert!(labels.contains(&"Install when I quit"), "{labels:?}");
+}

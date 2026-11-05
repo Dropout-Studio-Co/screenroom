@@ -4755,6 +4755,23 @@ impl App {
         )
     }
 
+    fn update_banner_actions(&self) -> Vec<(&'static str, Message)> {
+        let status = self.updater.status();
+        let mut actions = Vec::new();
+        if self.updater.may_install(crate::updater::Playback::Idle) {
+            actions.push(("Update now", Message::InstallUpdate));
+        }
+        if status.is_ready() {
+            actions.push(("Install when I quit", Message::InstallUpdateOnQuit));
+        }
+        if matches!(status, crate::updater::UpdateStatus::Downloading { .. }) {
+            actions.push(("Stop the download", Message::CancelUpdateDownload));
+        }
+        actions.push(("Later", Message::DismissUpdate));
+        actions.push(("Change settings", Message::OpenUpdateSettings));
+        actions
+    }
+
     fn update_strip(&self) -> Option<Element<'_, Message>> {
         if self.update_playback() == crate::updater::Playback::Playing {
             return None;
@@ -4779,42 +4796,22 @@ impl App {
         let headline = self.updater.headline()?;
         let tokens = design::tokens();
         let mut actions = row![].spacing(tokens.spacing.field_x);
-        if self.updater.may_install(crate::updater::Playback::Idle) {
+        for (index, (label, message)) in self.update_banner_actions().into_iter().enumerate() {
             actions = actions.push(
-                button(text("Update now").size(tokens.type_scale.caption))
-                    .on_press(Message::InstallUpdate)
-                    .style(design::action_style(true))
+                button(text(label).size(tokens.type_scale.caption))
+                    .on_press(message)
+                    .style(
+                        move |theme: &iced::Theme, status: iced::widget::button::Status| {
+                            if index == 0 {
+                                design::action_style(true)(theme, status)
+                            } else {
+                                design::quiet_style(false)(theme, status)
+                            }
+                        },
+                    )
                     .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
             );
         }
-        if status.is_ready() {
-            actions = actions.push(
-                button(text("Install when I quit").size(tokens.type_scale.caption))
-                    .on_press(Message::InstallUpdateOnQuit)
-                    .style(design::quiet_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            );
-        }
-        if matches!(status, crate::updater::UpdateStatus::Downloading { .. }) {
-            actions = actions.push(
-                button(text("Stop the download").size(tokens.type_scale.caption))
-                    .on_press(Message::CancelUpdateDownload)
-                    .style(design::quiet_style(false))
-                    .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-            );
-        }
-        actions = actions.push(
-            button(text("Later").size(tokens.type_scale.caption))
-                .on_press(Message::DismissUpdate)
-                .style(design::quiet_style(false))
-                .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-        );
-        actions = actions.push(
-            button(text("Change settings").size(tokens.type_scale.caption))
-                .on_press(Message::OpenUpdateSettings)
-                .style(design::quiet_style(false))
-                .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
-        );
         let narrow = ui::theme::Breakpoint::at(self.window_width) == ui::theme::Breakpoint::Narrow;
         let body: Element<'_, Message> = if narrow {
             column![text(headline).size(tokens.type_scale.label), actions,]

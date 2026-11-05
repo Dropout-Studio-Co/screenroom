@@ -134,17 +134,22 @@ ssh-keygen -Y verify -f allowed_signers -I screenroom -n screenroom \
   -s manifest.json.sig < manifest.json
 ```
 
-### What must be settled before the first real publish
+### The media stack a published bundle carries
 
-The macOS job bundles whatever `libmpv` it built against. On a GitHub runner that
-is Homebrew's `mpv`, which is **GPL-2.0-or-later** with `ffmpeg` compiled
-`--enable-gpl`, and [`LICENSING.md`](LICENSING.md) classifies exactly that build as
-*development only — do not bundle or ship it*. The workflow is therefore able to
-produce an artefact, and able to publish one on an explicit tag or a ticked
-dispatch, but **a publish that uploads this bundle redistributes a GPL-linked
-binary**, which needs the LGPL-only libmpv decision or a GPL release posture first.
-That decision is the release gate's, not this pipeline's. Publishing is opt-in for
-that reason as well as for tag hygiene.
+The macOS job no longer bundles Homebrew's GPL `mpv`. It runs
+`scripts/build-lgpl-media.sh`, which builds **FFmpeg 7.1.1** with
+`--disable-gpl --disable-version3 --disable-nonfree` and **mpv 0.41.0** with
+`-Dgpl=false`, copies the dependency closure and rewrites every install name to
+`@rpath`. `scripts/package-macos.sh` bundles that directory, fails if anything still
+resolves through Homebrew, and the workflow sets `SCREENROOM_REQUIRE_SELF_CONTAINED=1`
+so an unclean bundle cannot reach the archive step.
+
+The build is cached with `actions/cache`, keyed on the hash of the build script, so
+only a flag change pays for it again. The two source archives are fetched at pinned
+SHA-256 and attached to each release as `Screenroom-media-source.tar.xz` together
+with `BUILD_INFO` and the build script: that is the corresponding source for the
+LGPL libraries, from the same download page as the binary
+([`LICENSING.md`](LICENSING.md) records the obligations).
 
 ## 2. One-time setup
 
@@ -380,6 +385,7 @@ process on the owner's Mac.
 | `Screenroom-<version>-macos-arm64.zip` | the update payload, and also the download a person takes by hand |
 | `appcast.xml` | the signed feed Sparkle reads |
 | `manifest.json`, `manifest.json.sig` | the SHA-256 record and its optional ssh-keygen signature; kept for humans and auditing, **not** used for updates |
+| `Screenroom-media-source.tar.xz` | the FFmpeg and mpv sources, `BUILD_INFO` and `build-lgpl-media.sh`: the LGPL corresponding source |
 
 `scripts/release.sh macos --out DIR` builds the bundle, archives it and writes the
 manifest fragment. `scripts/release.sh appcast --out DIR --tag vX.Y.Z` runs
@@ -431,6 +437,28 @@ because publishing the current bundle redistributes a GPL-linked libmpv
 ([`LICENSING.md`](LICENSING.md)). The local equivalent of the whole chain is
 `scripts/check-updater.sh`, which does exactly the same packaging, signing and
 installation against `127.0.0.1`.
+
+### Signing and notarisation, and why the bundle is ad-hoc
+
+The bundle is signed **ad-hoc** today. There is no Developer ID certificate on this
+machine, and buying an Apple Developer Program membership is out of scope for the
+Personal Edition, so Gatekeeper still says "unidentified developer" on a machine that
+did not build the app. That is a distribution-trust gap, not an updater gap: Sparkle's
+own archive and feed signatures are independent of Apple code signing, and the update
+path is proved with ad-hoc builds.
+
+The pipeline is ready for a real certificate without a code change:
+
+| Variable | Effect |
+| --- | --- |
+| `SCREENROOM_CODESIGN_IDENTITY` | signs the app and every nested component inside-out with that identity instead of `-` |
+| `SCREENROOM_HARDENED_RUNTIME=1` | adds `--options runtime` to every signature; only applied when the identity is not ad-hoc, because the hardened runtime will not load Sparkle under an ad-hoc signature |
+| `SCREENROOM_NOTARY_PROFILE` | read by `scripts/notarize.sh`, which submits the zip with `notarytool --wait`, staples the ticket, and runs `spctl --assess` |
+
+`scripts/notarize.sh` refuses to run unless the bundle is signed by a
+`Developer ID Application` certificate **and** carries the hardened runtime flag, so it
+cannot pretend to notarise an ad-hoc build. It has never been executed here, because
+no such certificate exists; it is reported as PENDING, never as passed.
 
 ### The knobs, and which of them a release may use
 

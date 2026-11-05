@@ -78,22 +78,58 @@ from crates.io 0.14.0 with the ordinary MIT obligation recorded in the table abo
 Nothing is vendored for it any more, so no patched source needs to ship with a
 binary release.
 
-## Native media components: source license is not binary clearance
+## Native media components: what ships, and under what licence
 
-This is the sharpest release constraint in the project.
+This is the sharpest release constraint in the project, and it now has a build
+that resolves it.
 
-| Component | Evidence on this host | Distribution status |
+| Component | Where it comes from | Distribution status |
 | --- | --- | --- |
-| Homebrew `mpv 0.41.0` (bottled) / `libmpv.2.dylib`, client API 2.5 | `brew info mpv` → `License: GPL-2.0-or-later AND LGPL-2.1-or-later` | **Development only.** This is a GPL build. Do not bundle or ship it. |
-| Homebrew `ffmpeg 9.0.2` | `ffmpeg -version` shows `--enable-gpl --enable-version3` | **Development only.** Invoked as an external tool for local conversion/QA; not copied into Git or an installer. |
-| mpv's own build documentation | default build is GPL; the LGPL subset requires explicit configuration | A release must pin an audited, hash-verified **LGPL-only** libmpv/FFmpeg build, or ship under GPL with full corresponding-source obligations. Decision belongs to the release gate, not to a dependency default. |
-| libmpv render API surface | OpenGL / D3D11 / software backends only (`include/mpv/render.h`) | No additional license grant; the same binary obligations apply to whatever is embedded. |
-| SQLite engine | public domain ([sqlite.org/copyright](https://www.sqlite.org/copyright.html)) | Bundled through `rusqlite`'s `bundled` feature; wrapper notices still apply. |
+| `libmpv.2.dylib` + the FFmpeg and libplacebo libraries beside it | `scripts/build-lgpl-media.sh`: **mpv 0.41.0** built with `-Dgpl=false`, **FFmpeg 7.1.1** configured with `--disable-gpl --disable-version3 --disable-nonfree`, and **libplacebo 7.387.0** built OpenGL-only with Vulkan, shaderc and lcms disabled | **Redistributable.** LGPL-2.1-or-later, shipped as separate dynamic libraries so they can be replaced |
+| Homebrew `mpv 0.41.0` / `libmpv.2.dylib` | `brew install mpv` | **Development only.** GPL-2.0-or-later build. `scripts/package-macos.sh` still accepts it for a local bundle and prints that it is not redistributable |
+| Homebrew `ffmpeg 9.0.2` | `brew install ffmpeg` | **Not shipped at all.** The app invokes whatever `ffmpeg`/`ffprobe` the machine already has, for posters and conversions; nothing is copied into the bundle |
+| libass, FreeType, HarfBuzz, FriBidi, Fontconfig and their codecs | Homebrew, linked by mpv's subtitle renderer | Permissive or LGPL. Copied into `Contents/Frameworks` with their install names rewritten to `@rpath`, so the set is self-contained |
+| SQLite engine | public domain ([sqlite.org/copyright](https://www.sqlite.org/copyright.html)) | Bundled through `rusqlite`'s `bundled` feature; wrapper notices still apply |
+| Sparkle 2.10.1 | pinned release archive, MIT | See the next section |
 
-For every shipped native binary, record: version, hash, upstream source revision,
-complete build configuration, dependency licenses, corresponding source, and any
-modifications. Provide relinking/replacement rights where the applicable LGPL
-version requires them. Do not ship a GPL-linked binary behind MIT-only notices.
+### The LGPL build
+
+`scripts/build-lgpl-media.sh` fetches both sources at pinned SHA-256, builds them
+into `vendor/lgpl/`, copies the non-system dependency closure into
+`vendor/lgpl/frameworks/`, rewrites every install name to `@rpath`, and fails if
+anything still points at `/opt/homebrew`. `vendor/lgpl/BUILD_INFO` records the
+versions, flags and hashes of the exact build. `scripts/package-macos.sh` bundles
+that directory when it exists and refuses to ship a stack that still resolves
+through Homebrew.
+
+Flags that matter for the licence: mpv `-Dgpl=false`; FFmpeg `--disable-gpl
+--disable-version3 --disable-nonfree`. Encoders that would force GPL (x264, x265)
+are not built; decoding, including HEVC, H.264, AV1, VP9, AAC and DTS, is native
+FFmpeg code and unaffected. Conversion still uses the machine's own `ffmpeg`.
+
+### Obligations that follow, and where they are met
+
+- **Notice.** `Contents/Resources/licenses/` carries the FFmpeg LGPL text, the mpv
+  copyright notice, the libplacebo and FFmpeg build patches where one was applied, and
+  `LGPL-SOURCE-OFFER.txt`, the written offer described in
+  [`LGPL_SOURCE_OFFER.md`](LGPL_SOURCE_OFFER.md). `COMPONENTS.txt` records the exact
+  files and versions a given build bundled.
+- **Corresponding source.** Every release attaches
+  `Screenroom-media-source.tar.xz`: the FFmpeg, mpv and libplacebo archives at the
+  pinned versions, `BUILD_INFO`, the build script and the mpv build patch, from the
+  same download page as the binary. The remaining LGPL libraries (FriBidi, GLib,
+  libintl, Graphite2) are covered by the written offer in
+  [`LGPL_SOURCE_OFFER.md`](LGPL_SOURCE_OFFER.md), which ships inside the bundle.
+- **Relinking and replacement.** mpv and FFmpeg are separate `.dylib` files in
+  `Contents/Frameworks`, not statically linked, so the owner can replace them with
+  a compatible build. No anti-circumvention measure is applied.
+- **No GPL leakage.** `brew install mpv` must never be what a published bundle
+  carries; the packaging script says so, and the release workflow builds the LGPL
+  stack and asserts the bundle is self-contained before it archives anything.
+
+For every shipped native binary the record is: version, SHA-256 of the source,
+complete configure/meson flags, the dependency closure, and the source itself. Do
+not ship a GPL-linked binary behind MIT-only notices.
 
 Codec patents and platform store terms are separate from open-source copyright.
 

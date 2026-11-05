@@ -68,21 +68,32 @@ else
   fi
 
   echo
-  echo "==> libmpv runtime dependencies (must exist on the target machine)"
-
-  missing=0
-  while IFS= read -r dependency; do
-    if [ -e "$dependency" ]; then
-      echo "  ok:   $dependency"
-    else
-      echo "  MISSING: $dependency" >&2
-      missing=$((missing + 1))
-    fi
-  done < <(otool -L "$libmpv" | tail -n +2 | awk '{print $1}' | grep -E '^/(opt|usr/local)/' || true)
-  if [ "$missing" -eq 0 ]; then
-    ok "every absolute dependency resolves on this machine"
+  echo "==> the media stack beside it"
+  stack=0
+  absolute=0
+  for library in "$app/Contents/Frameworks/"*.dylib; do
+    [ -f "$library" ] || continue
+    stack=$((stack + 1))
+    while IFS= read -r dependency; do
+      case "$dependency" in
+        /opt/homebrew/*|/usr/local/*) absolute=$((absolute + 1)) ;;
+      esac
+    done < <(otool -L "$library" | tail -n +2 | awk '{print $1}')
+  done
+  ok "$stack media libraries are bundled"
+  if [ "$absolute" -eq 0 ]; then
+    ok "every media dependency resolves inside the bundle"
+  elif [ "${SCREENROOM_REQUIRE_SELF_CONTAINED:-0}" = "1" ]; then
+    fail "$absolute dependency path(s) still point at Homebrew, so this bundle is not redistributable"
   else
-    fail "$missing dependency/dependencies missing; playback would fail here"
+    echo "  note: $absolute dependency path(s) point at Homebrew; this bundle is for this machine only."
+    echo "        Run scripts/build-lgpl-media.sh before publishing."
+  fi
+
+  if [ -f "$app/Contents/Resources/licenses/LGPL-SOURCE-OFFER.txt" ]; then
+    ok "the LGPL source offer ships inside the bundle"
+  elif [ "$absolute" -eq 0 ]; then
+    fail "the bundle carries LGPL libraries but no source offer"
   fi
 
   echo

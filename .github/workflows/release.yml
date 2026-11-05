@@ -40,14 +40,31 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
 
-      - name: Install the libraries the bundle links against
+      - name: Install the libraries the media build links against
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
-        run: brew install mpv ffmpeg
+        run: brew install libass meson ninja
 
       - name: Fetch the pinned update framework
         run: scripts/fetch-sparkle.sh
+
+      - name: Cache the redistributable media stack
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: vendor/lgpl
+          key: lgpl-media-${{ runner.os }}-${{ hashFiles('scripts/build-lgpl-media.sh') }}
+
+      - name: Build the redistributable media stack
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          if [ -f vendor/lgpl/prefix/lib/libmpv.2.dylib ]; then
+            printf 'restored the LGPL media stack from cache\n'
+            exit 0
+          fi
+          scripts/build-lgpl-media.sh
 
       - name: Name the release this run carries
         id: release
@@ -63,7 +80,22 @@ jobs:
           printf 'building %s for %s\n' "$version" "$tag"
 
       - name: Build the application and its manifest fragment
+        env:
+          SCREENROOM_REQUIRE_SELF_CONTAINED: "1"
         run: scripts/release.sh macos --out artifacts
+
+      - name: Keep the media source with the release
+        run: |
+          staging="$RUNNER_TEMP/media-source"
+          rm -rf "$staging"
+          mkdir -p "$staging/downloads"
+          cp vendor/lgpl/BUILD_INFO "$staging/"
+          cp vendor/lgpl/downloads/ffmpeg.tar.xz "$staging/downloads/"
+          cp vendor/lgpl/downloads/mpv.tar.gz "$staging/downloads/"
+          cp vendor/lgpl/downloads/libplacebo.tar.gz "$staging/downloads/"
+          cp scripts/build-lgpl-media.sh "$staging/"
+          tar -cJf artifacts/Screenroom-media-source.tar.xz -C "$staging" .
+          printf 'media source bundle: %s bytes\n' "$(stat -f%z artifacts/Screenroom-media-source.tar.xz)"
 
       - name: Sign the update feed
         env:
@@ -253,7 +285,7 @@ jobs:
           version="$(scripts/release.sh version)"
           tag="v$version"
           files=()
-          for candidate in artifacts/*macos*.zip artifacts/appcast.xml artifacts/manifest.json artifacts/manifest.json.sig; do
+          for candidate in artifacts/*macos*.zip artifacts/appcast.xml artifacts/manifest.json artifacts/manifest.json.sig artifacts/Screenroom-media-source.tar.xz; do
             if [ -f "$candidate" ]; then
               files+=("$candidate")
             fi

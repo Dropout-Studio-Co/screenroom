@@ -13,6 +13,10 @@ sparkle="$root/vendor/sparkle/Sparkle.framework"
 public_key_file="$root/apps/desktop/updater/ed25519_public_key.txt"
 feed_url="${SCREENROOM_UPDATE_FEED_URL:-https://github.com/Dropout-Studio-Co/screenroom/releases/latest/download/appcast.xml}"
 sign_identity="${SCREENROOM_CODESIGN_IDENTITY:--}"
+sign_options=()
+if [ "$sign_identity" != "-" ] && [ "${SCREENROOM_HARDENED_RUNTIME:-0}" = "1" ]; then
+  sign_options=(--options runtime)
+fi
 minimum_macos="12.0"
 
 if [ -n "${SCREENROOM_UPDATE_PUBLIC_KEY:-}" ]; then
@@ -73,49 +77,84 @@ if [ -f "$root/assets/Screenroom.icns" ]; then
   cp "$root/assets/Screenroom.icns" "$app/Contents/Resources/Screenroom.icns"
 fi
 
+if [ -d "$root/vendor/lgpl/licenses" ]; then
+  mkdir -p "$app/Contents/Resources/licenses"
+  cp "$root/vendor/lgpl/licenses/"*.txt "$app/Contents/Resources/licenses/"
+  cp "$root/vendor/lgpl/COMPONENTS.txt" "$app/Contents/Resources/licenses/COMPONENTS.txt" 2>/dev/null || true
+fi
+
+lgpl="$root/vendor/lgpl/frameworks"
 libmpv=""
-for candidate in \
-  /opt/homebrew/lib/libmpv.2.dylib \
-  /usr/local/lib/libmpv.2.dylib \
-  /opt/homebrew/lib/libmpv.dylib \
-  /usr/local/lib/libmpv.dylib
-do
-  if [ -f "$candidate" ]; then
-    libmpv="$candidate"
-    break
-  fi
-done
+self_contained=0
+
+if [ -n "${SCREENROOM_LIBMPV_DIR:-}" ] && [ -f "$SCREENROOM_LIBMPV_DIR/libmpv.2.dylib" ]; then
+  libmpv="$SCREENROOM_LIBMPV_DIR/libmpv.2.dylib"
+  self_contained=1
+elif [ -f "$lgpl/libmpv.2.dylib" ]; then
+  libmpv="$lgpl/libmpv.2.dylib"
+  self_contained=1
+else
+  for candidate in \
+    /opt/homebrew/lib/libmpv.2.dylib \
+    /usr/local/lib/libmpv.2.dylib \
+    /opt/homebrew/lib/libmpv.dylib \
+    /usr/local/lib/libmpv.dylib
+  do
+    if [ -f "$candidate" ]; then
+      libmpv="$candidate"
+      break
+    fi
+  done
+fi
 
 if [ -z "$libmpv" ]; then
   echo "!! no libmpv found, so the app will report playback as unavailable." >&2
-  echo "   Install it with: brew install mpv" >&2
+  echo "   Build the redistributable one with: scripts/build-lgpl-media.sh" >&2
 else
-
-  cp -L "$libmpv" "$app/Contents/Frameworks/libmpv.2.dylib"
-  echo "==> bundled $libmpv"
-
-  resolved="$(cd "$(dirname "$libmpv")" && pwd -P)/$(basename "$libmpv")"
-  echo "    libmpv dependencies that must be present on this machine:"
-  otool -L "$resolved" 2>/dev/null \
-    | tail -n +2 \
-    | awk '{print $1}' \
-    | grep -E '^/(opt|usr/local)/' \
-    | sed 's/^/      /' \
-    || true
-  missing=0
-  while IFS= read -r dependency; do
-    [ -e "$dependency" ] || { echo "      MISSING: $dependency" >&2; missing=1; }
-  done < <(otool -L "$resolved" 2>/dev/null | tail -n +2 | awk '{print $1}' | grep -E '^/(opt|usr/local)/')
-  if [ "$missing" -ne 0 ]; then
-    echo "!! some libmpv dependencies are absent; playback will fail on this machine." >&2
-    exit 1
+  directory="$(dirname "$libmpv")"
+  if [ "$self_contained" = "1" ]; then
+    for library in "$directory"/*.dylib; do
+      cp -f "$library" "$app/Contents/Frameworks/$(basename "$library")"
+    done
+    echo "==> bundled the LGPL media stack from $directory"
+    chmod u+w "$app/Contents/Frameworks/"*.dylib
+    leaks=0
+    for library in "$app/Contents/Frameworks/"*.dylib; do
+      while IFS= read -r dependency; do
+        case "$dependency" in
+          /opt/homebrew/*|/usr/local/*)
+            echo "      absolute dependency: $dependency" >&2
+            leaks=$((leaks + 1))
+            ;;
+        esac
+      done < <(otool -L "$library" | tail -n +2 | awk '{print $1}')
+    done
+    if [ "$leaks" -ne 0 ]; then
+      echo "!! the media stack is not self-contained; the bundle would need Homebrew on the target" >&2
+      exit 1
+    fi
+    echo "    the stack is self-contained; nothing resolves through Homebrew"
+  else
+    cp -L "$libmpv" "$app/Contents/Frameworks/libmpv.2.dylib"
+    echo "!! bundled $libmpv, which is a Homebrew build" >&2
+    echo "!! it is NOT redistributable; run scripts/build-lgpl-media.sh before publishing" >&2
+    resolved="$(cd "$(dirname "$libmpv")" && pwd -P)/$(basename "$libmpv")"
+    missing=0
+    while IFS= read -r dependency; do
+      [ -e "$dependency" ] || { echo "      MISSING: $dependency" >&2; missing=1; }
+    done < <(otool -L "$resolved" 2>/dev/null | tail -n +2 | awk '{print $1}' | grep -E '^/(opt|usr/local)/')
+    if [ "$missing" -ne 0 ]; then
+      echo "!! some libmpv dependencies are absent; playback will fail on this machine." >&2
+      exit 1
+    fi
   fi
 fi
 
 version="$(grep -m1 '^version' "$root/Cargo.toml" | sed -E 's/.*"(.*)".*/\1/')"
 version="${version:-0.1.0}"
 
-if [ "${SCREENROOM_ALLOW_TEST_FEED:-0}" = "1" ] && [ -n "${SCREENROOM_VERSION:-}" ]; then
+if [ -n "${SCREENROOM_VERSION:-}" ] \
+  && { [ "${SCREENROOM_ALLOW_TEST_FEED:-0}" = "1" ] || [ "${SCREENROOM_ALLOW_VERSION_OVERRIDE:-0}" = "1" ]; }; then
   version="$SCREENROOM_VERSION"
 fi
 
@@ -185,18 +224,19 @@ for tool in ffmpeg ffprobe; do
   fi
 done
 
-if [ -f "$app/Contents/Frameworks/libmpv.2.dylib" ]; then
-  codesign --force --sign "$sign_identity" "$app/Contents/Frameworks/libmpv.2.dylib"
-fi
+for library in "$app/Contents/Frameworks/"*.dylib; do
+  [ -f "$library" ] || continue
+  codesign --force "${sign_options[@]}" --sign "$sign_identity" "$library"
+done
 
 echo "==> signing Sparkle's own helpers, then the framework"
 sparkle_root="$app/Contents/Frameworks/Sparkle.framework/Versions/B"
 for helper in "$sparkle_root/Autoupdate" "$sparkle_root/XPCServices/Downloader.xpc" "$sparkle_root/XPCServices/Installer.xpc" "$sparkle_root/Updater.app"; do
   [ -e "$helper" ] || continue
-  codesign --force --deep --sign "$sign_identity" "$helper"
+  codesign --force --deep "${sign_options[@]}" --sign "$sign_identity" "$helper"
 done
-codesign --force --sign "$sign_identity" "$app/Contents/Frameworks/Sparkle.framework"
-codesign --force --sign "$sign_identity" "$app"
+codesign --force "${sign_options[@]}" --sign "$sign_identity" "$app/Contents/Frameworks/Sparkle.framework"
+codesign --force "${sign_options[@]}" --sign "$sign_identity" "$app"
 codesign --verify --deep --strict "$app"
 echo "==> signed with '$sign_identity' and verified"
 
