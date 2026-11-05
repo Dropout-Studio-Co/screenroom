@@ -222,7 +222,7 @@ run_update() {
     SCREENROOM_UPDATE_TIMEOUT=150 \
     SCREENROOM_UPDATE_DEBUG=1 \
     SCREENROOM_UPDATE_NO_RELAUNCH=1 \
-    "${override[@]}" \
+    ${override[@]+"${override[@]}"} \
     "$install_dir/Screenroom.app/Contents/MacOS/Screenroom" >"$work/run-$name.log" 2>&1 &
   local pid=$!
   local waited=0

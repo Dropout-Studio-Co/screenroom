@@ -237,7 +237,7 @@ print_table() {
 
 print_failure_logs() {
   local name
-  for name in "${launched_names[@]}"; do
+  for name in ${launched_names[@]+"${launched_names[@]}"}; do
     if [ "$(lane_result "$name")" = "failed" ]; then
       printf '\n%s log\n' "$name"
       tail -40 "$work_dir/$name.log" 2>/dev/null || true
@@ -319,7 +319,7 @@ if [ "$include_tv" = "1" ]; then
   launch_lane tv lane_tv
 fi
 
-for lapped in "${launched_names[@]}"; do
+for lapped in ${launched_names[@]+"${launched_names[@]}"}; do
   wait_lane "$lapped"
 done
 
@@ -331,7 +331,7 @@ if [ "$include_macos" = "1" ] && [ "$(lane_result macos)" = "failed" ]; then
 fi
 
 if [ "${SCREENROOM_SHIP_STRICT:-0}" = "1" ]; then
-  for lapped in "${launched_names[@]}"; do
+  for lapped in ${launched_names[@]+"${launched_names[@]}"}; do
     if [ "$(lane_result "$lapped")" = "failed" ]; then
       exit 1
     fi

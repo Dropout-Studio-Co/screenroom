@@ -226,17 +226,17 @@ done
 
 for library in "$app/Contents/Frameworks/"*.dylib; do
   [ -f "$library" ] || continue
-  codesign --force "${sign_options[@]}" --sign "$sign_identity" "$library"
+  codesign --force ${sign_options[@]+"${sign_options[@]}"} --sign "$sign_identity" "$library"
 done
 
 echo "==> signing Sparkle's own helpers, then the framework"
 sparkle_root="$app/Contents/Frameworks/Sparkle.framework/Versions/B"
 for helper in "$sparkle_root/Autoupdate" "$sparkle_root/XPCServices/Downloader.xpc" "$sparkle_root/XPCServices/Installer.xpc" "$sparkle_root/Updater.app"; do
   [ -e "$helper" ] || continue
-  codesign --force --deep "${sign_options[@]}" --sign "$sign_identity" "$helper"
+  codesign --force --deep ${sign_options[@]+"${sign_options[@]}"} --sign "$sign_identity" "$helper"
 done
-codesign --force "${sign_options[@]}" --sign "$sign_identity" "$app/Contents/Frameworks/Sparkle.framework"
-codesign --force "${sign_options[@]}" --sign "$sign_identity" "$app"
+codesign --force ${sign_options[@]+"${sign_options[@]}"} --sign "$sign_identity" "$app/Contents/Frameworks/Sparkle.framework"
+codesign --force ${sign_options[@]+"${sign_options[@]}"} --sign "$sign_identity" "$app"
 codesign --verify --deep --strict "$app"
 echo "==> signed with '$sign_identity' and verified"
 
