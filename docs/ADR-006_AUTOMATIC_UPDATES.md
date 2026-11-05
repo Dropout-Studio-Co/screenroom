@@ -41,11 +41,14 @@ fixes a premature install for NFC-encoded paths. Both need macOS 12.
 - `apps/desktop/src/updater.rs` owns the state machine, the policy, and the
   decoding of those events. It talks to the bridge through a `Backend` trait so
   every rule is unit-tested without a window, a network or a framework.
-- `build.rs` compiles the bridge with `clang` (`-fobjc-arc`, `-fmodules`) only when
-  `Sparkle.framework` is present, and emits `cfg(screenroom_updater)`. The
-  framework is linked **weakly** with an `@executable_path/../Frameworks` runpath,
-  so `cargo test` and `cargo run` never need the framework; a build without it
-  reports updates as unavailable instead of failing to launch.
+- `build.rs` compiles the bridge with the Command Line Tools' `clang`
+  (`-fobjc-arc`, `-fmodules`) only when `Sparkle.framework` is present, and emits
+  `cfg(screenroom_updater)`. It invokes `clang` directly rather than through a
+  build-dependency, so `Cargo.lock` is untouched and the CI cache key does not
+  move. The framework is linked **weakly** with an
+  `@executable_path/../Frameworks` runpath, so `cargo test` and `cargo run` never
+  need the framework; a build without it reports updates as unavailable instead
+  of failing to launch.
 
 *Why a custom driver rather than `SPUStandardUpdaterController`.* The standard
 driver shows AppKit windows. Screenroom has one window, a 10-foot-style iced UI

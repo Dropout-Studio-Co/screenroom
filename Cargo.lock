@@ -3693,7 +3693,6 @@ dependencies = [
 name = "screenroom-desktop"
 version = "0.1.0"
 dependencies = [
- "cc",
  "iced",
  "metal",
  "notify",
@@ -3701,7 +3700,6 @@ dependencies = [
  "rfd",
  "screenroom-core",
  "screenroom-player",
- "serde",
  "serde_json",
  "tempfile",
  "wgpu",

@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(screenroom_ds_pinned)");
@@ -39,17 +40,27 @@ fn link_sparkle() {
         return;
     }
 
-    let mut build = cc::Build::new();
-    build
-        .file(manifest.join("native/screenroom_updater.m"))
-        .include(manifest.join("native"))
-        .flag("-fobjc-arc")
-        .flag("-fmodules")
-        .flag(format!("-F{}", sparkle_root.display()))
-        .flag("-mmacosx-version-min=12.0")
-        .flag("-Wno-deprecated-declarations")
-        .warnings(true);
-    build.compile("screenroom_updater_bridge");
+    let source = manifest.join("native/screenroom_updater.m");
+    let object = PathBuf::from(std::env::var("OUT_DIR").expect("out directory"))
+        .join("screenroom_updater_bridge.o");
+    let compiled = Command::new("clang")
+        .arg("-c")
+        .arg("-fobjc-arc")
+        .arg("-fmodules")
+        .arg("-mmacosx-version-min=12.0")
+        .arg("-Wall")
+        .arg("-Wextra")
+        .arg("-Wno-deprecated-declarations")
+        .arg(format!("-F{}", sparkle_root.display()))
+        .arg("-I")
+        .arg(manifest.join("native"))
+        .arg(&source)
+        .arg("-o")
+        .arg(&object)
+        .status()
+        .expect("clang is part of the macOS command line tools");
+    assert!(compiled.success(), "the update bridge did not compile");
+    println!("cargo:rustc-link-arg={}", object.display());
 
     println!(
         "cargo:rustc-link-search=framework={}",
