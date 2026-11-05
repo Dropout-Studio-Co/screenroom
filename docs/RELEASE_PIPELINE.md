@@ -36,7 +36,7 @@ cd apps/tv && pnpm install --frozen-lockfile && pnpm typecheck && pnpm test
 Six tests are skipped by name because a headless hosted runner cannot measure what
 they measure. No secrets. `release.yml` calls this file as its reusable gate.
 
-The `rust-test` job's limit is 90 minutes. Actions caches are scoped to the ref that
+The `rust-test` job's limit is 150 minutes. Actions caches are scoped to the ref that
 wrote them, so a **tag** push always starts cold: on 2026-11-05 the release run for
 `v0.1.0` spent the whole 45-minute budget compiling and running the desktop suite and
 was cancelled before `macOS package` could start, twice. The limit is a budget for a
