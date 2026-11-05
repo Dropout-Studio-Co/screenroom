@@ -432,11 +432,16 @@ framework, name the release, build and archive, sign the feed — and uploaded a
 signed `appcast.xml` whose enclosure points at `releases/download/v0.1.0/…`.
 `Publish the release` was skipped, correctly.
 
-**No release has been created, no tag exists and nothing has been published**,
-because publishing the current bundle redistributes a GPL-linked libmpv
-([`LICENSING.md`](LICENSING.md)). The local equivalent of the whole chain is
-`scripts/check-updater.sh`, which does exactly the same packaging, signing and
-installation against `127.0.0.1`.
+**`v0.1.0` is published.** It carries `Screenroom-0.1.0-macos-arm64.zip`, the signed
+`appcast.xml`, `manifest.json` and `Screenroom-media-source.tar.xz`, and
+`scripts/check-live-update.sh` updated a 0.0.9 build from it over HTTPS.
+
+It was packaged on this Mac with `scripts/release.sh macos` and `appcast`, not by the
+workflow: the `Release` run for the tag never reached the macOS job because the
+hosted runner cannot finish the cold Rust suite inside its budget (see §1). The
+packaging steps are identical — the same script, the same pinned inputs — but the
+next release should come from CI once that capacity problem is solved, and until
+then the tag run is expected to fail before packaging.
 
 ### Signing and notarisation, and why the bundle is ad-hoc
 

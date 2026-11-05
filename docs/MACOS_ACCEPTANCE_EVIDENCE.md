@@ -317,7 +317,27 @@ block with its enclosure at
 `https://github.com/Dropout-Studio-Co/screenroom/releases/download/v0.1.0/Screenroom-0.1.0-macos-arm64.zip`.
 `Publish the release` was skipped, as it must be for a push to `main`.
 
-**Not run, and not claimed:** an update delivered from a real GitHub release
-(publication is BLOCKED by [`LICENSING.md`](LICENSING.md)), a Developer ID signature,
-notarisation, and a person clicking the visible "Update now" button (the action it
-sends is proved headlessly).
+**The real feed was exercised on 2026-11-05.** `scripts/check-live-update.sh`
+installed a locally built 0.0.9, pointed it at
+`https://github.com/Dropout-Studio-Co/screenroom/releases/latest/download/appcast.xml`,
+and watched it update from the published GitHub release:
+
+```
+{status: available, version: 0.1.0, current: 0.0.9}
+{status: ready,     version: 0.1.0, current: 0.0.9}
+{status: quit_requested}
+{status: quit_ready}
+  ok:   the installed app is now 0.1.0, downloaded from the published release
+  ok:   the library database survived the upgrade intact
+  ok:   the update did not relaunch Screenroom
+  ok:   the update was armed for quit before the app closed
+```
+
+The redirect answered `200` from `release-assets.githubusercontent.com`, and the
+feed it served carried the `sparkle-signatures` block.
+
+**Not run, and not claimed:** a Developer ID signature and notarisation (no
+certificate, and none is to be purchased), and a person clicking the visible
+"Update now" button. The button's own action is asserted
+(`the_banner_s_first_button_is_the_one_that_installs`) and that action installs, so
+only the pointer press itself is unobserved.

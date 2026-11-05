@@ -35,7 +35,7 @@ if ! grep -q "sparkle-signatures" "$work/feed.xml"; then
   exit 1
 fi
 
-advertised="$(sed -n 's:.*<sparkle:shortVersionString>\([^<]*\)</sparkle:shortVersionString>.*:\1:p' "$work/feed.xml" | head -1)"
+advertised="$(grep -o '<sparkle:shortVersionString>[^<]*' "$work/feed.xml" | head -1 | sed 's/.*>//')"
 if [ -z "$advertised" ]; then
   echo "the published feed carries no version" >&2
   exit 1

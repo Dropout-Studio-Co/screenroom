@@ -1,9 +1,9 @@
 # ADR-006 — Automatic updates on macOS with Sparkle 2
 
-- **Status:** Accepted 2026-11-05. Implemented and verified against an isolated
-  signed feed on this MacBook Air M4. **Public publication remains BLOCKED** on
-  the libmpv licensing decision in [`LICENSING.md`](LICENSING.md); nothing in this
-  ADR grants permission to publish a GPL-linked bundle.
+- **Status:** Accepted and shipped 2026-11-05. Implemented, verified against an
+  isolated signed feed, then against the published `v0.1.0` release over HTTPS. The
+  bundle now carries the LGPL media stack from
+  [`LICENSING.md`](LICENSING.md), so publishing is lawful.
 - **Supersedes:** the updater half of `manifest.json` in
   [`RELEASE_PIPELINE.md`](RELEASE_PIPELINE.md). The SHA-256 manifest is kept as
   release metadata; it is no longer an update channel.
@@ -127,11 +127,15 @@ Developer ID becomes available, `SCREENROOM_CODESIGN_IDENTITY` signs every neste
 component inside-out without another code change; notarisation then needs
 `notarytool` credentials and a workflow step that does not exist yet.
 
-A public release also still needs a legally cleared libmpv (see `LICENSING.md`).
-The updater is proved end to end against a local signed feed, which is the same code
-path a GitHub release would use, and GitHub's own hosted runner has built the
-bundle and signed the appcast (`Release` run 41961636886). No tag, release or
-published asset exists.
+The licence question is settled: the bundle ships FFmpeg, libplacebo and mpv built
+from source as LGPL libraries, with their source attached to the release. `v0.1.0`
+is published, and a 0.0.9 build updated itself from
+`releases/latest/download/appcast.xml` over HTTPS, through the GitHub redirect, with
+the library intact and no relaunch.
+
+Notarisation is not claimed and will not be bought: the owner declined the Apple
+Developer Program, so Gatekeeper's first-launch prompt stays. `scripts/notarize.sh`
+and `SCREENROOM_HARDENED_RUNTIME` are ready if that changes.
 
 ## Evidence
 

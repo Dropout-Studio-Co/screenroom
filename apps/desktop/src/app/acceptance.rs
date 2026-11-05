@@ -2749,7 +2749,7 @@ fn the_updates_section_states_the_version_and_offers_the_actions_by_keyboard() {
         matches!(
             row,
             ui::screens::settings::Row::Value { label: "This version", value }
-                if value == crate::updater::CURRENT_VERSION
+                if value == crate::updater::running_version()
         )
     });
     assert!(stated, "the running version must be stated: {labels:?}");

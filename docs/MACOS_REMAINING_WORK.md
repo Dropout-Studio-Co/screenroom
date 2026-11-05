@@ -984,10 +984,10 @@ this backlog was written. Its design decision is
 | Check, download, verify and install a signed newer version | **COMPLETE** | `scripts/check-updater.sh`: 0.1.0 → 0.2.0 through the real installed binary |
 | Refuse a tampered archive, an unsigned feed and a downgrade | **COMPLETE** | the same script, three negative cases |
 | Settings → Updates, keyboard-operable, with a banner that never covers a film | **COMPLETE** | `apps/desktop/src/app/acceptance.rs`, six tests |
-| Serve the feed from GitHub Releases | **BLOCKED** | a public release needs a cleared libmpv; `LICENSING.md` governs |
-| Developer ID signature and notarisation | **BLOCKED** | no Apple certificate on this machine, and none is to be purchased |
+| Serve the feed from GitHub Releases | **COMPLETE** | `v0.1.0` is published with the LGPL stack, the signed appcast and the corresponding source; a 0.0.9 build updated from it over HTTPS |
+| Developer ID signature and notarisation | **NOT PURSUED** | the owner declined the $99/yr Apple Developer Program; the bundle stays ad-hoc, and `scripts/notarize.sh` is ready for the day that changes |
 | The `Update now` action | **COMPLETE** | the action installs on demand without relaunching; only a person clicking the drawn button is unobserved |
-| A GitHub Actions run of the updated release job | **COMPLETE** | `Release` run 41961636886 built, packaged and signed the feed on GitHub's runner; nothing was published |
+| A GitHub Actions run of the updated release job | **PARTIAL** | run 41961636886 built, packaged and signed the feed on GitHub's runner; the *release* run for `v0.1.0` is blocked by the hosted runner's capacity on a cold cache, so 0.1.0 was packaged on this Mac with the same script |
 
 The updater does not change any other row: playback, scanning, subtitles, casting,
 backup and the design system are untouched, and `cargo test --workspace` is green.

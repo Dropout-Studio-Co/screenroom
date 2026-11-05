@@ -2,6 +2,22 @@ use std::sync::Mutex;
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub fn running_version() -> &'static str {
+    static RUNNING: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    RUNNING.get_or_init(|| bundle_version().unwrap_or_else(|| CURRENT_VERSION.to_string()))
+}
+
+fn bundle_version() -> Option<String> {
+    let executable = std::env::current_exe().ok()?;
+    let plist = executable.parent()?.parent()?.join("Info.plist");
+    let text = std::fs::read_to_string(plist).ok()?;
+    let marker = "<key>CFBundleShortVersionString</key>";
+    let after = text.split_once(marker)?.1;
+    let value = after.split_once("<string>")?.1.split_once("</string>")?.0;
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
 pub const CHECK_INTERVAL_SECONDS: u64 = 86_400;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,7 +223,8 @@ impl Updater {
             UpdateStatus::Unavailable { .. } | UpdateStatus::Idle => None,
             UpdateStatus::Checking => Some("Checking for a new version…".to_string()),
             UpdateStatus::UpToDate => Some(format!(
-                "Screenroom {CURRENT_VERSION} is the newest version."
+                "Screenroom {} is the newest version.",
+                running_version()
             )),
             UpdateStatus::Available => self.update.as_ref().map(|update| {
                 if update.informational {
@@ -339,7 +356,7 @@ impl Updater {
                 stage,
                 user_initiated,
             } => {
-                let version_is_newer = compare_versions(&update.version, CURRENT_VERSION) > 0;
+                let version_is_newer = compare_versions(&update.version, running_version()) > 0;
                 if !version_is_newer && !user_initiated {
                     self.status = UpdateStatus::UpToDate;
                     return Vec::new();
@@ -367,7 +384,7 @@ impl Updater {
                 update,
                 deferred_to_quit,
             } => {
-                let version_is_newer = compare_versions(&update.version, CURRENT_VERSION) > 0;
+                let version_is_newer = compare_versions(&update.version, running_version()) > 0;
                 if !version_is_newer {
                     self.status = UpdateStatus::UpToDate;
                     return Vec::new();
@@ -551,7 +568,7 @@ fn download_label(received: u64, expected: u64) -> String {
 }
 
 pub fn current_version() -> &'static str {
-    CURRENT_VERSION
+    running_version()
 }
 
 static EVENT_QUEUE: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -883,7 +900,7 @@ impl CheckRun {
             self.append(&format!(
                 "\"status\":\"{name}\",\"version\":\"{}\",\"current\":\"{}\"",
                 escape(&version),
-                CURRENT_VERSION
+                running_version()
             ));
         }
         if self.started.elapsed() > self.deadline {
@@ -1011,7 +1028,7 @@ mod tests {
     #[test]
     fn a_user_initiated_check_still_reports_the_same_version() {
         let mut updater = Updater::new();
-        updater.feed(found(CURRENT_VERSION, true));
+        updater.feed(found(running_version(), true));
         assert_eq!(updater.status(), &UpdateStatus::Available);
     }
 

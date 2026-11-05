@@ -147,13 +147,11 @@ The update *contents* are Screenroom itself, so the libmpv obligation below appl
 to everything Sparkle delivers exactly as it applies to the first download. An
 updater does not launder a licence.
 
-Because of that, the automatic update channel is implemented, signed and proved
-against a local feed, while **publication stays blocked**: the only libmpv on this
-machine is Homebrew's GPL build, and an audited LGPL-only mpv + FFmpeg pair would
-need a meson/nasm toolchain, a full rebuild and a re-verification of the render
-bridge that nothing here has done. Substituting it silently would trade one
-unverified risk for another, so the decision is recorded as open rather than
-assumed.
+The GPL obstacle is gone: `v0.1.0` is published with the LGPL stack described
+above, together with its corresponding source. A released bundle must keep using
+`scripts/build-lgpl-media.sh`; `scripts/package-macos.sh` refuses to archive a stack
+that still resolves through Homebrew, and the workflow asserts the same before
+signing.
 
 ## TV clients
 

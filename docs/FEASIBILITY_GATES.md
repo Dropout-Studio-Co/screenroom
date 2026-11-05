@@ -382,19 +382,15 @@ real installed binary with `SCREENROOM_WINDOW=hidden`:
 | feed carrying only 0.1.0 while 0.2.0 runs | `up_to_date`, no download, no failure |
 | archive altered after signing | `failed`, error 4005 "The update is improperly signed and could not be validated", version stays 0.1.0 |
 | feed with its signatures removed | `failed`, error 1000 "The update feed is improperly signed and could not be validated", version stays 0.1.0 |
+| **the published release, over HTTPS** | `check-live-update.sh`: a 0.0.9 build followed `releases/latest/download/appcast.xml` (a 302 to `release-assets.githubusercontent.com`), downloaded `Screenroom-0.1.0-macos-arm64.zip`, verified the feed and archive signatures, installed on quit, and reports 0.1.0 with the library intact and no relaunch |
 
 **Not covered by this gate, and not claimed:**
 
-- a paid Developer ID signature, hardened runtime or notarisation (no certificate
-  exists on this machine);
 - a person pressing the visible "Update now" button: the action it sends is
   exercised headlessly and installs correctly, but no one has clicked it on screen;
-- a release served from GitHub. The GitHub-hosted packaging job *has* run
-  (`Release` run 41961636886, 2026-11-05): it fetched the pinned framework,
-  archived the bundle and produced a signed `appcast.xml` whose enclosure points at
-  `releases/download/v0.1.0/Screenroom-0.1.0-macos-arm64.zip`. Nothing was
-  published — no tag exists — so the `releases/latest/download` redirect is still
-  unexercised.
+- a paid Developer ID signature, hardened runtime or notarisation. The owner
+  declined an Apple Developer Program membership ($99/yr), which is the only source
+  of that certificate; the bundle stays ad-hoc signed.
 
 Those stay PENDING or BLOCKED. A passing local run is not a published release.
 

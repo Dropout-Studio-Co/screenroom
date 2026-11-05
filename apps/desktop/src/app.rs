@@ -6523,7 +6523,7 @@ impl App {
             ui::screens::settings::Section::Updates => {
                 rows.push(Row::Value {
                     label: "This version",
-                    value: crate::updater::CURRENT_VERSION.to_string(),
+                    value: crate::updater::running_version().to_string(),
                 });
                 rows.push(Row::Value {
                     label: "State",
