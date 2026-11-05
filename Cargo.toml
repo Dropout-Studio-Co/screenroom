@@ -9,7 +9,7 @@ members = [
 exclude = ["reference", ".worktrees"]
 
 [workspace.package]
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 license = "MIT"
 authors = ["Dropout Studio"]
