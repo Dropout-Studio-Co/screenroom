@@ -410,6 +410,14 @@ static NSString *ScreenroomUpdaterSigningStatusName(SPUAppcastSigningValidationS
     [self announce:@"scheduled" details:@{ @"delay": @(delay) }];
 }
 
+- (void)updaterDidNotFindUpdate:(SPUUpdater *)updater error:(NSError *)error
+{
+    [self announce:@"up_to_date" details:@{
+        @"user_initiated": @NO,
+        @"message": error.localizedDescription ?: @"",
+    }];
+}
+
 - (void)updaterWillNotScheduleUpdateCheck:(SPUUpdater *)updater
 {
     [self announce:@"unscheduled" details:nil];

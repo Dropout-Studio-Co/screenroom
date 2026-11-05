@@ -3075,8 +3075,10 @@ fn a_launch_looks_for_an_update_once_and_only_when_the_owner_allows_it() {
         "a launch must look for a new version without being asked"
     );
     assert!(
-        app.launch_check_at.is_none(),
-        "the launch check must happen once, not on every tick"
+        app.launch_check_at.is_some_and(
+            |next| next <= std::time::Instant::now() + std::time::Duration::from_secs(2)
+        ),
+        "an unanswered launch attempt is retried promptly, not on every tick"
     );
 
     let mut refused = fresh_app();
@@ -3097,12 +3099,55 @@ fn a_launch_looks_for_an_update_once_and_only_when_the_owner_allows_it() {
 }
 
 #[test]
-fn the_launch_check_is_due_immediately_not_after_a_wait() {
-    let app = fresh_app();
+fn the_launch_check_is_due_immediately_and_retries_until_the_updater_answers() {
+    let mut app = fresh_app();
+    app.updater = crate::updater::Updater::new();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    app.updater_backend = Box::new(RecordingBackend { seen: seen.clone() });
+
     let at = app.launch_check_at.expect("a launch schedules a check");
     let waited = at.saturating_duration_since(std::time::Instant::now());
     assert!(
         waited <= std::time::Duration::from_millis(50),
         "the first check must be due at once, not after {waited:?}"
+    );
+
+    app.poll();
+    assert_eq!(
+        seen.lock().expect("action log").len(),
+        1,
+        "the first tick must ask the updater"
+    );
+    let next = app
+        .launch_check_at
+        .expect("an unanswered attempt is retried");
+    assert!(
+        next.saturating_duration_since(std::time::Instant::now())
+            <= std::time::Duration::from_secs(2),
+        "the retry must follow within a second or so, not a full interval"
+    );
+
+    app.updater.feed(crate::updater::Event::Failed {
+        message: "the feed did not answer".to_string(),
+    });
+    app.launch_check_at = Some(std::time::Instant::now());
+    app.poll();
+    assert!(
+        app.launch_check_at.is_none(),
+        "once the updater has answered, the launch tries stop"
+    );
+
+    let mut quiet = fresh_app();
+    quiet.updater = crate::updater::Updater::new();
+    quiet.updater_backend = Box::new(RecordingBackend {
+        seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+    });
+    for _ in 0..6 {
+        quiet.launch_check_at = Some(std::time::Instant::now());
+        quiet.poll();
+    }
+    assert!(
+        quiet.launch_check_at.is_none(),
+        "the launch tries must be bounded, not endless"
     );
 }

@@ -58,7 +58,12 @@ const SUGGESTIONS: i64 = 8;
 
 const QUIT_ROUTING_BUDGET: u8 = 40;
 
-const LAUNCH_CHECK_DELAY: Duration = Duration::ZERO;
+const LAUNCH_CHECK_DELAYS: [Duration; 4] = [
+    Duration::ZERO,
+    Duration::from_secs(1),
+    Duration::from_secs(3),
+    Duration::from_secs(7),
+];
 
 const MODE_SETTLE: Duration = Duration::from_millis(1_500);
 
@@ -669,6 +674,7 @@ pub struct App {
     leave_after_update_run: bool,
     dismissed_update_status: Option<&'static str>,
     launch_check_at: Option<std::time::Instant>,
+    launch_check_step: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -1397,7 +1403,8 @@ impl App {
             update_run: crate::updater::CheckRun::from_environment(),
             leave_after_update_run: false,
             dismissed_update_status: None,
-            launch_check_at: Some(std::time::Instant::now() + LAUNCH_CHECK_DELAY),
+            launch_check_at: Some(std::time::Instant::now()),
+            launch_check_step: 0,
         };
         app.sync_language_inputs();
         app.reload();
@@ -3476,6 +3483,15 @@ impl App {
             let Some(event) = crate::updater::Updater::decode(&document) else {
                 continue;
             };
+            if matches!(
+                event,
+                crate::updater::Event::UpToDate { .. }
+                    | crate::updater::Event::Found { .. }
+                    | crate::updater::Event::Failed { .. }
+                    | crate::updater::Event::Ready { .. }
+            ) {
+                self.launch_check_at = None;
+            }
             let _ = self.updater.feed(event);
         }
     }
@@ -3484,12 +3500,20 @@ impl App {
         let Some(at) = self.launch_check_at else {
             return;
         };
-        if std::time::Instant::now() < at {
+        let now = std::time::Instant::now();
+        if now < at {
             return;
         }
-        self.launch_check_at = None;
+        if !matches!(self.updater.status(), crate::updater::UpdateStatus::Idle) {
+            self.launch_check_at = None;
+            return;
+        }
         let actions = self.updater.request_background_check();
         self.perform_update_actions(actions);
+        self.launch_check_step += 1;
+        self.launch_check_at = LAUNCH_CHECK_DELAYS
+            .get(self.launch_check_step)
+            .map(|delay| now + *delay);
     }
 
     fn drive_update_run(&mut self) {
