@@ -209,10 +209,16 @@ impl Updater {
             UpdateStatus::UpToDate => Some(format!(
                 "Screenroom {CURRENT_VERSION} is the newest version."
             )),
-            UpdateStatus::Available => self
-                .update
-                .as_ref()
-                .map(|update| format!("Screenroom {} is available.", update.display_version)),
+            UpdateStatus::Available => self.update.as_ref().map(|update| {
+                if update.informational {
+                    format!(
+                        "Screenroom {} is announced; this item carries no download.",
+                        update.display_version
+                    )
+                } else {
+                    format!("Screenroom {} is available.", update.display_version)
+                }
+            }),
             UpdateStatus::Downloading { received, expected } => {
                 Some(download_label(*received, *expected))
             }
@@ -258,6 +264,13 @@ impl Updater {
 
     pub fn may_install(&self, playback: Playback) -> bool {
         if playback == Playback::Playing {
+            return false;
+        }
+        if self
+            .update
+            .as_ref()
+            .is_some_and(|update| update.informational)
+        {
             return false;
         }
         matches!(
@@ -1189,6 +1202,31 @@ mod tests {
         assert_eq!(updater.primary_action(), Some(Action::CancelDownload));
         updater.feed(Event::Installing);
         assert_eq!(updater.primary_action(), None);
+    }
+
+    #[test]
+    fn an_information_only_item_is_never_offered_for_installation() {
+        let mut updater = Updater::new();
+        updater.feed(Event::Found {
+            update: AvailableUpdate {
+                version: "9.9.9".to_string(),
+                display_version: "9.9.9".to_string(),
+                notes: String::new(),
+                critical: false,
+                informational: true,
+                feed_signing: "succeeded".to_string(),
+            },
+            stage: Stage::NotDownloaded,
+            user_initiated: true,
+        });
+        assert!(!updater.may_install(Playback::Idle));
+        assert!(updater.request_install(Playback::Idle).is_empty());
+        assert!(
+            updater
+                .headline()
+                .unwrap_or_default()
+                .contains("no download")
+        );
     }
 
     #[test]

@@ -255,6 +255,7 @@ static NSString *ScreenroomUpdaterSigningStatusName(SPUAppcastSigningValidationS
     }];
 
     if (appcastItem.isInformationOnlyUpdate) {
+        [self resolveUpdateReply:SPUUserUpdateChoiceDismiss];
         return;
     }
     if (!state.userInitiated && self.updater.automaticallyDownloadsUpdates) {
