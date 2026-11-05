@@ -987,7 +987,7 @@ this backlog was written. Its design decision is
 | Serve the feed from GitHub Releases | **BLOCKED** | a public release needs a cleared libmpv; `LICENSING.md` governs |
 | Developer ID signature and notarisation | **BLOCKED** | no Apple certificate on this machine, and none is to be purchased |
 | The `Update now` action | **COMPLETE** | the action installs on demand without relaunching; only a person clicking the drawn button is unobserved |
-| A GitHub Actions run of the updated release job | **PENDING** | the workflow has only been linted and read, never executed by GitHub |
+| A GitHub Actions run of the updated release job | **COMPLETE** | `Release` run 41961636886 built, packaged and signed the feed on GitHub's runner; nothing was published |
 
 The updater does not change any other row: playback, scanning, subtitles, casting,
 backup and the design system are untouched, and `cargo test --workspace` is green.

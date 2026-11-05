@@ -385,14 +385,16 @@ real installed binary with `SCREENROOM_WINDOW=hidden`:
 
 **Not covered by this gate, and not claimed:**
 
-- a release served from `github.com`'s `releases/latest/download` redirect (the URL
-  is what the bundle carries; the redirect itself has not been exercised, because a
-  public release is blocked by `LICENSING.md`);
 - a paid Developer ID signature, hardened runtime or notarisation (no certificate
   exists on this machine);
 - a person pressing the visible "Update now" button: the action it sends is
   exercised headlessly and installs correctly, but no one has clicked it on screen;
-- a GitHub Actions run of the updated workflow.
+- a release served from GitHub. The GitHub-hosted packaging job *has* run
+  (`Release` run 41961636886, 2026-11-05): it fetched the pinned framework,
+  archived the bundle and produced a signed `appcast.xml` whose enclosure points at
+  `releases/download/v0.1.0/Screenroom-0.1.0-macos-arm64.zip`. Nothing was
+  published — no tag exists — so the `releases/latest/download` redirect is still
+  unexercised.
 
 Those stay PENDING or BLOCKED. A passing local run is not a published release.
 

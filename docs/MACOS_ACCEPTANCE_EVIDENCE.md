@@ -306,7 +306,18 @@ and could not be validated` for the altered archive, and `1000 The update feed i
 improperly signed and could not be validated` for the unsigned feed. Both arrived
 before any extraction, which is what `SUVerifyUpdateBeforeExtraction` promises.
 
+**The GitHub-hosted packaging lane ran** — `Release`, run `41961636886` on
+2026-11-05, after a first run whose Rust tests hit a flaky SIGSEGV in
+`screenroom-player --test worker` and passed on rerun. Every step succeeded:
+"Fetch the pinned update framework", "Name the release this run carries", "Build
+the application and its manifest fragment" and "Sign the update feed". The uploaded
+artefacts were `Screenroom-0.1.0-macos-arm64.zip` (11,584,058 bytes),
+`manifest-macos-arm64.json`, and an `appcast.xml` carrying the `sparkle-signatures`
+block with its enclosure at
+`https://github.com/Dropout-Studio-Co/screenroom/releases/download/v0.1.0/Screenroom-0.1.0-macos-arm64.zip`.
+`Publish the release` was skipped, as it must be for a push to `main`.
+
 **Not run, and not claimed:** an update delivered from a real GitHub release
 (publication is BLOCKED by [`LICENSING.md`](LICENSING.md)), a Developer ID signature,
-notarisation, a person clicking the visible "Update now" button (the action it sends
-is proved headlessly), and any GitHub Actions run of the new steps.
+notarisation, and a person clicking the visible "Update now" button (the action it
+sends is proved headlessly).

@@ -420,9 +420,15 @@ The repository has never published a release, so the first tag is a bootstrap:
 3. Never reuse a tag with different bytes: the publish job downloads an existing
    asset and compares it, and refuses to replace it.
 
-**None of this has been executed.** No release, no tag and no Actions run exists,
+**The packaging and signing half of this has run.** `Release` run 41961636886
+(2026-11-05, a push to `main`) executed every `macos` step — fetch the pinned
+framework, name the release, build and archive, sign the feed — and uploaded a
+signed `appcast.xml` whose enclosure points at `releases/download/v0.1.0/…`.
+`Publish the release` was skipped, correctly.
+
+**No release has been created, no tag exists and nothing has been published**,
 because publishing the current bundle redistributes a GPL-linked libmpv
-([`LICENSING.md`](LICENSING.md)). The local equivalent is
+([`LICENSING.md`](LICENSING.md)). The local equivalent of the whole chain is
 `scripts/check-updater.sh`, which does exactly the same packaging, signing and
 installation against `127.0.0.1`.
 

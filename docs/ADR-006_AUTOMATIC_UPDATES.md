@@ -128,8 +128,10 @@ component inside-out without another code change; notarisation then needs
 `notarytool` credentials and a workflow step that does not exist yet.
 
 A public release also still needs a legally cleared libmpv (see `LICENSING.md`).
-The updater is proved end to end against a local signed feed, which is the same
-code path a GitHub release would use.
+The updater is proved end to end against a local signed feed, which is the same code
+path a GitHub release would use, and GitHub's own hosted runner has built the
+bundle and signed the appcast (`Release` run 41961636886). No tag, release or
+published asset exists.
 
 ## Evidence
 
