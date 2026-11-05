@@ -129,7 +129,7 @@ release_dir="dist/release"
 rm -rf "$release_dir"
 ./scripts/release.sh macos --out "$release_dir" >/dev/null 2>&1 || fail "packaging failed"
 
-key="$(mktemp "${TMPDIR:-/tmp}/screenroom-ed.XXXXXX")"
+key="$(mktemp -d "${TMPDIR:-/tmp}/screenroom-ed.XXXXXX")/ed25519.key"
 cleanup() { rm -f "$key"; }
 trap cleanup EXIT
 
