@@ -162,6 +162,10 @@ if [ "$publish" = "0" ]; then
   exit 0
 fi
 
+if [ "$(git rev-parse HEAD)" != "$(git rev-parse "@{u}" 2>/dev/null || git rev-parse HEAD)" ]; then
+  git push origin HEAD >/dev/null 2>&1 || fail "the version commit could not be pushed"
+fi
+
 notes="Screenroom $version."
 gh release create "v$version" \
   "$zip" \
