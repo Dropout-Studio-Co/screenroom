@@ -115,7 +115,7 @@ PYTHON
 
 cargo build --quiet -p screenroom-desktop >/dev/null 2>&1 || fail "the tree does not build at $version"
 
-if [ -z "$(git status --porcelain)" ] || ! git diff --quiet -- Cargo.toml Cargo.lock; then
+if ! git diff --quiet -- Cargo.toml Cargo.lock; then
   git add Cargo.toml Cargo.lock
   git -c core.hooksPath=/dev/null commit -q -m "chore(release): $version"
   printf '==> committed %s\n' "$version"
