@@ -31,7 +31,7 @@ cleanup() { rm -rf "$work"; }
 trap cleanup EXIT
 
 printf 'fetching sparkle %s\n' "$version"
-curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -o "$work/Sparkle.tar.xz" "$url"
+curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 --proto '=https' --tlsv1.2 -o "$work/Sparkle.tar.xz" "$url"
 printf '%s  %s\n' "$digest" "$work/Sparkle.tar.xz" | shasum -a 256 -c - >/dev/null \
   || fail "the Sparkle archive does not match its pinned sha256; nothing was installed"
 

@@ -1,5 +1,17 @@
 # Release and deployment pipeline
 
+> **Current state (2026-11-05, owner decision).** No CI runs on the owner's Mac:
+> the self-hosted runner `screenroom-macbook` was unregistered and its service
+> removed, and `SCREENROOM_MACOS_RUNNER` was deleted, so `ci.yml` never runs.
+> `release.yml` is **manual only** (`workflow_dispatch`); a push or a tag no longer
+> starts it. `ci-linux.yml` is the only automatic check, on every push to `main`
+> and every pull request, on GitHub's hosted runners. Source downloads in
+> `scripts/build-lgpl-media.sh` and `scripts/fetch-sparkle.sh` retry on any
+> error (`--retry-all-errors`), which is what failed the v0.1.5 and v0.1.6 tag
+> runs (`curl: (35) Connection reset by peer`), not the test time. Releases are
+> published by `scripts/publish-update.sh`. Statements below about push and tag
+> triggers or the self-hosted macOS gate are history.
+
 - **Date:** 2026-11-02, revised the same day when packaging moved to a hosted runner.
 - **Owner of those files:** `.github/workflows/`, `scripts/release.sh`, `scripts/ship.sh`
 - **Decision it implements:** **packaging runs on GitHub-hosted runners; only the
@@ -63,8 +75,8 @@ No secrets. It needs `cargo`/`rustup`, `node` and `pnpm` on the runner.
 
 ### `release.yml`
 
-Runs on a push to `main`, on a pushed tag matching `v*`, and by hand
-(`workflow_dispatch`, with a `publish` checkbox that is off unless ticked).
+Runs only by hand (`workflow_dispatch`, with a `publish` checkbox that is off
+unless ticked), on GitHub's hosted runners.
 
 1. `ci` — calls `ci-linux.yml` as a reusable workflow, so the release cannot start
    on a tree that has not passed, and it does not depend on any self-hosted machine.

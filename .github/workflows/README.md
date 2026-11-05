@@ -1,5 +1,10 @@
 # Workflows
 
+Nothing runs on the owner's Mac. `ci-linux.yml` is the only automatic check;
+`release.yml` runs only when started by hand; the self-hosted runner was removed on
+2026-11-05, so the `ci.yml`, `windows` and `tv` jobs stay idle. Releases come from
+`scripts/publish-update.sh`.
+
 The pipeline for Screenroom's three devices. The full setup, the secrets and the
 honest limits are in [`docs/RELEASE_PIPELINE.md`](../../docs/RELEASE_PIPELINE.md);
 this file is the short version.
@@ -14,7 +19,7 @@ this file is the short version.
   `SCREENROOM_MACOS_RUNNER=true`, by hand, or as a reusable workflow. It does not
   trigger on a push, so an offline Mac leaves no queued check behind.
   **No secrets.**
-- `release.yml` — on a push to `main`, on a `v*` tag, and by hand: fetches the
+- `release.yml` — by hand only, on GitHub's hosted runners: fetches the
   pinned Sparkle framework, builds and archives the macOS `.app` on GitHub's hosted
   `macos-latest` runner, signs the update appcast, builds Windows when that runner
   exists, packages the television when enabled, and publishes GitHub Release

@@ -42,7 +42,7 @@ mkdir -p "$frameworks"
 fetch() {
   local url="$1" digest="$2" target="$3"
   if [ ! -f "$target" ]; then
-    curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -o "$target.part" "$url"
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 --proto '=https' --tlsv1.2 -o "$target.part" "$url"
     mv "$target.part" "$target"
   fi
   printf '%s  %s\n' "$digest" "$target" | shasum -a 256 -c - >/dev/null \
