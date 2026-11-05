@@ -8,6 +8,8 @@ cd "$root"
 version=""
 bump="patch"
 publish=1
+push_first=0
+only_if_changed=0
 
 usage() {
   cat >&2 <<'TEXT'
@@ -21,6 +23,11 @@ copy at the new version. The installed application then offers the update itself
   --patch       bump the last number (default)
   --minor       bump the middle number
   --dry-run     build and sign everything, print the result, publish nothing
+  --push        push the current commit first when it is ahead of its upstream
+  --if-changed  publish only when the application changed since the last release
+
+The last two are what the project rule uses after every commit, so an agent can run
+this unconditionally without creating empty or duplicate releases.
 TEXT
 }
 
@@ -46,6 +53,14 @@ while [ "$#" -gt 0 ]; do
       ;;
     --dry-run)
       publish=0
+      shift
+      ;;
+    --push)
+      push_first=1
+      shift
+      ;;
+    --if-changed)
+      only_if_changed=1
       shift
       ;;
     -h|--help)
@@ -82,6 +97,23 @@ if [ -z "$version" ]; then
 fi
 
 printf '==> %s -> %s\n' "$current" "$version"
+
+if [ "$push_first" = "1" ] && [ "$publish" = "1" ]; then
+  if [ -n "$(git rev-list '@{u}..HEAD' 2>/dev/null)" ]; then
+    git push origin HEAD >/dev/null 2>&1 || fail "the current commit could not be pushed"
+    printf '==> pushed %s\n' "$(git rev-parse --short HEAD)"
+  fi
+fi
+
+if [ "$only_if_changed" = "1" ] && [ "$publish" = "1" ]; then
+  last_release="$(gh release list --limit 1 --json tagName --jq '.[0].tagName // ""' 2>/dev/null || true)"
+  if [ -n "$last_release" ] && git rev-parse -q --verify "$last_release" >/dev/null 2>&1; then
+    if git diff --quiet "$last_release" HEAD -- apps crates Cargo.toml Cargo.lock assets; then
+      printf 'nothing in the application changed since %s; no release\n' "$last_release"
+      exit 0
+    fi
+  fi
+fi
 
 if [ "$publish" = "1" ]; then
   git fetch --quiet origin
