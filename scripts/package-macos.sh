@@ -195,7 +195,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>SUFeedURL</key><string>$feed_url</string>
   <key>SUPublicEDKey</key><string>$public_key</string>
   <key>SUEnableAutomaticChecks</key><true/>
-  <key>SUScheduledCheckInterval</key><integer>86400</integer>
+  <key>SUScheduledCheckInterval</key><integer>3600</integer>
   <key>SUAutomaticallyUpdate</key><true/>
   <key>SUAllowsAutomaticUpdates</key><true/>
   <key>SUVerifyUpdateBeforeExtraction</key><true/>

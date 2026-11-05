@@ -59,9 +59,10 @@ is the application's own interface, not a dialog.
 
 ### 3. What the owner sees, and when nothing may happen
 
-- One scheduled check a day (`SUScheduledCheckInterval` 86400) plus one quiet
+- One scheduled check an hour (`SUScheduledCheckInterval` 3600) plus one quiet
   background check eight seconds after launch, so a new release appears without
-  anyone opening Settings.
+  anyone opening Settings. Hourly costs one small request and means a long-running
+  session notices a release the same day.
 - A manual **Check now** in Settings → Updates (keyboard operable like every other
   Settings row), plus a single-line banner above the content on Home, Library,
   Detail and Settings.
@@ -72,9 +73,10 @@ is the application's own interface, not a dialog.
   arrives in the background and installs **when Screenroom quits**, which is the
   documented Sparkle behaviour for a downloaded update that is dismissed. The
   install happens after `stop_playback()` has written the checkpoint.
-- **Update now** closes Screenroom and installs; it does not relaunch. The delegate
-  `updaterShouldRelaunchApplication` answers `NO`, so a restart is never imposed.
-  Reopening the app shows the new version.
+- **Update now** is the whole update: Screenroom closes, Sparkle installs, and the
+  new version reopens by itself. That relaunch is the delegate's answer only for an
+  explicit click; an install deferred to quit or done in the background never
+  relaunches, so nothing restarts behind the owner's back.
 - Preferences are Sparkle's own (`automaticallyChecksForUpdates`,
   `automaticallyDownloadsUpdates` in `NSUserDefaults`), read back through the
   bridge. They are **not** duplicated in SQLite: two stores for one switch is how

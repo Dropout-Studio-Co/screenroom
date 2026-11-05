@@ -683,13 +683,20 @@ mod sparkle {
 
     impl SparkleBackend {
         pub fn open(feed_override: Option<&str>) -> Result<Self, String> {
-            let configuration = match feed_override {
-                Some(url) => format!(
-                    "{{\"feed_url\":{}}}",
-                    serde_json::Value::String(url.to_string())
-                ),
-                None => "{}".to_string(),
-            };
+            let mut configuration = serde_json::Map::new();
+            if let Some(url) = feed_override {
+                configuration.insert(
+                    "feed_url".to_string(),
+                    serde_json::Value::String(url.to_string()),
+                );
+            }
+            if std::env::var("SCREENROOM_UPDATE_NO_RELAUNCH").is_ok_and(|value| value == "1") {
+                configuration.insert(
+                    "relaunch_after_install".to_string(),
+                    serde_json::Value::Bool(false),
+                );
+            }
+            let configuration = serde_json::Value::Object(configuration).to_string();
             let configuration = CString::new(configuration).map_err(|error| error.to_string())?;
             let handle =
                 unsafe { screenroom_updater_create(configuration.as_ptr(), receive_event) };

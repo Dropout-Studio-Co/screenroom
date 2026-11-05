@@ -523,7 +523,7 @@ bool screenroom_updater_install_now(ScreenroomUpdaterHandle handle)
         return false;
     }
     ScreenroomUpdateController *controller = (__bridge ScreenroomUpdateController *)handle;
-    controller.relaunchAfterInstall = NO;
+    controller.relaunchAfterInstall = YES;
     return screenroom_updater_choose(handle, ScreenroomUpdateChoiceInstall);
 }
 
