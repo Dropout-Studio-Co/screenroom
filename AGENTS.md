@@ -309,6 +309,30 @@ cargo run -p screenroom-core --example prepare_library -- LIB.DB MEDIA_ROOT
 python3 scripts/no_comments.py check         # the no-comments rule, lexed per language
 ```
 
+## Every application change is published, by the agent
+
+**Rule (2026-11-05, owner): the agent publishes the update; the owner never does it by
+hand.** After any commit that changes the application, and after pushing it, run:
+
+```bash
+scripts/publish-update.sh --push --if-changed
+```
+
+It pushes the commit, bumps the version, builds the LGPL media stack if needed,
+packages, signs the appcast from the login keychain, publishes the GitHub release
+with the corresponding source, and reinstalls this Mac's copy. The installed app
+then updates itself on its next launch.
+
+- `--if-changed` makes it safe to run after every commit: it exits without a release
+  when nothing under `apps/`, `crates/`, `Cargo.*` or `assets/` moved since the last
+  one, so documentation, decisions and script-only commits publish nothing.
+- A version is never reused and a published asset is never replaced; the command
+  refuses a dirty tree and an existing release.
+- It waits for the self-rebuild lock, so it can follow a commit immediately.
+- Do not ask the owner whether to publish, and do not leave an application change
+  unpublished at the end of a session. If publishing is impossible (no network, the
+  keychain locked), say so plainly and leave the commit pushed.
+
 ## The installed macOS app rebuilds itself
 
 On this MacBook every relevant commit rebuilds and reinstalls the application at

@@ -153,6 +153,13 @@ if ! git diff --quiet -- Cargo.toml Cargo.lock; then
   printf '==> committed %s\n' "$version"
 fi
 
+for _ in $(seq 1 180); do
+  if scripts/rebuild-app.sh --status 2>/dev/null | grep -q "lock: *free"; then
+    break
+  fi
+  sleep 1
+done
+
 if [ ! -f vendor/lgpl/frameworks/libmpv.2.dylib ]; then
   scripts/build-lgpl-media.sh >/dev/null 2>&1 || fail "the LGPL media stack could not be built"
 fi
