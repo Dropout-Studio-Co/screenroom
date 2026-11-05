@@ -115,13 +115,16 @@ jobs:
           echo "XDG_RUNTIME_DIR=$RUNNER_TEMP/runtime" >> "$GITHUB_ENV"
 
       - name: Run the core and player tests
+        timeout-minutes: 30
         run: |
           cargo test --workspace --all-targets --exclude screenroom-desktop \
             --no-fail-fast -- \
+            --test-threads=1 \
             --skip audio_is_consumed_in_real_time_without_drifting \
             --skip resume_position_is_honoured_when_loading
 
       - name: Run the desktop tests one at a time
+        timeout-minutes: 30
         run: |
           cargo test -p screenroom-desktop --all-targets --no-fail-fast -- \
             --test-threads=1 \
