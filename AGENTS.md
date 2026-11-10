@@ -390,6 +390,11 @@ whatever is on top of it, so on a multi-display desktop it can silently contain 
 different application — including the owner's own viewing. If a capture is not
 Screenroom's UI, delete it; never keep it as evidence.
 
+**Trail rebuilds are automatic.** The graph refreshes before each query; never run
+`trail build` by hand after a change. Only a genuinely missing map (first query in a fresh
+checkout, or an explicit failure) may be recovered with a single build. This rule sits outside
+the generated block below, so it survives a Trail wiring refresh.
+
 <!-- trail:start -->
 ## Trail — repo context graph
 
@@ -428,6 +433,6 @@ range before finalizing. Only open source files when a node genuinely lacks a
 needed detail, and then at the exact file:line the node points to — never
 re-read whole files.
 
-After big code changes, refresh the graph with `trail build` (deterministic,
-no API key, $0).
+The graph refreshes automatically before each query, so no manual rebuild is
+needed after a big change — just ask again.
 <!-- trail:end -->
