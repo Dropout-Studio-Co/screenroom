@@ -428,6 +428,6 @@ range before finalizing. Only open source files when a node genuinely lacks a
 needed detail, and then at the exact file:line the node points to — never
 re-read whole files.
 
-After big code changes, refresh the graph with `trail build` (deterministic,
-no API key, $0).
+The graph refreshes automatically before each query, so no manual rebuild is
+needed after a big change — just ask again.
 <!-- trail:end -->
