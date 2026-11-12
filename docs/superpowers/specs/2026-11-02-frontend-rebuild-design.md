@@ -119,6 +119,10 @@ Mockups are the visual source of truth, produced in Paper before implementation:
 `Screenroom / Inventive yew` — artboards `01 Home`, `02 Library`, `03 Detail`,
 `04 Player`, `05 Settings`. Every measurement below is taken from them.
 
+> **2026-11-12:** Paper is retired and that file is no longer reachable. The
+> measurements in this section are now the visual source of truth; any new or
+> revised mockup is made with the pen.dev CLI (headless, `.pen` files) instead.
+
 ### 7.1 Shell
 
 A 76 px top bar, transparent over artwork and solid `#171717` elsewhere: wordmark
