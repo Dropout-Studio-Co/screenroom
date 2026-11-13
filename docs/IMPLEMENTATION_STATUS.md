@@ -63,7 +63,7 @@ valve that keeps the surface pool from starving if a completion callback is ever
 (wgpu 27 exposes no render-pass submission callback, so a per-draw lease is not
 available), and subtitle labels are ellipsized from an estimated glyph width while the
 row itself lets the label fill and clip so the action can never be pushed out. Plan and reasoning:
-[`superpowers/plans/2026-11-04-gpu-sync-and-final-review.md`](superpowers/plans/2026-11-04-gpu-sync-and-final-review.md).
+[`plans/2026-11-04-gpu-sync-and-final-review.md`](plans/2026-11-04-gpu-sync-and-final-review.md).
 Tests: `a_trim_keeps_the_sample_lease_that_releases_the_surface` and
 `a_read_is_outstanding_until_it_is_released`.
 

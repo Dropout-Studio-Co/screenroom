@@ -2,7 +2,7 @@
 
 How the desktop shell is composed, what the five screens are, how the layout
 responds to window width, and how to verify any of it. The design rationale is
-in [`superpowers/specs/2026-11-02-frontend-rebuild-design.md`](superpowers/specs/2026-11-02-frontend-rebuild-design.md);
+in [`specs/2026-11-02-frontend-rebuild-design.md`](specs/2026-11-02-frontend-rebuild-design.md);
 the design-system rules it obeys are in [`DESIGN.md`](DESIGN.md) and
 [`DROPOUT_DESIGN_INTEGRATION.md`](DROPOUT_DESIGN_INTEGRATION.md). Where the spec
 and `DESIGN.md`'s "Primary information architecture and screens" disagree about
