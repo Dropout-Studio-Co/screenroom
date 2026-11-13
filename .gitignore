@@ -98,8 +98,5 @@ Thumbs.db
 __pycache__/
 *.pyc
 
-# Working artifacts for plan execution (ledgers, briefs, review packages).
-.superpowers/
-
 # The LGPL media build output is produced locally, never committed.
 /vendor/lgpl/

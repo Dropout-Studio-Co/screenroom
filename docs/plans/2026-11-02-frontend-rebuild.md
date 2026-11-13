@@ -1,6 +1,5 @@
 # Screenroom frontend rebuild Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Rebuild the macOS client's shell and five screens into a media application — hero, rails, poster-first cards — in the Dropout Design System's black-and-white language, with no behaviour lost.
 
@@ -8,7 +7,7 @@
 
 **Tech Stack:** Rust edition 2024, iced 0.14 (adding the `canvas` feature for vector icons), wgpu 27, the pinned Dropout DS tokens already in `apps/desktop/src/design/ds_pinned.rs`, Inter (SIL OFL) bundled as an asset.
 
-**Spec:** `docs/superpowers/specs/2026-11-02-frontend-rebuild-design.md`
+**Spec:** `docs/specs/2026-11-02-frontend-rebuild-design.md`
 
 ## Global Constraints
 
