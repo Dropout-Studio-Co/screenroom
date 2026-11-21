@@ -32,6 +32,12 @@ use crate::video_surface::Frame;
 
 const PLAYER_TICK: Duration = Duration::from_millis(16);
 
+pub const CHROME_LOCK_ENV: &str = "SCREENROOM_CHROME_LOCK";
+
+fn chrome_lock_holds(value: Option<&str>) -> bool {
+    value.is_some_and(|value| value.trim() == "1")
+}
+
 const STATUS_TICK: Duration = Duration::from_millis(250);
 
 const INITIAL_WINDOW_WIDTH: f32 = 1280.0;
@@ -4944,7 +4950,9 @@ impl App {
     }
 
     fn player_chrome_held(&self) -> bool {
-        self.track_menu_open.is_some() || !self.pointer_buttons.is_empty()
+        chrome_lock_holds(std::env::var(CHROME_LOCK_ENV).ok().as_deref())
+            || self.track_menu_open.is_some()
+            || !self.pointer_buttons.is_empty()
     }
 
     fn set_chrome(&mut self, visible: bool) {
@@ -7461,6 +7469,19 @@ mod tests {
         assert_eq!(
             window_size_from(None, Some(" ")),
             iced::Size::new(INITIAL_WINDOW_WIDTH, 800.0)
+        );
+    }
+
+    #[test]
+    fn the_chrome_lock_is_off_unless_it_is_asked_for_exactly() {
+        assert!(!chrome_lock_holds(None));
+        assert!(!chrome_lock_holds(Some("")));
+        assert!(!chrome_lock_holds(Some("0")));
+        assert!(!chrome_lock_holds(Some("maybe")));
+        assert!(chrome_lock_holds(Some("1")));
+        assert!(
+            chrome_lock_holds(Some(" 1 ")),
+            "a capture session may pass the value with whitespace around it"
         );
     }
 
