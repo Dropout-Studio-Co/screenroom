@@ -476,6 +476,27 @@ The pipeline is ready for a real certificate without a code change:
 cannot pretend to notarise an ad-hoc build. It has never been executed here, because
 no such certificate exists; it is reported as PENDING, never as passed.
 
+### Dependency review, before the command
+
+Every release and every dependency pass runs the register in
+[`DEPENDENCY_RISK.md`](DEPENDENCY_RISK.md). It covers all of `Cargo.lock`, states
+which advisories are in the macOS binary and which are only in a target this product
+does not build, and carries the last review's date and result.
+
+```bash
+cargo tree -i lru            # then paste, ttf-parser
+cargo tree -i zbus_names --target all   # and zvariant, zvariant_derive, pin-utils
+cargo update --dry-run
+```
+
+The advisory set itself comes from the OSV batch query over `Cargo.lock` in
+`DEPENDENCY_RISK.md` §5, or from `cargo audit` when it is installed, which it is
+not on this machine.
+
+The gate: no unpatched memory-safety advisory outside the documented iced stack. A
+new one there is a defect to fix, not a row to record. A release with no review
+recorded in that file is not ready to publish.
+
 ### The one command
 
 ```bash
