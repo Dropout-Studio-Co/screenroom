@@ -400,6 +400,17 @@ and **Import…** stays inside the window even at the 640×480 minimum.
    6-column Library the second row's cards start at different heights. Each card
    still contains its own title and caption; nothing overlaps.
 
+### One interference, recorded
+
+Every launch in this pass used `open -g` and kept the frontmost application
+unchanged — except the last one. The final smoke launch of the release build at
+20:41, made while the owner was using another application, took the foreground for
+about ten seconds before the application was quit. No input was sent to it, nothing
+was typed and no other window moved, but the owner's own frontmost window lost focus
+once. Nothing else was launched after that. It is recorded here rather than left out
+because a capture pass that never disturbs the desktop is the claim, and this run
+did disturb it once.
+
 ### Subjective limits, named
 
 Whether a film *sounds* right, whether a poster *looks* right to its owner, and
