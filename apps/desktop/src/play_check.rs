@@ -9,7 +9,8 @@ pub const WINDOW_ENV: &str = "SCREENROOM_WINDOW";
 pub const FOREGROUND_ENV: &str = "SCREENROOM_ALLOW_FOREGROUND";
 pub const DEFAULT_SECONDS: f64 = 15.0;
 pub const MIN_SECONDS: f64 = 5.0;
-pub const MAX_SECONDS: f64 = 300.0;
+pub const MAX_SECONDS: f64 = 1800.0;
+pub const SANITY_CEILING_SECONDS: f64 = 7200.0;
 
 pub fn requested() -> bool {
     std::env::var_os(REPORT_ENV).is_some()
@@ -80,6 +81,40 @@ pub fn draws() -> u64 {
     DRAWS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FrameCounters {
+    pub generations_published: u64,
+    pub generations_consumed: u64,
+    pub pending_publishes: u64,
+    pub publish_wait_max_ms: u64,
+    pub fence_timeouts: u64,
+    pub tail_waits: u64,
+    pub tear_samples: u64,
+    pub tear_mismatches: u64,
+    pub stale_repeats: u64,
+}
+
+#[cfg(target_os = "macos")]
+pub fn frame_counters() -> FrameCounters {
+    let stats = screenroom_player::gl_render::publication_stats();
+    FrameCounters {
+        generations_published: stats.generations_published,
+        generations_consumed: stats.generations_consumed,
+        pending_publishes: stats.pending_publishes,
+        publish_wait_max_ms: stats.publish_wait_max_ms,
+        fence_timeouts: stats.fence_timeouts,
+        tail_waits: stats.tail_waits,
+        tear_samples: stats.tear_samples,
+        tear_mismatches: stats.tear_mismatches,
+        stale_repeats: stats.stale_repeats,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn frame_counters() -> FrameCounters {
+    FrameCounters::default()
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     report: PathBuf,
@@ -120,6 +155,11 @@ impl Config {
         if !seconds.is_finite() || seconds <= 0.0 {
             return Err(format!(
                 "{SECONDS_ENV} must be a positive number of seconds, got {seconds}"
+            ));
+        }
+        if seconds > SANITY_CEILING_SECONDS {
+            return Err(format!(
+                "{SECONDS_ENV} must stay inside the {SANITY_CEILING_SECONDS:.0} s sanity ceiling, got {seconds}"
             ));
         }
         if !media.is_absolute() {
@@ -541,6 +581,30 @@ impl Run {
             "uploaded counts queue.write_texture calls observed by video_surface::prepare; drawn counts RedrawRequested events from iced::window::frames"
                 .to_string(),
         );
+        let counters = frame_counters();
+        push(
+            "generations_published",
+            counters.generations_published.to_string(),
+        );
+        push(
+            "generations_consumed",
+            counters.generations_consumed.to_string(),
+        );
+        push("pending_publishes", counters.pending_publishes.to_string());
+        push(
+            "publish_wait_max_ms",
+            counters.publish_wait_max_ms.to_string(),
+        );
+        push("fence_timeouts", counters.fence_timeouts.to_string());
+        push("tail_waits", counters.tail_waits.to_string());
+        push("tear_samples", counters.tear_samples.to_string());
+        push("tear_mismatches", counters.tear_mismatches.to_string());
+        push("stale_repeats", counters.stale_repeats.to_string());
+        push(
+            "sync_note",
+            "frames are drawn into a surface, fenced and published on a later call instead of waiting for the fence inside the draw: pending_publishes counts the publications that came from that queue, publish_wait_max_ms is the worst fence-to-publication wait, fence_timeouts counts lost fences reclaimed, tail_waits counts the bounded waits that flush the last frame of a pause, and tear/stale counters only judge frames whose strips are uniform (SCREENROOM_TEAR_CHECK=1)"
+                .to_string(),
+        );
         push(
             "failure",
             self.failure.clone().unwrap_or_else(|| {
@@ -714,11 +778,34 @@ mod tests {
         let long = Config::resolve(
             Some(report.clone()),
             Some(media.clone()),
-            Some("9999".into()),
+            Some("3600".into()),
         )
         .expect("valid")
         .expect("configured");
-        assert!((long.seconds() - MAX_SECONDS).abs() < 1e-9);
+        assert!(
+            (long.seconds() - MAX_SECONDS).abs() < 1e-9,
+            "a request past the half hour cap is clamped to it rather than run for an hour"
+        );
+        let half_hour = Config::resolve(
+            Some(report.clone()),
+            Some(media.clone()),
+            Some("1800".into()),
+        )
+        .expect("valid")
+        .expect("configured");
+        assert!(
+            (half_hour.seconds() - 1800.0).abs() < 1e-9,
+            "the whole half hour 4K run must be allowed at full length"
+        );
+        assert!(
+            Config::resolve(
+                Some(report.clone()),
+                Some(media.clone()),
+                Some("7201".into())
+            )
+            .is_err(),
+            "a duration past the sanity ceiling is refused, not silently shortened"
+        );
         assert!(
             Config::resolve(
                 Some(report.clone()),
@@ -865,6 +952,28 @@ mod tests {
         );
         run.note_drawn(10, start + Duration::from_secs(2));
         assert_eq!(run.drawn_frames, 3);
+    }
+
+    #[test]
+    fn the_summary_carries_the_publication_pipeline_counters() {
+        let summary = run_with(Vec::new(), Vec::new()).summary_rows(Instant::now());
+        for key in [
+            "generations_published",
+            "generations_consumed",
+            "pending_publishes",
+            "publish_wait_max_ms",
+            "fence_timeouts",
+            "tail_waits",
+            "tear_samples",
+            "tear_mismatches",
+            "stale_repeats",
+            "sync_note",
+        ] {
+            assert!(
+                summary.contains(&format!("{key},")),
+                "the report must carry {key}: {summary}"
+            );
+        }
     }
 
     #[test]
