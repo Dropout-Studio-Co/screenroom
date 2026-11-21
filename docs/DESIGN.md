@@ -48,6 +48,7 @@ An unmistakably cinematic, quiet and fast personal film library with a high-end 
 - Back precedence: close submenu/dialog → close details → exit player to prior focused item → previous screen → confirm app exit as appropriate. MediaPlayPause and seek operations use supported registered keys; test actual remote mapping.
 - TV playback overlay must not assume web-based video stacking with AVPlay; prototype with real `object`/display rect. Use native subtitle controls only where supported and provide user-facing limitation/fallback for other formats. Pause/suspend must checkpoint progress.
 - TV app UI convention may be 1920×1080 while underlying video is decoded/displayed at 4K. Treat them as different coordinate spaces.
+- Keep essential text, controls and the focus marker inside TV safe-area margins, so overscan cannot clip them.
 
 ## Critical states (each must be designed, not an afterthought)
 
