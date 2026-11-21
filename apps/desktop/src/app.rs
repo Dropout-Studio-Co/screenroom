@@ -1078,19 +1078,44 @@ pub fn pointer_event(event: &iced::Event) -> Option<Message> {
     }
 }
 
-pub fn fit_label(label: &str, room_px: f32) -> String {
-    let mut used = 0.0_f32;
-    let mut kept = String::new();
-    for character in label.chars() {
-        let width = if character.is_ascii() { 7.0 } else { 14.0 };
-        if used + width > room_px {
-            kept.push('…');
-            return kept;
-        }
-        used += width;
-        kept.push(character);
+pub fn subtitle_label_room(window_width: f32) -> f32 {
+    (window_width - 260.0).clamp(120.0, 720.0)
+}
+
+pub fn settings_focus_request(value: &str) -> Option<usize> {
+    value.trim().parse::<usize>().ok()
+}
+
+fn subtitle_action_room() -> f32 {
+    let tokens = design::tokens();
+    let size = tokens.type_scale.micro;
+    let marker = ui::text_fit::measured_width("› ", size, ui::theme::regular());
+    let action = ui::text_fit::measured_width("Download", size, ui::theme::medium())
+        + 2.0 * tokens.spacing.field_x;
+
+    marker + action + tokens.spacing.field_x
+}
+
+pub fn subtitle_result_text(window_width: f32, result: &screenroom_core::SubtitleMatch) -> String {
+    let tokens = design::tokens();
+    let size = tokens.type_scale.micro;
+    let font = ui::theme::regular();
+
+    if window_width.is_nan() || window_width < 900.0 {
+        return format!("{} · {} cues", result.language_name, result.cues);
     }
-    kept
+
+    let name = if result.release_name.trim().is_empty() {
+        result.language_name.clone()
+    } else {
+        result.release_name.clone()
+    };
+    let suffix = format!(" · {} cues", result.cues);
+    let suffix_width = ui::text_fit::measured_width(&suffix, size, font);
+    let room = subtitle_label_room(window_width) - subtitle_action_room() - suffix_width;
+    let name = ui::text_fit::fit_measured(&name, room.max(0.0), size, font);
+
+    format!("{name}{suffix}")
 }
 
 fn motion_ticks() -> Subscription<Message> {
@@ -1417,7 +1442,10 @@ impl App {
         };
         match requested.to_string_lossy().as_ref() {
             "library" => self.navigate(Screen::Browse),
-            "settings" => self.navigate(Screen::Settings),
+            "settings" => {
+                self.navigate(Screen::Settings);
+                self.apply_requested_settings_focus();
+            }
             "detail" => {
                 if let Some(file_id) = self.browse.items.first().map(|item| item.id.clone()) {
                     self.open_detail(&file_id);
@@ -1431,6 +1459,27 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    fn requested_settings_focus() -> Option<usize> {
+        let value = std::env::var("SCREENROOM_SETTINGS_FOCUS").ok()?;
+
+        settings_focus_request(&value)
+    }
+
+    fn apply_requested_settings_focus(&mut self) -> bool {
+        let Some(index) = Self::requested_settings_focus() else {
+            return false;
+        };
+
+        self.request_settings_focus(index);
+
+        true
+    }
+
+    fn request_settings_focus(&mut self, index: usize) {
+        let len = self.settings_activations().len();
+        self.settings_focus = if len == 0 { 0 } else { index.min(len - 1) };
     }
 
     fn sync_language_inputs(&mut self) {
@@ -2321,17 +2370,7 @@ impl App {
     }
 
     fn subtitle_result_label(&self, result: &screenroom_core::SubtitleMatch) -> String {
-        if self.window_width < 900.0 {
-            return format!("{} · {} cues", result.language_name, result.cues);
-        }
-        let name = if result.release_name.trim().is_empty() {
-            result.language_name.clone()
-        } else {
-            result.release_name.clone()
-        };
-        let room = (self.window_width - 260.0).clamp(120.0, 720.0);
-        let name = fit_label(&name, room);
-        format!("{name} · {} cues", result.cues)
+        subtitle_result_text(self.window_width, result)
     }
 
     fn subtitle_enter_target(&self) -> Option<Message> {
@@ -5067,6 +5106,7 @@ impl App {
             Message::SettingsSection(section) => {
                 self.settings_section = section;
                 self.settings_focus = 0;
+                return ui::screens::settings::scroll_to(0.0);
             }
             Message::OpenUpdateSettings => {
                 let leave = self.end_viewing();
@@ -5195,6 +5235,15 @@ impl App {
                 }
                 if size.height.is_finite() && size.height > 0.0 {
                     self.window_height = size.height;
+                }
+
+                if self.screen == Screen::Settings && self.apply_requested_settings_focus() {
+                    return Task::batch([
+                        iced::window::latest()
+                            .and_then(iced::window::mode)
+                            .map(Message::ModeChanged),
+                        self.settings_scroll_task(),
+                    ]);
                 }
 
                 return iced::window::latest()
@@ -5656,10 +5705,10 @@ impl App {
             Screen::Settings => match key {
                 Key::Named(Named::Escape) => self.back(),
                 Key::Named(Named::Enter) => return self.run_settings_action(),
-                Key::Named(Named::ArrowUp) => self.move_settings_focus(false),
-                Key::Named(Named::ArrowDown) => self.move_settings_focus(true),
-                Key::Named(Named::ArrowLeft) => self.step_settings_section(false),
-                Key::Named(Named::ArrowRight) => self.step_settings_section(true),
+                Key::Named(Named::ArrowUp) => return self.move_settings_focus(false),
+                Key::Named(Named::ArrowDown) => return self.move_settings_focus(true),
+                Key::Named(Named::ArrowLeft) => return self.step_settings_section(false),
+                Key::Named(Named::ArrowRight) => return self.step_settings_section(true),
                 _ => {}
             },
             _ => match key {
@@ -6294,6 +6343,7 @@ impl App {
             rows: self.settings_rows(),
             nav: &self.nav,
             width: self.window_width,
+            focus: self.settings_focus,
             extra: Some(self.settings_detail()),
         }
         .view()
@@ -7076,7 +7126,7 @@ impl App {
         rows.into()
     }
 
-    fn step_settings_section(&mut self, forward: bool) {
+    fn step_settings_section(&mut self, forward: bool) -> Task<Message> {
         use ui::screens::settings::Section;
         let all = Section::ALL;
         let current = all
@@ -7090,13 +7140,15 @@ impl App {
         };
         self.settings_section = all[next];
         self.settings_focus = 0;
+
+        ui::screens::settings::scroll_to(0.0)
     }
 
-    fn move_settings_focus(&mut self, down: bool) {
+    fn move_settings_focus(&mut self, down: bool) -> Task<Message> {
         let len = self.settings_activations().len();
         if len == 0 {
             self.settings_focus = 0;
-            return;
+            return Task::none();
         }
         let current = self.settings_focus.min(len - 1);
         self.settings_focus = if down {
@@ -7104,6 +7156,24 @@ impl App {
         } else {
             current.saturating_sub(1)
         };
+        self.settings_scroll_task()
+    }
+
+    fn settings_scroll_task(&self) -> Task<Message> {
+        use ui::screens::settings;
+
+        let rows = self.settings_rows();
+        if rows.is_empty() {
+            return Task::none();
+        }
+
+        let width = settings::content_width(self.window_width);
+        let index = self.settings_focus.min(rows.len() - 1);
+        let offset = settings::settings_row_offset(&rows, index, width);
+        let height = settings::row_height(&rows[index], width);
+        let viewport = settings::content_viewport(self.window_height);
+
+        settings::scroll_to(settings::settings_scroll_offset(offset, viewport, height))
     }
 
     fn run_settings_action(&mut self) -> Task<Message> {
@@ -7575,6 +7645,159 @@ mod tests {
         let (position_low, position_high) = screenroom_player::SUB_POSITION_RANGE;
         assert!(position_low <= f64::from(Preferences::SUBTITLE_POSITION_MIN_PERCENT));
         assert!(position_high >= f64::from(Preferences::SUBTITLE_POSITION_MAX_PERCENT));
+    }
+
+    #[test]
+    fn a_subtitle_label_keeps_its_suffix_and_its_action_room() {
+        let result = screenroom_core::SubtitleMatch {
+            id: 12,
+            language: "bn".to_string(),
+            language_name: "Bengali".to_string(),
+            release_name: "Parasite.2019.1080p.AMZN.WEB-DL.Dual.Audio.HEVC.DDP.5.1".to_string(),
+            format: "srt".to_string(),
+            cues: 1660,
+            hearing_impaired: false,
+            ai_transcribed: false,
+            encoding: "utf-8".to_string(),
+        };
+        let tokens = design::tokens();
+        let size = tokens.type_scale.micro;
+        let font = ui::theme::regular();
+
+        for width in [640.0_f32, 900.0, 1280.0, 3440.0] {
+            let label = subtitle_result_text(width, &result);
+            let room = subtitle_label_room(width) - subtitle_action_room();
+            let measured = ui::text_fit::measured_width(&label, size, font);
+
+            assert!(label.ends_with("· 1660 cues"), "{width}px: {label}");
+            assert!(
+                measured <= room,
+                "{width}px leaves {room}px for a {measured}px label"
+            );
+        }
+
+        assert_eq!(
+            subtitle_result_text(640.0, &result),
+            "Bengali · 1660 cues",
+            "a narrow window names the language instead of the release"
+        );
+        assert!(
+            subtitle_result_text(1280.0, &result).starts_with("Parasite.2019.1080p"),
+            "a wide window names the release"
+        );
+    }
+
+    #[test]
+    fn a_multi_byte_subtitle_name_is_never_split() {
+        let result = screenroom_core::SubtitleMatch {
+            id: 13,
+            language: "ja".to_string(),
+            language_name: "Japanese".to_string(),
+            release_name: "とても長い映画の字幕ファイルの名前がここに入ります".to_string(),
+            format: "srt".to_string(),
+            cues: 24,
+            hearing_impaired: false,
+            ai_transcribed: false,
+            encoding: "utf-8".to_string(),
+        };
+
+        let label = subtitle_result_text(1000.0, &result);
+
+        assert!(label.ends_with("· 24 cues"), "{label}");
+        assert!(!label.contains('\u{FFFD}'), "{label}");
+        assert!(
+            "とても長い映画の字幕ファイルの名前がここに入ります"
+                .starts_with(label.trim_end_matches('…').trim_end_matches(" · 24 cues")),
+            "{label}"
+        );
+    }
+
+    #[test]
+    fn the_settings_focus_request_is_a_plain_number_or_nothing() {
+        assert_eq!(settings_focus_request("3"), Some(3));
+        assert_eq!(settings_focus_request(" 3\n"), Some(3));
+        assert_eq!(settings_focus_request("0"), Some(0));
+        assert_eq!(settings_focus_request("-1"), None);
+        assert_eq!(settings_focus_request("three"), None);
+        assert_eq!(settings_focus_request(""), None);
+    }
+
+    #[test]
+    fn the_settings_focus_walks_its_own_section_and_stops_at_the_end() {
+        let (mut app, _directory) = app_with(2);
+        app.navigate(Screen::Settings);
+        app.settings_section = ui::screens::settings::Section::Playback;
+        let rows = app.settings_labels().len();
+
+        assert!(rows >= 4, "Playback draws {rows} rows");
+
+        for step in 1..rows {
+            let _ = app.move_settings_focus(true);
+            assert_eq!(app.settings_focus, step, "Down reaches row {step}");
+        }
+
+        for _ in 0..5 {
+            let _ = app.move_settings_focus(true);
+        }
+        assert_eq!(
+            app.settings_focus,
+            rows - 1,
+            "the cursor stops at the last row"
+        );
+
+        for _ in 0..5 {
+            let _ = app.move_settings_focus(false);
+        }
+        assert_eq!(app.settings_focus, 0, "Up returns to the first row");
+    }
+
+    #[test]
+    fn a_settings_focus_request_never_points_past_the_drawn_rows() {
+        let (mut app, _directory) = app_with(2);
+        app.navigate(Screen::Settings);
+        app.settings_section = ui::screens::settings::Section::Playback;
+        let rows = app.settings_labels().len();
+
+        app.request_settings_focus(999);
+        assert_eq!(app.settings_focus, rows - 1);
+
+        app.request_settings_focus(1);
+        assert_eq!(app.settings_focus, 1);
+    }
+
+    #[test]
+    fn the_settings_content_scrolls_only_when_the_focused_row_is_below_the_fold() {
+        let (mut app, _directory) = app_with(2);
+        app.navigate(Screen::Settings);
+        app.settings_section = ui::screens::settings::Section::Playback;
+        app.window_width = 1280.0;
+        app.window_height = 800.0;
+
+        let rows = app.settings_rows();
+        let width = ui::screens::settings::content_width(app.window_width);
+        let viewport = ui::screens::settings::content_viewport(app.window_height);
+        let first = ui::screens::settings::settings_row_offset(&rows, 0, width);
+
+        assert_eq!(
+            ui::screens::settings::settings_scroll_offset(
+                first,
+                viewport,
+                ui::screens::settings::row_height(&rows[0], width)
+            ),
+            0.0,
+            "the first row is already visible"
+        );
+
+        let last = rows.len() - 1;
+        let offset = ui::screens::settings::settings_row_offset(&rows, last, width);
+        let height = ui::screens::settings::row_height(&rows[last], width);
+        let target = ui::screens::settings::settings_scroll_offset(offset, viewport, height);
+
+        assert!(
+            offset - target >= 0.0 && offset + height - target <= viewport,
+            "the last row must sit inside the viewport after scrolling to {target}"
+        );
+        let _ = app.settings_scroll_task();
     }
 
     #[test]

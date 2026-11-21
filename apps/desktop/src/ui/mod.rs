@@ -4,4 +4,5 @@ pub mod motion;
 pub mod route;
 pub mod screens;
 pub mod shell;
+pub mod text_fit;
 pub mod theme;

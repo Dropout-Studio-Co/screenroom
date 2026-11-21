@@ -2030,19 +2030,59 @@ fn a_subtitle_that_appears_after_the_search_stops_the_download() {
 }
 
 #[test]
-fn a_wide_label_is_measured_not_counted() {
-    let wide = "映画の字幕ファイル名がとても長い場合のテスト用ラベルです";
-    let fitted = fit_label(wide, 140.0);
-    assert!(fitted.ends_with('…'), "{fitted}");
-    let width: f32 = fitted
-        .chars()
-        .map(|c| if c.is_ascii() { 7.0 } else { 14.0 })
-        .sum();
-    assert!(width <= 140.0 + 14.0, "{width}");
+fn a_wide_subtitle_label_is_measured_not_counted() {
+    let result = screenroom_core::SubtitleMatch {
+        id: 41,
+        language: "ja".to_string(),
+        language_name: "Japanese".to_string(),
+        release_name:
+            "映画の字幕ファイル名がとても長い場合のテスト用ラベルです。Parasite.2019.1080p"
+                .to_string(),
+        format: "srt".to_string(),
+        cues: 1660,
+        hearing_impaired: false,
+        ai_transcribed: false,
+        encoding: "utf-8".to_string(),
+    };
 
-    let ascii = "Parasite.2019.1080p.AMZN.WEB-DL.Dual.Audio.HEVC";
-    let fitted = fit_label(ascii, 140.0);
-    assert!(fitted.chars().count() > 14, "{fitted}");
+    for (width, height) in [(640.0_f32, 480.0_f32), (1280.0, 800.0)] {
+        let label = subtitle_result_text(width, &result);
+        let tokens = design::tokens();
+        let room = subtitle_label_room(width) - subtitle_action_room();
+        let measured =
+            ui::text_fit::measured_width(&label, tokens.type_scale.micro, ui::theme::regular());
+
+        assert!(
+            label.ends_with("· 1660 cues"),
+            "{width}x{height} dropped the cue count: {label}"
+        );
+        assert!(
+            !label.contains('\u{FFFD}'),
+            "{width}x{height} split a character: {label}"
+        );
+        assert!(
+            measured <= room,
+            "{width}x{height}: {measured}px of label must fit {room}px beside the action"
+        );
+        assert!(
+            label.starts_with('映') || label.starts_with("Japanese"),
+            "{width}x{height} names nothing: {label}"
+        );
+    }
+
+    let ascii = screenroom_core::SubtitleMatch {
+        release_name: "Parasite.2019.1080p.AMZN.WEB-DL.Dual.Audio.HEVC".to_string(),
+        ..result
+    };
+    let wide = subtitle_result_text(1280.0, &ascii);
+    assert!(
+        wide.chars().count() > 20,
+        "a 1280px window shows the release name, got {wide}"
+    );
+    assert!(
+        wide.ends_with('…') || wide.contains("· 1660 cues"),
+        "{wide}"
+    );
 }
 
 #[test]

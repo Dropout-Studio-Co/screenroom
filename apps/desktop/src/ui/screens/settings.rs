@@ -1,11 +1,15 @@
 use crate::app::Message;
 use crate::design;
 use crate::ui::components::poster::truncate;
+use crate::ui::motion;
 use crate::ui::route::Nav;
+use crate::ui::text_fit;
 use crate::ui::theme::{self, Breakpoint, Gap, Radius};
 use iced::widget::text::Wrapping;
-use iced::widget::{Space, button, column, container, row, scrollable, slider, text};
-use iced::{Alignment, Background, Border, Element, Length, Padding, Shadow, Theme};
+use iced::widget::{
+    Id, Space, button, column, container, operation, row, scrollable, slider, text,
+};
+use iced::{Alignment, Background, Border, Color, Element, Length, Padding, Shadow, Task, Theme};
 use std::ops::RangeInclusive;
 
 pub const RAIL_WIDTH: f32 = 200.0;
@@ -51,6 +55,154 @@ const SLIDER_RAIL_HEIGHT: f32 = 3.0;
 const TOGGLE_KNOB: f32 = TOGGLE_HEIGHT - TOGGLE_INSET * 2.0;
 
 const HAIRLINE: f32 = 1.0;
+
+const LINE_HEIGHT: f32 = 1.3;
+
+pub fn focus_surface() -> Color {
+    design::tokens().palette.focus_surface
+}
+
+pub fn focus_foreground() -> Color {
+    design::tokens().palette.focus_foreground
+}
+
+pub fn row_style(focused: bool) -> container::Style {
+    container::Style {
+        background: focused.then(|| Background::Color(focus_surface())),
+        text_color: Some(if focused {
+            focus_foreground()
+        } else {
+            theme::ink()
+        }),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: theme::radius(Radius::Small).into(),
+        },
+        shadow: Shadow::default(),
+        ..container::Style::default()
+    }
+}
+
+pub fn content_id() -> Id {
+    Id::from("settings-content")
+}
+
+pub fn content_viewport(window_height: f32) -> f32 {
+    if !window_height.is_finite() {
+        return 0.0;
+    }
+
+    (window_height - content_chrome()).max(0.0)
+}
+
+fn content_chrome() -> f32 {
+    let tokens = design::tokens();
+    let title = tokens.type_scale.title * LINE_HEIGHT;
+    let status = tokens.type_scale.caption * LINE_HEIGHT + 2.0 * theme::gap(Gap::Card);
+
+    crate::ui::shell::BAR_HEIGHT
+        + theme::gap(Gap::Section)
+        + title
+        + theme::gap(Gap::Section)
+        + status
+}
+
+fn heading_band() -> f32 {
+    design::tokens().type_scale.body * LINE_HEIGHT + theme::gap(Gap::Card) + HAIRLINE
+}
+
+fn label_column(width: f32) -> f32 {
+    if width.is_finite() && width > 0.0 {
+        width.min(LABEL_COLUMN)
+    } else {
+        LABEL_COLUMN
+    }
+}
+
+fn control_height(row: &Row<'_>) -> f32 {
+    let tokens = design::tokens();
+    let line = tokens.type_scale.label * LINE_HEIGHT;
+
+    match row {
+        Row::Toggle { .. } => line.max(TOGGLE_HEIGHT),
+        Row::Action { .. } => line + 2.0 * theme::gap(Gap::Card),
+        Row::Slider { range, .. }
+            if range.start().is_finite()
+                && range.end().is_finite()
+                && range.end() > range.start() =>
+        {
+            tokens.type_scale.caption * LINE_HEIGHT
+        }
+        Row::Slider { .. } | Row::Value { .. } => line,
+    }
+}
+
+pub fn row_height(row: &Row<'_>, width: f32) -> f32 {
+    let tokens = design::tokens();
+    let column = label_column(width);
+    let mut text = text_fit::measured_height(
+        row.label(),
+        tokens.type_scale.label,
+        theme::regular(),
+        column,
+    );
+
+    if let Some(hint) = row.hint() {
+        text += theme::gap(Gap::Tight);
+        text +=
+            text_fit::measured_height(hint, tokens.type_scale.caption, theme::regular(), column);
+    }
+
+    2.0 * theme::gap(Gap::Group) + text.max(control_height(row))
+}
+
+pub fn settings_row_offset(rows: &[Row<'_>], index: usize, width: f32) -> f32 {
+    let index = index.min(rows.len().saturating_sub(1));
+    let mut offset = heading_band();
+
+    for row in rows.iter().take(index) {
+        offset += row_height(row, width) + HAIRLINE;
+    }
+
+    offset
+}
+
+pub fn settings_scroll_offset(offset: f32, viewport: f32, row_height: f32) -> f32 {
+    if !offset.is_finite() || !row_height.is_finite() {
+        return 0.0;
+    }
+
+    let offset = offset.max(0.0);
+    let viewport = if viewport.is_nan() {
+        0.0
+    } else {
+        viewport.max(0.0)
+    };
+    let row_height = row_height.max(0.0);
+
+    if offset + row_height <= viewport {
+        return 0.0;
+    }
+
+    (offset + row_height - viewport + theme::gap(Gap::Group)).max(0.0)
+}
+
+pub fn scroll_to(offset: f32) -> Task<Message> {
+    let offset = if offset.is_finite() {
+        offset.max(0.0)
+    } else {
+        0.0
+    };
+
+    operation::scroll_to::<Message>(
+        content_id(),
+        operation::AbsoluteOffset {
+            x: None,
+            y: Some(offset),
+        },
+    )
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Section {
@@ -125,6 +277,22 @@ pub enum Row<'a> {
 }
 
 impl Row<'_> {
+    pub fn label(&self) -> &str {
+        match self {
+            Row::Toggle { label, .. }
+            | Row::Value { label, .. }
+            | Row::Slider { label, .. }
+            | Row::Action { label, .. } => label,
+        }
+    }
+
+    pub fn hint(&self) -> Option<&str> {
+        match self {
+            Row::Toggle { hint, .. } | Row::Slider { hint, .. } | Row::Action { hint, .. } => *hint,
+            Row::Value { .. } => None,
+        }
+    }
+
     pub fn slider_value(&self) -> Option<f64> {
         match self {
             Row::Slider { value, range, .. } => Some(clamped(*value, range)),
@@ -159,6 +327,7 @@ pub struct Settings<'a> {
     pub rows: Vec<Row<'a>>,
     pub nav: &'a Nav,
     pub width: f32,
+    pub focus: usize,
     pub extra: Option<Element<'a, Message>>,
 }
 
@@ -237,6 +406,7 @@ impl<'a> Settings<'a> {
             .width(Length::Fill)
             .height(Length::Shrink),
         )
+        .id(content_id())
         .height(Length::Fill)
         .width(Length::Fill)
         .style(theme::scrollbar)
@@ -246,16 +416,28 @@ impl<'a> Settings<'a> {
     fn rows_element(&self) -> Element<'a, Message> {
         let mut rows = column![].width(Length::Fill);
         let last = self.rows.len().saturating_sub(1);
+        let focus = self.focus.min(last);
 
         for (index, row) in self.rows.iter().enumerate() {
-            rows = rows.push(self.row_element(row, index < last));
+            let focused = index == focus;
+            rows = rows.push(self.row_element(row, index < last && !focused, focused));
         }
 
         rows.into()
     }
 
-    fn row_element(&self, row: &Row<'a>, rule: bool) -> Element<'a, Message> {
+    fn row_element(&self, row: &Row<'a>, rule: bool, focused: bool) -> Element<'a, Message> {
         let tokens = design::tokens();
+        let ink = if focused {
+            focus_foreground()
+        } else {
+            theme::ink()
+        };
+        let muted = if focused {
+            motion::with_alpha(focus_foreground(), 0.78)
+        } else {
+            theme::muted()
+        };
 
         let (label, hint, control): (&'a str, Option<&'a str>, Element<'a, Message>) = match row {
             Row::Toggle {
@@ -263,14 +445,14 @@ impl<'a> Settings<'a> {
                 hint,
                 on,
                 message,
-            } => (*label, *hint, toggle(*on, message.clone())),
+            } => (*label, *hint, toggle(*on, message.clone(), focused)),
             Row::Value { label, value } => (
                 *label,
                 None,
                 text(truncate(value, LABEL_CHARS).to_string())
                     .size(tokens.type_scale.label)
                     .font(theme::regular())
-                    .color(theme::muted())
+                    .color(muted)
                     .into(),
             ),
             Row::Slider {
@@ -279,20 +461,28 @@ impl<'a> Settings<'a> {
                 value,
                 range,
                 message,
-            } => (*label, *hint, slider_control(*value, range, *message)),
+            } => (
+                *label,
+                *hint,
+                slider_control(*value, range, *message, focused),
+            ),
             Row::Action {
                 label,
                 hint,
                 action,
                 on_press,
-            } => (*label, *hint, action_button(action, on_press.clone())),
+            } => (
+                *label,
+                *hint,
+                action_button(action, on_press.clone(), focused),
+            ),
         };
 
         let mut lines = column![
             text(truncate(label, LABEL_CHARS).to_string())
                 .size(tokens.type_scale.label)
                 .font(theme::regular())
-                .color(theme::ink())
+                .color(ink)
                 .wrapping(Wrapping::None)
         ]
         .spacing(theme::gap(Gap::Tight))
@@ -303,7 +493,7 @@ impl<'a> Settings<'a> {
                 text(hint.to_string())
                     .size(tokens.type_scale.caption)
                     .font(theme::regular())
-                    .color(theme::muted()),
+                    .color(muted),
             );
         }
 
@@ -322,6 +512,7 @@ impl<'a> Settings<'a> {
                 left: 0.0,
                 right: 0.0,
             })
+            .style(move |_theme| row_style(focused))
         ]
         .width(Length::Fill);
 
@@ -377,14 +568,22 @@ fn section_row<'a>(section: Section, active: bool) -> Element<'a, Message> {
         .into()
 }
 
-fn action_button<'a>(action: &'a str, on_press: Option<Message>) -> Element<'a, Message> {
+fn action_button<'a>(
+    action: &'a str,
+    on_press: Option<Message>,
+    focused: bool,
+) -> Element<'a, Message> {
     let tokens = design::tokens();
 
     button(
         text(action.to_string())
             .size(tokens.type_scale.label)
             .font(theme::medium())
-            .color(theme::ink()),
+            .color(if focused {
+                focus_foreground()
+            } else {
+                theme::ink()
+            }),
     )
     .on_press_maybe(on_press)
     .padding(Padding {
@@ -393,11 +592,30 @@ fn action_button<'a>(action: &'a str, on_press: Option<Message>) -> Element<'a, 
         left: theme::gap(Gap::Group),
         right: theme::gap(Gap::Group),
     })
-    .style(|_theme, status| action_style(status))
+    .style(move |_theme, status| action_style(status, focused))
     .into()
 }
 
-fn action_style(status: button::Status) -> button::Style {
+fn action_style(status: button::Status, focused: bool) -> button::Style {
+    if focused {
+        return button::Style {
+            background: match status {
+                button::Status::Hovered | button::Status::Pressed => Some(Background::Color(
+                    motion::with_alpha(focus_foreground(), 0.12),
+                )),
+                button::Status::Disabled | button::Status::Active => None,
+            },
+            text_color: focus_foreground(),
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: theme::radius(Radius::Small).into(),
+            },
+            shadow: Shadow::default(),
+            snap: false,
+        };
+    }
+
     button::Style {
         background: Some(Background::Color(match status {
             button::Status::Hovered | button::Status::Pressed => theme::surface(3),
@@ -430,17 +648,18 @@ fn section_heading<'a>(section: Section) -> Element<'a, Message> {
     .into()
 }
 
-fn toggle<'a>(on: bool, message: Message) -> Element<'a, Message> {
+fn toggle<'a>(on: bool, message: Message, focused: bool) -> Element<'a, Message> {
     let knob = container(
         Space::new()
             .width(Length::Fixed(TOGGLE_KNOB))
             .height(Length::Fixed(TOGGLE_KNOB)),
     )
     .style(move |_theme| container::Style {
-        background: Some(Background::Color(if on {
-            theme::ground()
-        } else {
-            theme::muted()
+        background: Some(Background::Color(match (focused, on) {
+            (true, true) => focus_surface(),
+            (true, false) => focus_foreground(),
+            (false, true) => theme::ground(),
+            (false, false) => theme::muted(),
         })),
         border: Border {
             radius: (TOGGLE_KNOB / 2.0).into(),
@@ -465,10 +684,11 @@ fn toggle<'a>(on: bool, message: Message) -> Element<'a, Message> {
             .height(Length::Fixed(TOGGLE_HEIGHT))
             .padding(TOGGLE_INSET)
             .style(move |_theme| container::Style {
-                background: Some(Background::Color(if on {
-                    theme::ink()
-                } else {
-                    theme::surface(3)
+                background: Some(Background::Color(match (focused, on) {
+                    (true, true) => focus_foreground(),
+                    (true, false) => motion::with_alpha(focus_foreground(), 0.24),
+                    (false, true) => theme::ink(),
+                    (false, false) => theme::surface(3),
                 })),
                 border: Border {
                     radius: (TOGGLE_HEIGHT / 2.0).into(),
@@ -487,13 +707,18 @@ fn slider_control<'a>(
     value: f64,
     range: &RangeInclusive<f64>,
     message: fn(f64) -> Message,
+    focused: bool,
 ) -> Element<'a, Message> {
     let tokens = design::tokens();
     let value = clamped(value, range);
     let show = text(slider_value_label(value))
         .size(tokens.type_scale.caption)
         .font(theme::regular())
-        .color(theme::muted())
+        .color(if focused {
+            focus_foreground()
+        } else {
+            theme::muted()
+        })
         .width(Length::Fixed(SLIDER_VALUE_WIDTH))
         .align_x(Alignment::End);
 
@@ -504,7 +729,7 @@ fn slider_control<'a>(
     row![
         slider(range.clone(), value, message)
             .width(Length::Fixed(SLIDER_WIDTH))
-            .style(slider_style),
+            .style(move |theme, status| slider_style(theme, status, focused)),
         show,
     ]
     .spacing(theme::gap(Gap::Group))
@@ -580,13 +805,21 @@ fn bare_button(_theme: &Theme, _status: button::Status) -> button::Style {
     }
 }
 
-fn slider_style(_theme: &Theme, _status: slider::Status) -> slider::Style {
+fn slider_style(_theme: &Theme, _status: slider::Status, focused: bool) -> slider::Style {
+    let filled = if focused {
+        focus_foreground()
+    } else {
+        theme::signal()
+    };
+    let empty = if focused {
+        motion::with_alpha(focus_foreground(), 0.24)
+    } else {
+        theme::surface(3)
+    };
+
     slider::Style {
         rail: slider::Rail {
-            backgrounds: (
-                Background::Color(theme::signal()),
-                Background::Color(theme::surface(3)),
-            ),
+            backgrounds: (Background::Color(filled), Background::Color(empty)),
             width: SLIDER_RAIL_HEIGHT,
             border: Border {
                 radius: (SLIDER_RAIL_HEIGHT / 2.0).into(),
@@ -595,7 +828,7 @@ fn slider_style(_theme: &Theme, _status: slider::Status) -> slider::Style {
         },
         handle: slider::Handle {
             shape: slider::HandleShape::Circle { radius: 0.0 },
-            background: Background::Color(theme::signal()),
+            background: Background::Color(filled),
             border_width: 0.0,
             border_color: theme::hair(),
         },
@@ -701,8 +934,173 @@ mod tests {
             ],
             nav: &nav,
             width: 1440.0,
+            focus: 0,
             extra: None,
         };
+        let _ = settings.view();
+    }
+
+    fn luminance(colour: Color) -> f32 {
+        let channel = |value: f32| {
+            if value <= 0.039_28 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(colour.r) + 0.7152 * channel(colour.g) + 0.0722 * channel(colour.b)
+    }
+
+    fn contrast(a: Color, b: Color) -> f32 {
+        let (high, low) = {
+            let (a, b) = (luminance(a), luminance(b));
+            if a >= b { (a, b) } else { (b, a) }
+        };
+        (high + 0.05) / (low + 0.05)
+    }
+
+    fn synthetic_rows(count: usize) -> Vec<Row<'static>> {
+        (0..count)
+            .map(|index| Row::Toggle {
+                label: "A settings row with a label long enough to measure",
+                hint: Some("and a hint that explains what the row changes."),
+                on: index % 2 == 0,
+                message: Message::ToggleAutoplay(index % 2 == 0),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_focused_row_inverts_its_fill_without_a_border() {
+        let focused = row_style(true);
+        let rest = row_style(false);
+
+        assert_eq!(
+            focused.background,
+            Some(Background::Color(focus_surface())),
+            "focus must be a stronger semantic fill"
+        );
+        assert_eq!(focused.text_color, Some(focus_foreground()));
+        assert_eq!(focused.border.width, 0.0, "focus must not draw a ring");
+        assert_eq!(focused.border.color, Color::TRANSPARENT);
+        assert_eq!(focused.shadow, Shadow::default());
+
+        assert_eq!(rest.background, None, "an unfocused row draws no fill");
+        assert_eq!(rest.text_color, Some(theme::ink()));
+        assert_eq!(rest.border.width, 0.0);
+    }
+
+    #[test]
+    fn the_focus_pair_clears_the_normal_text_contrast_floor() {
+        let ratio = contrast(focus_foreground(), focus_surface());
+
+        assert!(
+            ratio >= 4.5,
+            "the inverted focus pair measures {ratio}:1 and must clear 4.5:1"
+        );
+    }
+
+    #[test]
+    fn the_focus_fill_is_not_the_rest_surface() {
+        let focused = row_style(true);
+        let rest = row_style(false);
+
+        assert_ne!(focused.background, rest.background);
+        assert_ne!(focused.text_color, rest.text_color);
+    }
+
+    #[test]
+    fn row_offsets_are_monotonic_and_stop_at_the_last_row() {
+        let rows = synthetic_rows(30);
+        let width = 700.0;
+
+        let mut previous = settings_row_offset(&rows, 0, width);
+        assert!(previous > 0.0, "the heading sits above the first row");
+
+        for index in 1..rows.len() {
+            let offset = settings_row_offset(&rows, index, width);
+            assert!(
+                offset > previous,
+                "row {index} at {offset} must sit below {previous}"
+            );
+            previous = offset;
+        }
+
+        assert_eq!(
+            settings_row_offset(&rows, 29, width),
+            settings_row_offset(&rows, 200, width),
+            "an index past the end clamps to the last row"
+        );
+    }
+
+    #[test]
+    fn a_thirty_row_section_scrolls_its_focused_row_into_a_six_hundred_pixel_viewport() {
+        let rows = synthetic_rows(30);
+        let width = 700.0;
+        let viewport = 600.0;
+        let mut previous_target = 0.0_f32;
+
+        for index in 0..rows.len() {
+            let offset = settings_row_offset(&rows, index, width);
+            let height = row_height(&rows[index], width);
+            let target = settings_scroll_offset(offset, viewport, height);
+            let top = offset - target;
+            let bottom = offset + height - target;
+
+            assert!(
+                top >= 0.0 && bottom <= viewport,
+                "row {index} sits at {top}..{bottom} in a {viewport}px viewport scrolled to {target}"
+            );
+            assert!(
+                target >= previous_target,
+                "scrolling down must not jump backwards at row {index}"
+            );
+            previous_target = target;
+        }
+
+        assert!(previous_target > 0.0, "the last rows must scroll the pane");
+    }
+
+    #[test]
+    fn a_short_section_stays_at_the_top() {
+        let rows = synthetic_rows(2);
+        let offset = settings_row_offset(&rows, 1, 700.0);
+        let height = row_height(&rows[1], 700.0);
+
+        assert_eq!(settings_scroll_offset(offset, 600.0, height), 0.0);
+        assert_eq!(settings_scroll_offset(f32::NAN, 600.0, height), 0.0);
+        assert_eq!(settings_scroll_offset(offset, f32::INFINITY, height), 0.0);
+    }
+
+    #[test]
+    fn a_shorter_window_has_a_smaller_content_viewport() {
+        let tall = content_viewport(800.0);
+        let short = content_viewport(480.0);
+
+        assert!(short < tall);
+        assert!(short > 0.0, "480px still leaves room for a row");
+        assert_eq!(content_viewport(f32::NAN), 0.0);
+        assert_eq!(content_viewport(0.0), 0.0);
+    }
+
+    #[test]
+    fn the_content_scrollable_carries_a_stable_id() {
+        assert_eq!(content_id(), Id::from("settings-content"));
+    }
+
+    #[test]
+    fn a_focused_row_still_draws_its_full_set_of_rows() {
+        let nav = Nav::new(Screen::Settings);
+        let rows = synthetic_rows(3);
+        let settings = Settings {
+            section: Section::Playback,
+            rows,
+            nav: &nav,
+            width: 1280.0,
+            focus: 2,
+            extra: None,
+        };
+
         let _ = settings.view();
     }
 }
