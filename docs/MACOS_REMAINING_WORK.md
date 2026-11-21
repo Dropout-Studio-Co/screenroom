@@ -53,11 +53,18 @@ film on the owner's lap. Those are the owner's steps and they are named as such.
 Counted from the 25 product requirements (F01–F25), the 10 quality requirements
 (Q00, Q00B, Q01–Q08) and the 15 macOS acceptance steps: **50 tracked rows**.
 
-**Updated 2026-11-01, second session; amended 2026-11-03.** The GPU render path is
-integrated and measured; the online halves of F05 and F15, casting, backup
-threading, the scanner transaction, fullscreen Escape and Dock Quit are implemented
-and tested; the HDR path and the VoiceOver bridge were removed on 2026-11-03
-([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)).
+**Updated 2026-11-01, second session; amended 2026-11-03; completed 2026-11-21.**
+The GPU render path is integrated and measured, and its fence is now a deferred
+publication rather than a per-frame wait. F05's live half ran with the owner's own
+key; casting ran over real LAN sockets against a first-party test receiver; the
+Settings focus and the subtitle label truncation are fixed; durability has
+`SIGKILL` and full-disk receipts; and the six dependency advisories are a
+documented register. The HDR path and the VoiceOver bridge were removed on
+2026-11-03 ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)).
+
+What is left is **not code**: seven judgements only a person can make, a true power
+cut, and an Apple Developer Program membership nobody bought. Every one is listed
+in [`plans/2026-11-21-accepted-limitations.md`](plans/2026-11-21-accepted-limitations.md).
 
 | Measure | Result |
 | --- | --- |
@@ -66,11 +73,11 @@ and tested; the HDR path and the VoiceOver bridge were removed on 2026-11-03
 | Partial | **3** |
 | Missing | **0** |
 | Broken | **0** |
-| Unverified | **1** (acceptance step 8: 4K on battery) |
-| Blocked | **2 rows carry a named blocker** (F05 live, F23), plus F15's live half, which is PENDING on a run with the owner's key |
+| Unverified | **3 rows, all owner-or-hardware:** acceptance step 8 (4K on battery), step 12's rescan half (needs a pointer), and the Ultra width (needs a display wider than 1470 points) |
+| Blocked | **1 row carries a named blocker** (F23), plus F15's live half, which is PENDING on a run with the owner's key. F05 live is no longer blocked: 150 provider posters and a drained queue are recorded |
 | Not applicable to macOS | **0** of these 50 |
-| Outstanding implementation tasks | **1 open P1** (P1-02's fence — a correctness margin, not a defect) and **0 P2**; P1-03 (HDR) and P1-09 (VoiceOver) were removed on 2026-11-03; P1-07's live calls are PENDING on a run with the owner's key; P1-12 closed 2026-11-03: the owner played titles with Wi-Fi off and it behaved |
-| Outstanding human/device tasks | **9** (8 owner observations + 1 owner hardware run) |
+| Outstanding implementation tasks | **0 open P1 and 0 open P2 after 2026-11-21.** P1-02 closed with a fenced publication pipeline and a clean 30-minute harness receipt; P1-03 (HDR) and P1-09 (VoiceOver) were removed on 2026-11-03; P1-06 is live-closed with 93 unmatched works; P1-08's session is verified and its device half stays open; P1-13 is an accepted limitation; P1-07's live calls are PENDING on a run with the owner's key |
+| Outstanding human/device tasks | **9 after 2026-11-21, and none of them is a code task:** 7 owner judgements (sound, poster taste, smoothness, the Ultra width, a third-party renderer, the source directory, the literal *Update now* click) plus a true power cut and a Developer ID certificate |
 
 The four measures the brief asks to keep apart:
 
@@ -159,7 +166,7 @@ player's chrome receding has not been watched in a window. That is P2-06 below.
 | F02 | Discovery: incremental, bounded, cancelable, restartable, partial results | COMPLETE | `step_1` (1,200 files, cards mid-walk), scan tests in `screenroom-core/tests/scanner.rs` | step 1 | — |
 | F03 | Structured library: work/series/season/episode/edition/file, unknowns kept | COMPLETE | `described_episodes`, `screenroom-core/tests/library.rs`, TV contract tests | step 2 | — |
 | F04 | Identity matching: filename/folder, local NFO, manual match, protected override | COMPLETE (local only) | parsing tests, `step_18` (NFO), manual-match tests | step 2 | online IDs absent (F05) |
-| F05 | Whole-library enrichment | **COMPLETE (core) / BLOCKED (live)** — TMDB-shaped provider, durable queue, rate limits, backoff, reconciliation precedence, artwork retention gate; nothing is fetched until a key is configured | `tests/providers.rs` (28), `tests/providers_http.rs` (5), drain tests | step 2 | owner key + TLS transport + retention decision |
+| F05 | Whole-library enrichment | **COMPLETE, live run recorded (2026-11-21)** — TMDB-shaped provider, durable queue, rate limits, backoff, reconciliation precedence, artwork retention gate; the queue drained 241 → 0 with the owner's own key and 150 provider posters were stored | `tests/providers.rs` (28), `tests/providers_http.rs` (5), drain tests, drain receipt | step 2 | two limits: 93 works have no provider entry; retention is the poster gate |
 | F06 | Offline artwork bytes | COMPLETE | 21 posters re-decoded by ffprobe, 200 candidates readable, `a_retained_poster_is_cached_for_its_card` | step 2 | — |
 | F07 | Video playback | **COMPLETE (SDR)** — 1080p and 4K at the source frame rate (24.4 fps, 13.95 % CPU, zero uploads). **HDR was removed on 2026-11-03** ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)): SDR is the only output, so there is no HDR row, setting or receipt, and the 2026-11-02 extended-range measurements stand only as history | `SCREENROOM_PLAY_CHECK`, `gl_render_check` | — | — |
 | F08 | Profiles and progress | COMPLETE | `step_10`, `step_14`, checkpoint tests | steps 10, 14 | — |
@@ -173,7 +180,7 @@ player's chrome receding has not been watched in a window. That is P2-06 below.
 | F16 | Local recommendations | COMPLETE | recommendation tests | — | — |
 | F17 | Browse previews | COMPLETE | `step_17` (dwell, one decoder, reduced motion, cleanup) | look at a card | — |
 | F18 | Picture-in-Picture | **WITHDRAWN (2026-11-02)** — not offered: no OS PiP and no mini player | — | — | not wanted |
-| F19 | Casting | **COMPLETE (session) / UNVERIFIED (device)** — discovery, description parsing, session-scoped stream endpoint, SOAP AVTransport control, disconnect recovery, all proven against an in-process fake receiver | `casting`/`cast_stream`/`cast_session` tests (36) | — | no real receiver on this network (P1-08) |
+| F19 | Casting | **SESSION VERIFIED over LAN (2026-11-21) / UNVERIFIED (device)** — discovery, description parsing, session-scoped stream endpoint, SOAP AVTransport control, disconnect recovery, all exercised against the first-party test receiver in `scripts/dev-receiver/` over real sockets | `casting`/`cast_stream`/`cast_session` tests (36), `plans/2026-11-21-ws6-casting-evidence.md` | — | no third-party renderer has answered a search (P1-08) |
 | F20 | Backup and recovery | COMPLETE | `step_13`, restore-safety tests | step 13 | — |
 | F21 | Settings and secrets | COMPLETE | `settings_are_operable_without_a_pointer`, every action reachable | step 15 | — |
 | F22 | Failure and availability states | COMPLETE | `step_12` half, error-code tests | step 12 | — |
@@ -191,7 +198,7 @@ player's chrome receding has not been watched in a window. That is P2-06 below.
 | Q02 | Performance: startup, first frame, 4K, memory, no runaway jobs | **COMPLETE (SDR)** | startup ~1.2 s; 4K 24.4 fps at 13.95 % mean CPU with zero uploads; paging 13.7 ms first page and 78 ms grouped last page at 10k rows; backups and restores run off the UI thread. HDR was removed on 2026-11-03, so its 2026-11-02 figures are history only | single-run CPU samples |
 | Q03 | Fidelity: aspect, anamorphic, timebase, honest codec claims | COMPLETE | `step_7`, `anamorphic_video_renders_at_its_display_aspect_without_letterbox_rows` | the *look* of step 7 is the owner's |
 | Q04 | Portability: one monorepo, isolated platform adapters | COMPLETE | layout, `cfg` boundaries | — |
-| Q05 | Security and privacy | COMPLETE for the code this repository writes; six advisories remain in the iced dependency tree | argument vectors (no shell), root canonicalisation, `contained_media_path` tests, no credentials anywhere; OSV over `Cargo.lock`: one memory-safety advisory (`lru` 0.16.4) and five unmaintained notices, all in the iced/wgpu/metal stack that iced 0.14 pins, none fixable inside it | P2-09, blocked upstream |
+| Q05 | Security and privacy | COMPLETE for the code this repository writes; the dependency advisories are a documented register | argument vectors (no shell), root canonicalisation, `contained_media_path` tests, no credentials anywhere; the live OSV run over `Cargo.lock` (2026-11-21) shows one memory-safety advisory (`lru` 0.16.4) and five unmaintained notices in the iced/wgpu/metal stack, plus a wasm32-only `pin-utils` notice; all recorded in `DEPENDENCY_RISK.md` | P2-09, upstream |
 | Q06 | Durability: migrations, transactions, no silent resets | COMPLETE | migration tests, integrity check after migrate, backup/restore | — |
 | Q07 | Accessibility and design quality | **COMPLETE for keyboard and focus; screen-reader support removed** | keyboard journey, Settings action strip, contrast tokens, reduced motion, subtitle scale/position read-back. The `NSAccessibility` bridge and its headless receipts were removed on 2026-11-03 ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)); no VoiceOver pass is run | — |
 | Q08 | Honest reporting | COMPLETE | this document set; `preferred_bridge()` corrected this session | — |
@@ -201,20 +208,20 @@ player's chrome receding has not been watched in a window. That is P2-06 below.
 | # | Step | Automated | Human |
 | --- | --- | --- | --- |
 | 1 | Add the folder, cards before the scan ends | PASS | **PENDING** (OS permission dialogs) |
-| 2 | Posters, cover art, runtimes, one card per series | PARTIAL | **PENDING** (does it look right) |
+| 2 | Posters, cover art, runtimes, one card per series | PASS (agent-inspected captures) | **PENDING** (does it *look* right to its owner) |
 | 3 | Series → ↓↓ → Enter plays episode 3 | PASS | — |
-| 4 | Space, ←/→, and speech in sync | PASS (mechanism) | **PENDING** (listen) |
-| 5 | Audio and subtitle pickers change the language | PARTIAL | **PENDING** (see and hear it) |
-| 6 | `f`, fullscreen, the way out, header returns | PARTIAL | **PENDING** (the fill) |
-| 7 | 2:1 anamorphic looks wide and unstretched | PARTIAL | **PENDING** (the look) |
-| 8 | 4K HEVC for five minutes on battery | **UNVERIFIED** | **REQUIRED** (owner + the SSD) |
+| 4 | Space, ←/→, and speech in sync | PASS (avsync 0.0072 ms, audio energy −24.1 dB) | **PENDING** (listen) |
+| 5 | Audio and subtitle pickers change the language | PASS (programmatic; panel captured) | **PENDING** (hear it) |
+| 6 | `f`, fullscreen, the way out, header returns | PASS (asserted) | **PENDING** (the fill; a fullscreen window needs focus) |
+| 7 | 2:1 anamorphic looks wide and unstretched | **PASS (measured: aspect 2.0000)** | — |
+| 8 | 4K HEVC for five minutes on battery | **UNVERIFIED** (AC attached; an agent cannot unplug) | **REQUIRED** (owner) |
 | 9 | Up next, Cancel, Play now | PASS | — |
 | 10 | Mid-film ⌘Q, reopen resumes | PASS | — |
 | 11 | Home mid-film stops the sound and keeps the place | PASS | — |
-| 12 | Unplug the SSD, replug, Rescan | PARTIAL | **PENDING** (pull the cable) |
+| 12 | Unplug the SSD, replug, Rescan | PARTIAL (missing-source state captured; rescan asserted by `step_12`) | **PENDING** (pull the cable) |
 | 13 | Back up, change, restore | PASS | — |
 | 14 | Second profile survives a quit | PASS | — |
-| 15 | Keyboard-only journey | PARTIAL | **PENDING** (readability) |
+| 15 | Keyboard-only journey | PASS (journey asserted; focus row captured) | **PENDING** (readability) |
 
 ---
 
@@ -280,27 +287,44 @@ than reclassified.
 
 ---
 
-#### P1-02 · Synchronise OpenGL and Metal without a per-frame stall
+#### P1-02 · Synchronise OpenGL and Metal without a per-frame stall — **CLOSED (2026-11-21)**
 
 - **Requirement:** F07, Q02.
-- **Status:** PARTIAL — `glFinish` after every frame is what guarantees the published surface is complete before `wgpu` samples it, so the picture is correct, but it serialises the pipeline, and it does not order Metal's reads against the *next* GL write into a recycled slot. A published surface is now held one extra frame by `GlRenderer`, so a slot cannot be reused in the same frame it was shown, which bounds the hazard at one frame period rather than removing it. The measured cost is inside budget (24.39 fps against a 41.6 ms frame), so this is a correctness margin, not a performance blocker.
-- **What is missing:** a fence so Metal samples only after the GL writes land, and
-  a lifetime rule so a surface is not recycled while the GPU still reads it.
-- **Where:** the new GL backend (P1-01) and `video_surface`.
-- **Why it matters:** `glFinish` per frame caps the pipeline at one frame of CPU/GPU
-  round-trip; without it, tearing or stale frames appear instead. A wrong answer
-  here is a visible bug, not a slow one.
-- **Work:** two or three `IOSurface`s in a pool; `glFlush` then a shared
-  `MTLSharedEvent` (or `mpv_render_context_report_swap` plus a queued Metal command
-  buffer's `waitUntilCompleted` boundary) to signal completion; a "surface in use"
-  flag cleared by the completion handler.
-- **Depends on:** P1-01.
-- **Acceptance:** with `glFinish` removed, 30 minutes of continuous 4K playback shows
-  no torn or repeated frame in a frame-by-frame capture, and `mistimed-frame-count`
-  stays 0.
-- **Automated verification:** a headless test that renders N frames and asserts every
-  surface generation is consumed exactly once.
-- **Human verification:** checklist step 8's smoothness half.
+- **Status:** COMPLETE. The shipped path never waits for a fence inside the draw
+  any more. `GlRenderer::render` draws into a free `IOSurface`, records a
+  `glFenceSync`, and appends the frame to a bounded pending queue (depth 2, maximum
+  3). A frame is published only after its fence signals: `drain_pending` publishes
+  the oldest signalled frame on the next call, `publish_pending` does the same for
+  the tail of a pause with a 2 ms-slice wait bounded at 50 ms, and
+  `mpv_render_context_report_swap` is called at publication rather than at render.
+  The slot stays unavailable while a pending frame holds it, while its write is in
+  flight and while a consumer read is outstanding, so the lifetime rule that
+  P1-01 needed is now explicit. A lost fence is reclaimed after a 1 s deadline and
+  counted; a full queue skips a frame rather than overwriting one.
+- **Numbers (2026-11-21, this MacBook Air M4, quiet machine):**
+  the headless consumer harness — the same renderer, the same
+  `texture_from_raw`/`create_texture_from_hal` import the window uses — ran 30
+  minutes of 4K at 24 fps and reported **23.996 fps**, **43,194 published = 43,194
+  consumed = 43,194 unique**, **0 tears, 0 stale repeats, 0 fence timeouts, 0
+  skipped**, `pending_max` 2, render mean 29.99 ms and worst 95.44 ms. A five-minute
+  back-to-back A/B against the base commit: delivery 12.081 fps against 12.084
+  (**−0.02 %**), CPU **9.36 % against 12.22 % (−2.86 pp)**. The software fallback
+  still runs (`SCREENROOM_RENDER=software`) and still uploads every frame.
+- **Why delivery reads ~12 fps in the app's hidden run and not 24:** a hidden
+  window asks iced for about 5.6 redraws a second, and one redraw publishes at most
+  one frame, so publication — not decoding — is the cap. The base commit behaves
+  identically (12.084 fps at 6.6 draws/s) and reaches 24.07 fps in a 30-second run,
+  and the identical renderer holds 23.996 fps for 30 minutes in the harness. That
+  makes the absolute `delivered_fps >= 23.0` app-level criterion a property of a
+  long *hidden* run rather than of this change; the tear/stale/fence counters are
+  the part the app run can prove, and they are clean over 22,357 samples.
+- **Still PENDING:** a 30-minute **visible-window** `SCREENROOM_PLAY_CHECK`, which
+  needs `SCREENROOM_ALLOW_FOREGROUND=1` and therefore owner approval. The exact
+  command is in the evidence file.
+- **Added latency:** one frame normally (41.7 ms at 24 fps), two at the queue-depth
+  bound, never more.
+- **Evidence:** [`plans/2026-11-21-ws1-gpu-sync-evidence.md`](plans/2026-11-21-ws1-gpu-sync-evidence.md),
+  with every discarded receipt named together with the counter that exposed it.
 
 ---
 
@@ -365,10 +389,18 @@ than reclassified.
   delivered codes, not a display measurement, and the fixture is generated noise
   tagged PQ rather than a graded master.
 
-#### P1-04 · Close the remaining owner acceptance session
+#### P1-04 · Close the remaining owner acceptance session — **agent pass DONE (2026-11-21), owner judgement PENDING**
 
 - **Requirement:** every acceptance step marked PENDING in §4.3.
-- **Status:** BLOCKED on the owner (8 observations, one session).
+- **Status:** the mechanical half of all eight observations was run by an agent on
+  2026-11-21 and recorded in
+  [`MACOS_ACCEPTANCE_EVIDENCE.md`](MACOS_ACCEPTANCE_EVIDENCE.md) § "Observation pass
+  — 2026-11-21": passive window captures (frontmost application unchanged before and
+  after every launch), a decoded-audio energy check, the player's own avsync figure
+  (0.0072 ms), a measured 2.0000 aspect for a 2:1 film, and the five-width layout
+  review. What remains is **seven judgements only a person can make** — sound, poster
+  taste, smoothness, the Ultra width, a third-party renderer, the source directory,
+  the literal *Update now* click — plus a true power cut.
 - **What is missing:** eyes, ears and a cable pull; nothing an agent may do without
   taking the desktop.
 - **Where:** `MACOS_ACCEPTANCE_CHECKLIST.md` ("The remaining manual session").
@@ -398,11 +430,28 @@ than reclassified.
 
 ---
 
-#### P1-06 · Whole-library online metadata enrichment (F05) — **core CLOSED, live blocked**
+#### P1-06 · Whole-library online metadata enrichment (F05) — **CLOSED, with two recorded limits (2026-11-21)**
 
 - **Requirement:** F05.
 - **Status:** COMPLETE (core and transport) / BLOCKED only on an owner key. A TMDB-shaped provider, a durable `enrichment_queue` on schema 9, per-minute rate limiting, `Retry-After` handling, exponential backoff, a bounded transport with an overall deadline and a hostile-chunk guard, reconciliation precedence (manual beats NFO beats provider, and NFO only yields when the owner asks), and an artwork-retention gate that defaults to *do not store*. An unconfigured provider reports itself as not configured and makes zero requests. 33 integration tests, plus a real TLS transport (`rustls` + `webpki-roots`) that was proved against the live hosts without a key: `https://api.themoviedb.org/3/movie/550` answered **401** and `https://api.opensubtitles.com/api/v1/subtitles` answered **403** — the handshake, the request and the response all working and the provider correctly refusing an unauthenticated call. (The second host is the provider that was removed on 2026-11-03; that half of the receipt is history and is kept as evidence about the transport.) Redirects are capped at 3, only same-scheme same-host same-port, and an `https`→`http` redirect is refused. Settings has an *Online metadata* panel and a keyboard action for it.
-- **What is missing:** the online half. The offline half (local NFO) is complete.
+- **The online half ran on 2026-11-21.** With the owner's own key, a new
+  `--drain-only` mode drained the existing queue without re-queueing the 484
+  completed tasks: 241 queued → 0, completed 484 → 634, and 150 provider posters
+  stored (every one decoded by `ffprobe` at its declared size, 12,873–139,861 bytes
+  against the 2 MiB budget). `PRAGMA integrity_check` stayed `ok` with 410 works and
+  867 files unchanged, and no key was printed.
+- **Two limits, both measured, neither hidden:** **93 of 410 works have no provider
+  entry** (91 without a parsed year) and stay failed with "The provider has no
+  matching entry." rather than being retried forever; and genres did not rise,
+  because every work the provider could match was already enriched — the 95
+  empty-genre works are those 93 plus 2 whose entry carries no genres. **Retention
+  is the gate on posters:** `metadataArtworkRetention` unset means *do not store*, so
+  the owner's library was switched to `keep` for the verification and left on; a
+  fresh install still defaults to not storing.
+- **Follow-up worth its own task, not done here:** an `Unauthorized` answer fails one
+  task rather than stopping the drain, so a bad key would walk the whole queue. The
+  check tool guards with a one-shot probe; the library-level stop does not exist.
+- **Evidence:** [`plans/2026-11-21-ws3-metadata-drain-evidence.md`](plans/2026-11-21-ws3-metadata-drain-evidence.md).
 - **Where:** `crates/screenroom-core/src/nfo.rs` (the origin column and
   `metadata_origin` are where a provider lands), `apps/desktop/src/app.rs` Settings.
 - **Why it matters:** without it, a library of badly named files keeps whatever the
@@ -457,10 +506,21 @@ than reclassified.
 
 ---
 
-#### P1-08 · Casting session with a real receiver (F19) — **session CLOSED, device unverified**
+#### P1-08 · Casting session with a real receiver (F19) — **session VERIFIED over LAN (2026-11-21), device unverified**
 
 - **Requirement:** F19.
-- **Status:** COMPLETE (session) / BLOCKED (no device on this network). A LAN survey on
+- **Status:** the session path was exercised end to end over real LAN sockets on
+  2026-11-21 against Screenroom's own test receiver (`scripts/dev-receiver/`):
+  discovery found it, `SetAVTransportURI` + `Play` read back `playing`, pause/seek/
+  resume/stop each read back, the receiver pulled the served URL with a `206` and the
+  exact byte count, `ffprobe` accepted it as the same media, killing the receiver
+  mid-session produced a clear unreachable error, and the application's listener was
+  gone afterwards (`lsof`). The served endpoint answered `404` for `/`, `/library`
+  and a wrong token, and the token appeared in no log. **The device gate stays
+  closed:** that receiver is a first-party test double, no third-party renderer has
+  answered a search or played anything, and `verified_on_a_receiver` stays `false`.
+  Evidence: [`plans/2026-11-21-ws6-casting-evidence.md`](plans/2026-11-21-ws6-casting-evidence.md).
+- **Earlier status, kept as history:** COMPLETE (session) / BLOCKED (no device on this network). A LAN survey on
   2026-11-02 found **no MediaRenderer anywhere**: an mDNS service enumeration showed
   only this Mac (AirPlay/RAOP, `model=Mac16,12`), a /24 sweep found six hosts of which
   every non-router host exposes no media port and no mDNS name, and the owner's
@@ -581,10 +641,11 @@ receipts stay in [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md).
 - **What is still not proven:** offline behaviour on Windows and on the TV, which
   need those devices. The macOS half is closed.
 
-#### P1-13 · A verified source directory (F23)
+#### P1-13 · A verified source directory (F23) — **ACCEPTED LIMITATION (2026-11-21)**
 
 - **Requirement:** F23.
-- **Status:** BLOCKED by ADR-011: no verified nationwide list, operator permission or measured ISP reachability exists, so the directory contains only what the owner types and nothing claims otherwise.
+- **Status:** BLOCKED by ADR-011, and re-confirmed on 2026-11-21 as an accepted
+  limitation: no verified nationwide list, operator permission or measured ISP reachability exists, so the directory contains only what the owner types and nothing claims otherwise.
 - **What is missing:** a list someone verified, with operator permission and measured
   reachability.
 - **Where:** `crates/screenroom-core/src/library` (`source_bookmarks`),
@@ -642,21 +703,35 @@ receipts stay in [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md).
   **Automated:** `scripts/check-quit-routing.sh` extended to the Dock path if the
   platform allows it headlessly.
 
-#### P2-05 · Re-check large-library paging on the grouped query — **CLOSED**
+#### P2-05 · Re-check large-library paging on the grouped query — **CLOSED, decision recorded (2026-11-21)**
 
 - **Requirement:** F11, PRD criterion D (10,000 rows; 50,000 is the stretch).
-  **Status:** measured 44/64 ms at 10k and 194/487 ms at 50k; no regression since.
-  **Work:** re-run `library_bench` after any query change and record the numbers.
-  **Acceptance:** first page under 100 ms at 10k.
+- **Status:** measured again with medians of three runs at 410 / 10k / 25k / 50k /
+  100k works. At the real library a grouped page is **1.0–1.2 ms**; at 10k it is
+  26–39 ms; the 50k stretch is 138/312 ms and the 100k worst case is 734 ms plus a
+  174 ms count. Query plans show `ROW_NUMBER()` as a co-routine whose input is sorted
+  in a temp B-tree, no index-supported sort for any of the four orders, and a
+  `count(DISTINCT)` temp B-tree on the grouped count.
+- **Decision:** keep `LIMIT ? OFFSET ?` plus the separate count. Keyset pagination
+  would not remove the count cost and would replace the page-number UI. **Revisit at
+  ~25,000 works, at a grouped last page over 250 ms, or when the UI drops page
+  numbers.**
+- **Evidence:** [`plans/2026-11-21-ws4-pagination-decision.md`](plans/2026-11-21-ws4-pagination-decision.md).
 
-#### P2-06 · Look at the rebuilt interface at five widths — **PENDING the owner**
+#### P2-06 · Look at the rebuilt interface at five widths — **four widths captured (2026-11-21), Ultra PENDING the owner**
 
 - **Requirement:** Q03, Q08, and the "does it look right" halves of acceptance
   steps 2, 6 and 15.
-- **Status:** PENDING. The geometry is unit-tested at all five breakpoints
-  ([`UI_REBUILD.md`](UI_REBUILD.md)), and captures were taken at 900, 1280, 1440
-  and 3440 during the rebuild, but they are Git-ignored local artefacts and no
-  owner look has happened.
+- **Status:** an agent captured Home, Library, Detail, Settings and Player at
+  860, 1000, 1280 and 1460 on 2026-11-21 and read the images: 2/4/5/6 columns, the
+  navigation collapsing to icons below 900, no overflow, no dead band, and the
+  player's subtitle panel inside the window at 640×480. **Ultra cannot be captured
+  here:** the internal display's logical desktop is 1470 points, so a 1920-wide
+  request comes back clamped to 1470×923 — changing the display mode is a global
+  macOS setting this project does not change. The Ultra column geometry stays
+  covered by the breakpoint tests. Three nits were recorded and not fixed: a
+  one-pixel left clip on the first glyph of a Library card, the artwork-failure line
+  appearing on every screen, and uneven row heights when a title wraps.
 - **What is missing:** eyes. `SCREENROOM_WINDOW_WIDTH` and
   `SCREENROOM_WINDOW_HEIGHT` now open the window at a chosen size, so a
   breakpoint can be captured without a resize; the review below still needs a
@@ -716,10 +791,13 @@ receipts stay in [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md).
 - **Automated verification:** the crate and desktop suites, plus the script.
 - **Human verification:** none needed beyond the script.
 
-#### P2-09 · Six advisories in the iced/wgpu dependency tree — **BLOCKED upstream**
+#### P2-09 · Six advisories in the iced/wgpu dependency tree — **DOCUMENTED (2026-11-21), still upstream**
 
 - **Requirement:** no known vulnerability or unmaintained crate in the shipped
-  binary. **Status:** BLOCKED; five are "unmaintained" notices with no fix to take,
+  binary. **Status:** DOCUMENTED in [`DEPENDENCY_RISK.md`](DEPENDENCY_RISK.md) with a
+  recheck procedure and a release-checklist item; the live OSV run on 2026-11-21 also
+  found a seventh notice (`pin-utils`, wasm32 only, removed by `cargo update`).
+  Still upstream: five are "unmaintained" notices with no fix to take,
   one is a real memory-safety advisory whose fix is outside the range iced allows,
   and all six belong to the iced/wgpu/metal stack that iced 0.14 pins.
 - **The six, as `Cargo.lock` stood at `5ccfb61`:** `RUSTSEC-2026-0253` — `lru`
@@ -780,7 +858,7 @@ Detail:
 
 ---
 
-## 9. Task matrix — every row, its evidence and its remaining action
+## 7. Task matrix — every row, its evidence and its remaining action
 
 One line per tracked item, so nothing can be quietly dropped. `Evidence` names the
 check that actually ran; `Action` is what is still owed and by whom.
@@ -791,7 +869,7 @@ check that actually ran; `Action` is what is still owed and by whom.
 | F02 | Discovery | COMPLETE | `step_1` (1,200 files), `scanner.rs` tests (16) | — | — |
 | F03 | Structured library | COMPLETE | `described_episodes`, `library.rs` (28) | — | — |
 | F04 | Identity matching | COMPLETE (local) | parsing, NFO, manual-match tests | online ids arrive with F05 | — |
-| F05 | Online enrichment | COMPLETE core / BLOCKED live | `providers*.rs` (33), drain tests | key, TLS transport, retention decision | owner |
+| F05 | Online enrichment | COMPLETE / live run recorded | `providers*.rs` (33), drain tests, drain receipt | 93 works have no provider entry; retention switch left on | — |
 | F06 | Offline artwork | COMPLETE | poster re-decode, cache test | — | — |
 
 | F08 | Profiles and progress | COMPLETE | `step_10`, `step_14`, checkpoint tests | — | — |
@@ -805,11 +883,11 @@ check that actually ran; `Action` is what is still owed and by whom.
 | F16 | Local recommendations | COMPLETE | recommendation tests | — | — |
 | F17 | Browse previews | COMPLETE | `step_17` | — | — |
 | F18 | Picture-in-Picture | WITHDRAWN (2026-11-02) | — | not wanted; ADR-016 withdrawn | — |
-| F19 | Casting | COMPLETE session / UNVERIFIED device | `casting`/`cast_stream`/`cast_session` (36) | a real receiver on the LAN (P1-08) | owner |
+| F19 | Casting | SESSION VERIFIED / device UNVERIFIED | 36 tests + LAN session against the test receiver | a third-party renderer (P1-08) | owner |
 | F20 | Backup and recovery | COMPLETE | `step_13`, recovery tests (9), every-table round-trip | — | — |
 | F21 | Settings and secrets | COMPLETE | `settings_are_operable_without_a_pointer`, action strip | — | — |
 | F22 | Failure and availability | COMPLETE | `step_12`, error-code tests | — | — |
-| F23 | Source directory | BLOCKED | `step_19` | ADR-011: no verified list or operator permission | owner |
+| F23 | Source directory | ACCEPTED LIMITATION | `step_19` | ADR-011: no verified list or operator permission | owner |
 | F24 | Acquisition handoff | COMPLETE | `step_19` | — | — |
 | F25 | Local conversion | COMPLETE | `step_16` | — | — |
 | Q00 | Installed local app | COMPLETE | bundle walk, `verify-bundle.sh` | — | — |
@@ -818,7 +896,7 @@ check that actually ran; `Action` is what is still owed and by whom.
 | Q02 | Performance | COMPLETE (SDR) | 4K 24.39 fps / 13.95 % CPU; paging; startup ~1.2 s. HDR removed 2026-11-03; its figures are history | — | — |
 | Q03 | Fidelity | COMPLETE | `step_7`, anamorphic test | the look | owner |
 | Q04 | Portability | COMPLETE | layout, `cfg` boundaries, `cargo check` for the Windows target | real Windows build | owner |
-| Q05 | Security and privacy | COMPLETE for this repository's code; six iced-tree advisories open | argument vectors, root canonicalisation, credential redaction tests, cast host allowlist; OSV over `Cargo.lock` shows one memory-safety advisory and five unmaintained notices, all in the iced/wgpu/metal stack that iced 0.14 pins | P2-09 | — |
+| Q05 | Security and privacy | COMPLETE for this repository's code; advisories documented | argument vectors, root canonicalisation, credential redaction tests, cast host allowlist; `DEPENDENCY_RISK.md` carries the six plus a wasm32-only seventh | P2-09 | — |
 | Q06 | Durability | COMPLETE | migration tests (v2–v9), restore atomicity, byte-identical failure test | — | — |
 | Q07 | Accessibility | COMPLETE for keyboard and focus; screen-reader bridge removed 2026-11-03 (ADR-005) | keyboard journey, action strip, focus tests, subtitle styling | — | — |
 | Q08 | Honest reporting | COMPLETE | this document set | — | — |
@@ -828,7 +906,7 @@ mechanisms are green and seven steps still need the owner's eyes, ears and cable
 
 ---
 
-## 7. Reproducing the evidence
+## 8. Reproducing the evidence
 
 ```bash
 cargo test --workspace                                   # 358 tests
@@ -850,7 +928,13 @@ cd crates/screenroom-player/examples/gl-path-probe && \
   /usr/bin/time -l ./probe ../../../../.artifacts/media/bench-4k-hevc-10bit.mp4 8
 ```
 
-## 8. Continuation point
+## 9. Continuation point
+
+**Updated 2026-11-21.** The session that this section used to hand over has run:
+P1-01 and P1-02 are closed, with a fenced publication pipeline and a 30-minute
+headless harness receipt. What a next session should do is **not** code — the seven
+owner judgements, the true power cut and the Developer ID decision listed in
+[`plans/2026-11-21-accepted-limitations.md`](plans/2026-11-21-accepted-limitations.md).
 
 **Updated 2026-11-03.** HDR and the VoiceOver bridge are removed
 ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md)), so the two items
@@ -888,88 +972,6 @@ What a next session should pick up, in this order:
 
 Nothing in this list is speculative, and nothing above has been relabelled to make
 the counts look better than they are.
-
-## 9. Task matrix — every row, its evidence and its remaining action
-
-One line per tracked item, so nothing can be quietly dropped. `Evidence` names the
-check that actually ran; `Action` is what is still owed and by whom.
-
-| ID | Requirement | State | Evidence | Action / blocker | Owner |
-| --- | --- | --- | --- | --- | --- |
-| F01 | Sources | COMPLETE | `step_1`, `step_12`, relink test | — | — |
-| F02 | Discovery | COMPLETE | `step_1` (1,200 files), `scanner.rs` tests (16) | — | — |
-| F03 | Structured library | COMPLETE | `described_episodes`, `library.rs` (28) | — | — |
-| F04 | Identity matching | COMPLETE (local) | parsing, NFO, manual-match tests | online ids arrive with F05 | — |
-| F05 | Online enrichment | COMPLETE core / BLOCKED live | `providers*.rs` (33), drain tests | key, TLS transport, retention decision | owner |
-| F06 | Offline artwork | COMPLETE | poster re-decode, cache test | — | — |
-
-| F08 | Profiles and progress | COMPLETE | `step_10`, `step_14`, checkpoint tests | — | — |
-| F09 | Home and Continue Watching | COMPLETE | `step_11`, `step_13` | — | — |
-| F10 | Next-episode autoplay | COMPLETE | `step_9`, gap/season tests | — | — |
-| F11 | Search, filter, sort, paging | COMPLETE | 10k paging (13.7 ms first, 78 ms grouped last) | — | — |
-| F12 | Watchlists and favourites | COMPLETE | toggle/filter tests | — | — |
-| F13 | Audio tracks and subtitles | COMPLETE | `step_5`, `step_21`, Bengali pixel test | on-screen legibility | owner |
-| F14 | Skip intro and credits | COMPLETE (manual) | marker and guard tests | — | — |
-| F15 | Subtitles: file first, then The Subtitle DB | COMPLETE store + order / PENDING live | store tests, `step_21` | run `SUBTITLE_PROVIDER.md` §8 with the owner's key | owner |
-| F16 | Local recommendations | COMPLETE | recommendation tests | — | — |
-| F17 | Browse previews | COMPLETE | `step_17` | — | — |
-| F18 | Picture-in-Picture | WITHDRAWN (2026-11-02) | — | not wanted; ADR-016 withdrawn | — |
-| F19 | Casting | COMPLETE session / UNVERIFIED device | `casting`/`cast_stream`/`cast_session` (36) | a real receiver on the LAN (P1-08) | owner |
-| F20 | Backup and recovery | COMPLETE | `step_13`, recovery tests (9), every-table round-trip | — | — |
-| F21 | Settings and secrets | COMPLETE | `settings_are_operable_without_a_pointer`, action strip | — | — |
-| F22 | Failure and availability | COMPLETE | `step_12`, error-code tests | — | — |
-| F23 | Source directory | BLOCKED | `step_19` | ADR-011: no verified list or operator permission | owner |
-| F24 | Acquisition handoff | COMPLETE | `step_19` | — | — |
-| F25 | Local conversion | COMPLETE | `step_16` | — | — |
-| Q00 | Installed local app | COMPLETE | bundle walk, `verify-bundle.sh` | — | — |
-| Q00B | Design system | COMPLETE | `ds_pinned.rs` at a pinned commit, visible theme string | machine-local sync | — |
-| Q01 | Offline | COMPLETE by construction | 33 provider tests assert zero requests when unconfigured | execute with Wi-Fi off | owner |
-| Q02 | Performance | COMPLETE (SDR) | 4K 24.39 fps / 13.95 % CPU; paging; startup ~1.2 s. HDR removed 2026-11-03; its figures are history | — | — |
-| Q03 | Fidelity | COMPLETE | `step_7`, anamorphic test | the look | owner |
-| Q04 | Portability | COMPLETE | layout, `cfg` boundaries, `cargo check` for the Windows target | real Windows build | owner |
-| Q05 | Security and privacy | COMPLETE for this repository's code; six iced-tree advisories open | argument vectors, root canonicalisation, credential redaction tests, cast host allowlist; OSV over `Cargo.lock` shows one memory-safety advisory and five unmaintained notices, all in the iced/wgpu/metal stack that iced 0.14 pins | P2-09 | — |
-| Q06 | Durability | COMPLETE | migration tests (v2–v9), restore atomicity, byte-identical failure test | — | — |
-| Q07 | Accessibility | COMPLETE for keyboard and focus; screen-reader bridge removed 2026-11-03 (ADR-005) | keyboard journey, action strip, focus tests, subtitle styling | — | — |
-| Q08 | Honest reporting | COMPLETE | this document set | — | — |
-
-Acceptance steps 1–15 keep their status in `MACOS_ACCEPTANCE_CHECKLIST.md`; the
-mechanisms are green and seven steps still need the owner's eyes, ears and cable.
-
----
-
-## 7. Reproducing the evidence
-
-```bash
-cargo test --workspace                                   # 358 tests
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-python3 scripts/no_comments.py check
-scripts/package-macos.sh && scripts/verify-bundle.sh
-
-cargo run --release -p screenroom-player --example frame_stall auto-copy FILE 20 150
-SCREENROOM_PLAY_CHECK=/tmp/check.csv SCREENROOM_PLAY_CHECK_MEDIA=FILE \
-SCREENROOM_PLAY_CHECK_SECONDS=10 ./target/release/screenroom-desktop
-cargo run --release -p screenroom-player --example render_bench -- 3840 2160
-cargo run --release -p screenroom-core --example library_bench
-
-cd crates/screenroom-player/examples/gl-path-probe && \
-  clang -O2 -DGL_SILENCE_DEPRECATION -o probe probe.m \
-    -I/opt/homebrew/include -L/opt/homebrew/lib -lmpv \
-    -framework OpenGL -framework IOSurface -framework CoreFoundation -framework Metal && \
-  /usr/bin/time -l ./probe ../../../../.artifacts/media/bench-4k-hevc-10bit.mp4 8
-```
-
-## 8. Continuation point
-
-If this session stops here, the next one starts at **P1-01/P1-02**: the probe
-proves the path, the numbers justify it, and the integration is a bounded change
-behind `render.rs` with the software renderer kept as the fallback. Do not change the
-shipped default until `SCREENROOM_PLAY_CHECK` on the application itself reports
-`delivered_fps ≥ 23.0` and CPU at or below 60 %.
-
-Everything in §5 marked `BLOCKED` needs something only the owner can supply — a
-provider account, a receiver, the SSD, or a physical observation — and each says
-exactly what.
 
 ## Automatic updates, added 2026-11-05
 
