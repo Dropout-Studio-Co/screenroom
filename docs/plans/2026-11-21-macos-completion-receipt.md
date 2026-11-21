@@ -7,7 +7,7 @@ Base `7ac4273`; final application commit `7b65a4f`, released as **v0.1.8**.
 
 | Check | Result |
 | --- | --- |
-| `cargo test --workspace` | **873 passed, 0 failed** |
+| `cargo test --workspace` | **874 passed, 0 failed** |
 | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
 | `cargo fmt --all --check` | clean |
 | `python3 scripts/no_comments.py check` | clean |
@@ -20,8 +20,8 @@ Base `7ac4273`; final application commit `7b65a4f`, released as **v0.1.8**.
 | `scripts/check-full-disk-recovery.sh` | 20/20 assertions |
 | Installed application | 0.1.8 at `~/Applications/Screenroom.app`, launched outside Cargo |
 
-The full-workspace count rose from 827 at the base commit to 873, of which 46 are
-new tests for this run.
+The full-workspace count rose from 827 at the base commit to 874, of which 47 are
+new or rewritten tests for this run.
 
 ## Item by item
 
