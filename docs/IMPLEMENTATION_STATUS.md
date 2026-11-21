@@ -2421,3 +2421,45 @@ update is handed over.
 Two things remain outside what any local run can settle: a release served from
 GitHub, and the public-publishing decision. Both are recorded as BLOCKED or PENDING
 rather than folded into the result above.
+
+## macOS completion run (2026-11-21)
+
+One session took the twelve remaining macOS items and drove each one to a state it
+can defend. Base `7ac4273`; every workstream ran in its own worktree from
+`origin/main` and was merged into `release/macos-completion` before `main`.
+Evidence files are under [`plans/`](plans/).
+
+### What landed
+
+| Item | State | Receipt |
+| --- | --- | --- |
+| 1 — GPU/Metal sync fence (P1-02) | see the item's own section in this document and [`MACOS_REMAINING_WORK.md`](MACOS_REMAINING_WORK.md) | [`plans/2026-11-21-ws1-gpu-sync-evidence.md`](plans/2026-11-21-ws1-gpu-sync-evidence.md) |
+| 2 — Settings row focus | **CLOSED.** The focused row is a full-row `focus_surface` fill with `focus_foreground` text, no border or ring, and the content scrolls so it stays visible | [`plans/2026-11-21-ws2-ui-focus-and-fit-evidence.md`](plans/2026-11-21-ws2-ui-focus-and-fit-evidence.md), capture `1280x800-settings-focus3.png` |
+| 3 — Subtitle label truncation | **CLOSED.** `ui::text_fit` measures with iced's own `Paragraph` and the embedded Inter faces; the cue suffix and the action button are reserved first and the cut lands on a character boundary | same evidence file |
+| 4 — Whole-library enrichment (F05) | **live CLOSED, two limits recorded.** `--drain-only` exists; the queue drained 241 → 0 without re-queueing the 484 completed tasks; 150 provider posters stored and decoded; 93 works have no provider entry | [`plans/2026-11-21-ws3-metadata-drain-evidence.md`](plans/2026-11-21-ws3-metadata-drain-evidence.md) |
+| 5 — Large-library paging (P2-05) | **DECIDED, no query change.** OFFSET and a separate count are accepted for Personal Edition, revisit at ~25,000 works or a grouped last page over 250 ms | [`plans/2026-11-21-ws4-pagination-decision.md`](plans/2026-11-21-ws4-pagination-decision.md) |
+| 6 — Observation pass (P1-04, P2-06) | **agent pass COMPLETE**, owner judgement still PENDING | [`MACOS_ACCEPTANCE_EVIDENCE.md`](MACOS_ACCEPTANCE_EVIDENCE.md) § "Observation pass — 2026-11-21" |
+| 7 — Casting (F19, P1-08) | **session path verified on LAN against a first-party test receiver**, device gate still closed | [`plans/2026-11-21-ws6-casting-evidence.md`](plans/2026-11-21-ws6-casting-evidence.md) |
+| 8 — Durability (G9) | **two host receipts added**, gate still PARTIAL (no true power cut) | [`plans/2026-11-21-ws7-durability-evidence.md`](plans/2026-11-21-ws7-durability-evidence.md) |
+| 9 — In-app update path | see the update section below | `MACOS_ACCEPTANCE_EVIDENCE.md`, update-path receipt |
+| 10 — Source directory (F23) | **accepted limitation**, no code | [`plans/2026-11-21-accepted-limitations.md`](plans/2026-11-21-accepted-limitations.md) |
+| 11 — Six advisories (P2-09) | **DOCUMENTED** in a register with a recheck procedure; a seventh notice found by the live OSV run | [`DEPENDENCY_RISK.md`](DEPENDENCY_RISK.md) |
+| 12 — Developer ID | **accepted limitation**, no identity and no purchase | [`plans/2026-11-21-accepted-limitations.md`](plans/2026-11-21-accepted-limitations.md) |
+
+### Two facts that changed the backlog's own wording
+
+- The library's "297 works without genres" was the artwork count. Genres are
+  missing for 95 works, 93 of which the provider has no entry for; artwork is
+  missing for 167 works after the drain.
+- Casting was recorded as "not implemented" in the capability matrix while the
+  session code, its 36 tests and its stream endpoint already existed. The matrix
+  now says what the code does and what has actually run.
+
+### Accepted limitations
+
+Seven checks need a person or hardware that this machine cannot supply: a
+Developer ID certificate, a true AC power loss, human eyes and ears, the Ultra
+width on a 1470-point display, a third-party casting renderer, a verified source
+directory, and the literal pointer press on *Update now*. Each is recorded with
+its substitute and observation in
+[`plans/2026-11-21-accepted-limitations.md`](plans/2026-11-21-accepted-limitations.md).
