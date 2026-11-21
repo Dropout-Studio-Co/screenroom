@@ -192,12 +192,13 @@ Acceptance: delivered no worse than baseline −1 % **met** (−0.02 %); CPU no 
 than baseline +3 pp **met** (−2.86 pp). Receipts:
 `.artifacts/receipts/ab6-baseline-5m.csv`, `ab6-async-5m.csv`.
 
-Both builds deliver 12.08 fps because both are throttled by the *hidden window's*
-redraw rate: `ticks_per_second` and `drawn_fps` are 6.6/s on both, and the player
-publishes 1.83 frames per redraw because the consumer holds surfaces. That is why
-an equal delivered rate on both builds is the correct reading of this A/B: it
-compares the two renderers under the same consumer throttle, and the async path is
-equal on frames and cheaper on CPU. The rendering pipeline's own ceiling on this
+Both builds deliver 12.08 fps with `ticks_per_second` and `drawn_fps` at 6.6/s, so
+both publish about 1.8 frames per redraw. The counters do not establish whether the
+cap is the redraw rate or libmpv's own pacing — publication is driven by libmpv's
+wakeup, not by an iced redraw — but they do establish that the two builds sit under
+exactly the same cap. That is why an equal delivered rate on both builds is the
+correct reading of this A/B: it compares the two renderers under the same consumer
+throttle, and the async path is equal on frames and cheaper on CPU. The rendering pipeline's own ceiling on this
 machine, with no window holding it back, is the 30-minute harness below.
 
 ### Thirty-minute 4K run, the headless consumer harness
@@ -258,14 +259,14 @@ same fixture, quiet machine (load 2.0 at start, 2.8 at the end).
 | `drawn_fps` / `imported_fps` | 5.645 / 5.636 |
 | `failure` | none |
 
-`delivered_fps` is **12.4, not the 23.0 the acceptance asks for**, and the receipt
-says why: `ticks_per_second` and `drawn_fps` are 5.6/s. The iced event loop of a
-hidden window asks for a redraw 5.6 times a second on this machine, and because the
-consumer holds the surface it samples, the player publishes 2.2 frames per redraw
-(22,357 published against 10,160 drawn). The render path is not the limit — the
-headless harness with the same renderer and the same fixture, on the same machine,
-holds 23.996 fps for the same 30 minutes — and the limit is not this change either:
-the baseline binary shows the same relationship (`ticks_per_second` 6.6,
+`delivered_fps` is **12.4, not the 23.0 the acceptance asks for**. The receipt
+shows `ticks_per_second` and `drawn_fps` at 5.6/s and 22,357 published against
+10,160 drawn, so the app publishes about 2.2 frames per redraw; it does **not**
+establish which of the two is the cap, and this document does not claim one. What
+it does establish: the render path is not the limit, because the headless harness
+with the same renderer and the same fixture, on the same machine, holds 23.996 fps
+for the same 30 minutes — and the limit is not this change either: the baseline
+binary shows the same relationship (`ticks_per_second` 6.6,
 `drawn_fps` 6.600, `delivered_fps` 12.084 in the A/B above) and delivered 24.073 fps
 in a 30 s run (`base-probe.csv`) before the hidden window settles into that cadence.
 

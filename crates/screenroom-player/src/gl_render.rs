@@ -810,7 +810,7 @@ impl GlRenderer {
         self.width = width;
         self.height = height;
         self.target_failure = None;
-        self.abandon_pending();
+        self.discard_pending();
         self.release_slots();
         let mut slots = Vec::with_capacity(SURFACE_POOL_SIZE);
         for _ in 0..SURFACE_POOL_SIZE {
@@ -862,12 +862,10 @@ impl GlRenderer {
         if self.pending.is_empty() {
             return;
         }
-        if self.cgl.make_current().is_err() {
-            return;
-        }
+        let current = self.cgl.make_current().is_ok();
         for pending in self.pending.clear() {
             self.settle_slot(pending.slot);
-            if let Some(report_swap) = self.symbols.report_swap {
+            if current && let Some(report_swap) = self.symbols.report_swap {
                 unsafe { report_swap(self.context.as_ptr()) };
             }
         }

@@ -38,6 +38,14 @@ fn chrome_lock_holds(value: Option<&str>) -> bool {
     value.is_some_and(|value| value.trim() == "1")
 }
 
+fn seed_settings_focus(seeded: bool, requested: Option<usize>, len: usize) -> Option<usize> {
+    if seeded {
+        return None;
+    }
+    let index = requested?;
+    Some(if len == 0 { 0 } else { index.min(len - 1) })
+}
+
 const STATUS_TICK: Duration = Duration::from_millis(250);
 
 const INITIAL_WINDOW_WIDTH: f32 = 1280.0;
@@ -509,6 +517,8 @@ pub struct App {
     nav: Nav,
 
     settings_focus: usize,
+
+    settings_focus_seeded: bool,
 
     settings_section: ui::screens::settings::Section,
 
@@ -1361,6 +1371,7 @@ impl App {
             preferences,
             profiles: Vec::new(),
             settings_focus: 0,
+            settings_focus_seeded: false,
             settings_section: ui::screens::settings::Section::default(),
             sources: Vec::new(),
             new_profile: String::new(),
@@ -1474,11 +1485,14 @@ impl App {
     }
 
     fn apply_requested_settings_focus(&mut self) -> bool {
-        let Some(index) = Self::requested_settings_focus() else {
+        let requested = Self::requested_settings_focus();
+        let len = self.settings_activations().len();
+        let Some(index) = seed_settings_focus(self.settings_focus_seeded, requested, len) else {
             return false;
         };
 
         self.request_settings_focus(index);
+        self.settings_focus_seeded = true;
 
         true
     }
@@ -5434,7 +5448,7 @@ impl App {
                 self.pointer_buttons.clear();
                 self.track_menu_open = None;
                 self.pointer_inside = false;
-                self.set_chrome(false);
+                self.set_chrome(self.player_chrome_held());
                 return Task::none();
             }
             Message::PointerButton { button, pressed } => {
@@ -7469,6 +7483,23 @@ mod tests {
         assert_eq!(
             window_size_from(None, Some(" ")),
             iced::Size::new(INITIAL_WINDOW_WIDTH, 800.0)
+        );
+    }
+
+    #[test]
+    fn a_requested_settings_focus_is_seeded_once_and_then_leaves_the_owner_alone() {
+        assert_eq!(seed_settings_focus(false, Some(3), 6), Some(3));
+        assert_eq!(
+            seed_settings_focus(false, Some(99), 6),
+            Some(5),
+            "a request past the last row lands on the last row"
+        );
+        assert_eq!(seed_settings_focus(false, Some(3), 0), Some(0));
+        assert_eq!(seed_settings_focus(false, None, 6), None);
+        assert_eq!(
+            seed_settings_focus(true, Some(3), 6),
+            None,
+            "a resize must not overwrite the focus the owner moved with the arrow keys"
         );
     }
 

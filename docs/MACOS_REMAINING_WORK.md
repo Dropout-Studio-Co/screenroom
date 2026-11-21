@@ -310,14 +310,19 @@ than reclassified.
   back-to-back A/B against the base commit: delivery 12.081 fps against 12.084
   (**−0.02 %**), CPU **9.36 % against 12.22 % (−2.86 pp)**. The software fallback
   still runs (`SCREENROOM_RENDER=software`) and still uploads every frame.
-- **Why delivery reads ~12 fps in the app's hidden run and not 24:** a hidden
-  window asks iced for about 5.6 redraws a second, and one redraw publishes at most
-  one frame, so publication — not decoding — is the cap. The base commit behaves
-  identically (12.084 fps at 6.6 draws/s) and reaches 24.07 fps in a 30-second run,
-  and the identical renderer holds 23.996 fps for 30 minutes in the harness. That
-  makes the absolute `delivered_fps >= 23.0` app-level criterion a property of a
-  long *hidden* run rather than of this change; the tear/stale/fence counters are
-  the part the app run can prove, and they are clean over 22,357 samples.
+- **Why delivery reads ~12 fps in the app's hidden run and not 24 — and why that is
+  not this change:** the receipts measure `ticks_per_second` and `drawn_fps` at 5.6
+  and 12.4 published generations a second, so the app publishes about 2.2 frames per
+  redraw. Publication is driven by libmpv's wakeup, not by iced redraws, so the
+  counters do **not** establish which of the two is the cap; what they do establish
+  is that the base commit shows the same relationship (12.084 fps at 6.6 draws/s)
+  and that both builds reach 23.7–24.1 fps in a 30-second run. The identical
+  renderer, with the same fixture, holds **23.996 fps for 30 minutes** in the
+  headless harness, where nothing throttles the consumer. The absolute
+  `delivered_fps >= 23.0` app-level criterion therefore remains **met only by the
+  harness and by short app runs**, not by a long hidden app run; the tear, stale and
+  fence counters are the part that long app run can prove, and they are clean over
+  22,357 samples.
 - **Still PENDING:** a 30-minute **visible-window** `SCREENROOM_PLAY_CHECK`, which
   needs `SCREENROOM_ALLOW_FOREGROUND=1` and therefore owner approval. The exact
   command is in the evidence file.
