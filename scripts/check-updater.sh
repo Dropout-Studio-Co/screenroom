@@ -267,7 +267,7 @@ case_dir="$install_root/accepted"
 install_version 0.1.0 "$case_dir"
 if run_update accepted "" "$case_dir" quit; then
   note "receipt: $(tr '\n' ' ' <"$receipt_root/accepted.jsonl" | tail -c 400)"
-  if receipt_has accepted '"status":"ready"'; then
+  if receipt_has accepted '"status":"ready"' || receipt_has accepted '"status":"ready_on_quit"'; then
     ok "the update was reported ready before anything installed"
   else
     fail "the update was never reported as ready"

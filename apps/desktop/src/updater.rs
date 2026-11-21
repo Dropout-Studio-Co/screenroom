@@ -118,6 +118,9 @@ pub enum Event {
         deferred_to_quit: bool,
     },
     Deferred,
+    QuitInstall {
+        update: AvailableUpdate,
+    },
     Installing,
     Installed {
         relaunched: bool,
@@ -132,7 +135,6 @@ pub enum Event {
     Scheduled {
         delay: f64,
     },
-    InstallOnQuit,
     Unknown,
 }
 
@@ -437,8 +439,18 @@ impl Updater {
             Event::Scheduled { delay } => {
                 self.scheduled_delay = Some(delay);
             }
-            Event::InstallOnQuit => {
+            Event::QuitInstall { update } => {
                 self.quit_install_ready = true;
+                if !matches!(
+                    self.status,
+                    UpdateStatus::Installing | UpdateStatus::Installed
+                ) {
+                    self.update = Some(update);
+                    self.status = UpdateStatus::Ready {
+                        deferred_to_quit: true,
+                    };
+                    self.last_failure = None;
+                }
             }
         }
         Vec::new()
@@ -527,7 +539,7 @@ impl Updater {
                     .and_then(|item| item.as_f64())
                     .unwrap_or(0.0),
             },
-            "install_on_quit" => Event::InstallOnQuit,
+            "install_on_quit" => Event::QuitInstall { update: update() },
             "idle" | "unscheduled" | "quit_install_started" => Event::Unknown,
             _ => Event::Unknown,
         };
@@ -828,6 +840,10 @@ pub const TIMEOUT_ENV: &str = "SCREENROOM_UPDATE_TIMEOUT";
 
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 180;
 
+pub const CHECK_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(4);
+
+pub const CHECK_ATTEMPTS: u8 = 3;
+
 pub fn check_requested() -> bool {
     std::env::var_os(CHECK_ENV).is_some()
 }
@@ -940,9 +956,9 @@ impl CheckRun {
             && !matches!(status, UpdateStatus::Unavailable { .. });
         let due = self
             .last_attempt
-            .map(|attempt| attempt.elapsed() >= std::time::Duration::from_secs(1))
+            .map(|attempt| attempt.elapsed() >= CHECK_RETRY_INTERVAL)
             .unwrap_or(true);
-        if waiting && self.attempts < 10 && due && self.begun {
+        if waiting && self.attempts < CHECK_ATTEMPTS && due && self.begun {
             self.attempts += 1;
             self.last_attempt = Some(std::time::Instant::now());
             self.append("\"status\":\"check_retry\"");
@@ -1074,6 +1090,34 @@ mod tests {
         assert_eq!(compare_versions("2.0.0", "10.0.0"), -1);
         assert_eq!(compare_versions("1.2.3-beta", "1.2.3"), 0);
         assert_eq!(compare_versions("", ""), 0);
+    }
+
+    #[test]
+    fn a_quit_install_announcement_still_reports_the_update_and_its_version() {
+        let document = concat!(
+            "{\"event\":\"install_on_quit\",\"version\":\"9.9.9\",",
+            "\"display_version\":\"9.9.9\"}"
+        );
+        let event = Updater::decode(document).expect("the event decodes");
+        let mut updater = Updater::new();
+        updater.feed(event);
+        assert!(updater.quit_install_ready());
+        assert_eq!(
+            updater.status().name(),
+            "ready_on_quit",
+            "an update armed for quit must be reported, not left as idle"
+        );
+        assert_eq!(
+            updater.update().map(|update| update.version.as_str()),
+            Some("9.9.9"),
+            "the headline needs the version the announcement carried"
+        );
+        assert!(
+            updater
+                .headline()
+                .is_some_and(|line| line.contains("9.9.9")),
+            "the screen must be able to name the version waiting for quit"
+        );
     }
 
     #[test]
