@@ -291,4 +291,6 @@ scripts/check-full-disk-recovery.sh           the simulated-volume run, 20 asser
 ```
 
 `.artifacts/` is Git-ignored, so the receipts live on this machine; this document
-carries the numbers and the commands that regenerate them.
+carries the numbers and the commands that regenerate them. The 2 GB disk image
+itself was deleted after the run to reclaim space — the script recreates it on
+demand, and every figure it produced is in `full-disk-receipt.txt`.
