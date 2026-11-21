@@ -346,3 +346,63 @@ certificate, and none is to be purchased), and a person clicking the visible
 "Update now" button. The button's own action is asserted
 (`the_banner_s_first_button_is_the_one_that_installs`) and that action installs, so
 only the pointer press itself is unobserved.
+
+## Observation pass — 2026-11-21
+
+An agent ran the mechanical half of the remaining acceptance session on a build of
+the integration branch, without foreground automation: every window was launched
+with `open -g` (LaunchServices asked not to activate), captured passively with
+`screencapture -l <window>`, and the frontmost application was read before and
+after each launch. It was `Terminal` in every case.
+
+Captures are local, under `.artifacts/observations-2026-11-21/`, because they show
+the owner's own media.
+
+| # | Checklist step | Procedure | Observed | Verdict |
+| --- | --- | --- | --- | --- |
+| 1 | 2 — posters | Library at 1280×800, 1000×800, 1460×900, 860×800 | every card carries a real frame from its own file, the grid is 2/4/5/6 columns at those widths, and 48 titles read as a UUID because those source files are literally named by a UUID (`arkham project media/012ca2c7-….MP4`) — the interpretation is right, the filenames carry no title | PASS, agent-inspected |
+| 2 | 4 — sound | `SCREENROOM_PLAY_CHECK` on `audio-clock-1080p.mp4`, 60 s, hidden; the player's avsync integration test; `volumedetect` on the same file | 30.12 fps delivered at 4.39 % mean CPU, `uploaded_fps` 0, `reclaimed_while_reading` 0, avsync 0.0072 ms with a −12 ms cumulative adjustment, and the audio track decodes at −24.1 dB mean / −20.8 dB peak | PASS on instruments; **not heard** |
+| 3 | 5 — tracks | the `step_5` acceptance test (programmatic messages), plus the player capture | the audio and subtitle pickers change libmpv's tracks and the panel shows `Subtitles · none`, `Audio · aac` | PASS, programmatic |
+| 4 | 6 — fullscreen | the `step_6` acceptance test | fullscreen is entered, left and survived by one Escape, and the window mode is asserted | PASS, programmatic; no capture (a fullscreen window needs focus) |
+| 5 | 7 — 2:1 film | a generated 1920×960 24 fps clip, played hidden-windowed at 1280×800, then the picture bounds measured from the PNG | picture rows 224–1503, columns 0–2559, **measured aspect 2.0000**, full width, letterboxed top and bottom, no stretch | PASS |
+| 6 | 8 — battery | `pmset -g batt` before the session | `AC attached; not charging` — the machine cannot be put on battery by an agent | **not run**, accepted limitation |
+| 7 | 12 — the drive leaves | the library's source folder renamed away, then relaunched and captured | the stored card and its poster remain, nothing is deleted, and no scan runs by itself, so the availability flag does not change until a rescan; the rescan half is covered by `step_12` | partial; rescan needs a pointer or the owner |
+| 8 | 15 — keyboard | the `step_15` acceptance test, plus a capture of the Settings focus row with `SCREENROOM_SETTINGS_FOCUS=3` | the whole journey is reachable from the keyboard, and the focused row is a full-row light fill with dark text at 18.34:1 contrast | PASS |
+
+### Five widths (P2-06)
+
+| Breakpoint | Requested | Captured | Columns | Verdict |
+| --- | --- | --- | --- | --- |
+| Narrow | 860×800 | 1720×1600 px (2×) | 2 | PASS |
+| Compact | 1000×800 | 2000×1600 px | 4 | PASS |
+| Standard | 1280×800 | 2560×1664 px | 5 | PASS |
+| Wide | 1460×900 | 2920×1864 px | 6 | PASS |
+| Ultra | 1920×1080 | window clamped to 1470×923 (2940×1846 px) | 6 | **not capturable** — accepted limitation |
+
+Home, Library, Detail, Settings and Player were captured at 1280; Library and
+Settings also at 860, 1000 and 1460. At every width the navigation collapses to
+icons below 900, the content column stops at its own cap, no title overflows its
+card, no dead band appears, and the player's subtitle panel with **Find online**
+and **Import…** stays inside the window even at the 640×480 minimum.
+
+### Defects and nits found by looking
+
+1. **A one-pixel left clip on the first glyph of a Library card's title.** The grid
+   starts exactly at the scroll content's left edge, so the antialiased left column
+   of the leading character falls outside the clip: `2026 · 0m` renders with the
+   `2` shaved. Cosmetic, one physical pixel, recorded as a nit rather than changed
+   late in a release. Crop: `.artifacts/observations-2026-11-21/crop-caption.png`.
+2. **The artwork failure line is global.** `No poster could be drawn — … ffmpeg
+   could not read this file.` sits in the status bar on every screen, including
+   Settings and Detail, long after the scan that produced it. It is honest but it
+   is not about the screen it appears on.
+3. **Rows are not perfectly aligned when a title wraps to two lines.** In the
+   6-column Library the second row's cards start at different heights. Each card
+   still contains its own title and caption; nothing overlaps.
+
+### Subjective limits, named
+
+Whether a film *sounds* right, whether a poster *looks* right to its owner, and
+whether playback *feels* smooth are not machine questions. This pass answers what
+an image and an instrument can answer and says so; the owner's own session stays
+PENDING in `MACOS_ACCEPTANCE_CHECKLIST.md`.

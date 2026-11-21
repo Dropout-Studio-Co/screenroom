@@ -24,7 +24,7 @@ Current summary:
 | G6 Other TV platforms | **RETIRED** (LG webOS / Android TV out of scope, ADR-004) |
 | G7 iOS | **RETIRED** (out of scope, ADR-003) |
 | G8 Android TV + Media3 | **RETIRED** (out of scope, ADR-004) |
-| G9 Durability, interruption and low-storage behaviour | **PARTIAL on the host** (crash-state and damaged-database recovery tested); no device run, no power cut, no full disk |
+| G9 Durability, interruption and low-storage behaviour | **PARTIAL on the host** (crash-state, damaged-database, `SIGKILL`-mid-playback and simulated-full-disk recovery tested 2026-11-21); no device run, no true power cut |
 
 ---
 
@@ -356,6 +356,21 @@ loop, losing under a second, and the next launch's recovery pass closes the row.
 
 **Still open:** power loss, a pulled USB drive, a full disk and a revoked grant on
 real hardware. Those are device runs, not database tests, and this stays PARTIAL.
+
+**Host receipts added 2026-11-21** (`scripts/check-abrupt-death-recovery.sh`,
+`scripts/check-full-disk-recovery.sh`, evidence in
+[`plans/2026-11-21-ws7-durability-evidence.md`](plans/2026-11-21-ws7-durability-evidence.md)):
+
+| Case | Observed |
+| --- | --- |
+| `SIGKILL` mid-playback, hidden window, scratch database | 21/21 assertions: last checkpoint 20,042 ms against a 19,042 ms last sample survived, `integrity_check` ok, the stale session closed, the staged job requeued, the interrupted conversion failed with "The app closed before this finished.", file/work/source counts unchanged, the library still browsable, and a new session played to 3,042 ms |
+| simulated full disk, 2 GB APFS image at `/Volumes/ScreenroomDurability` (boot volume `/dev/disk3s1s1` checked) | 20/20 assertions: playback stayed alive with checkpoints frozen at 7,042 ms, relaunch reported `database_error: unable to open database file`, the backup returned `StorageFull … No space left on device` with no leftovers, the conversion failed with "No space left on device" and wrote no output, `integrity_check` ok, nothing deleted, volume detached |
+
+**Still not run:** a true AC power loss (an agent cannot cut power; `kill -9`
+keeps the page cache), a pulled USB drive, and a revoked grant on real hardware.
+Those are device runs, so this gate stays PARTIAL. The owner-run power-cut step is
+recorded as an accepted limitation in
+[`plans/2026-11-21-accepted-limitations.md`](plans/2026-11-21-accepted-limitations.md).
 
 ---
 
