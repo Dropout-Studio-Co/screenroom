@@ -18,6 +18,10 @@ rusqlite.workspace = true
 rustls = { version = "0.23", default-features = false, features = ["logging", "ring", "std", "tls12"] }
 webpki-roots = "1"
 
+[[example]]
+name = "enrich_check"
+test = true
+
 [dev-dependencies]
 tempfile.workspace = true
 
