@@ -158,10 +158,18 @@ Not verified:
   own geometry, because iced exposes no layout geometry (ADR-017). A picker is
   published as the options it opens onto and a text field as the value it holds,
   because neither can be driven through the tree.
-- **Settings rows have no visible focus ring.** Arrow keys move a focus that the
-  tree publishes, and Enter runs the row, but the screen draws no ring on the
-  row, so the tree's focus has nothing on screen to agree with. That is a drawn
-  change, recorded rather than fixed here.
+- **Settings rows now draw their focus.** Arrow keys move a focus and Enter runs
+  the row; since 2026-11-21 the focused row is drawn as a full-row semantic fill
+  inversion using `focus_surface` and `focus_foreground`, with no border, ring or
+  outline, and the content scrolls so the focused row stays visible
+  (`settings::row_style`, `settings_scroll_offset`). The
+  `focus_foreground`-on-`focus_surface` contrast is 18.34:1. Captured at
+  1280×800 in `.artifacts/observations-2026-11-21/`.
+- **Subtitle result labels are measured, not estimated.** The old
+  seven-pixels-per-character heuristic is gone: `ui::text_fit` measures with
+  iced's own `Paragraph` and the embedded Inter faces, reserves the cue suffix
+  and the action button first, and truncates on a character boundary. The button
+  stays visible at 640×480 and 1280×800.
 - **Nothing in this document has run in CI.** The workflows exist; see
   `RELEASE_PIPELINE.md`.
 

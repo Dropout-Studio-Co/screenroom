@@ -312,6 +312,15 @@ impl Drop for VideoPipeline {
 }
 
 #[cfg(target_os = "macos")]
+pub fn surface_texture(
+    device: &wgpu::Device,
+    surface: &screenroom_player::SurfaceFrame,
+    frame: &Frame,
+) -> Option<wgpu::Texture> {
+    macos::texture_from_surface(device, surface, frame)
+}
+
+#[cfg(target_os = "macos")]
 fn import_surface(
     device: &wgpu::Device,
     pipeline: &VideoPipeline,

@@ -531,7 +531,7 @@ fn run(
 enum FrameRenderer {
     Software(SoftwareRenderer),
     #[cfg(target_os = "macos")]
-    Gpu(crate::gl_render::GlRenderer),
+    Gpu(Box<crate::gl_render::GlRenderer>),
 }
 
 impl FrameRenderer {
@@ -547,7 +547,7 @@ impl FrameRenderer {
         #[cfg(target_os = "macos")]
         if let Ok(renderer) = crate::gl_render::GlRenderer::with_wake(core, Arc::clone(&wake)) {
             crate::set_render_bridge(crate::RenderBridge::OpenGl);
-            return Ok(Self::Gpu(renderer));
+            return Ok(Self::Gpu(Box::new(renderer)));
         } else if std::env::var_os("SCREENROOM_PLAYER_TRACE").is_some() {
             eprintln!("[worker] no OpenGL render path on this machine; drawing frames on the CPU");
         }
@@ -593,6 +593,30 @@ impl FrameRenderer {
             Self::Software(renderer) => renderer.render(),
             #[cfg(target_os = "macos")]
             Self::Gpu(renderer) => renderer.render(),
+        }
+    }
+
+    fn publish_pending(&mut self) -> Result<Option<Frame>, PlayerError> {
+        match self {
+            Self::Software(_) => Ok(None),
+            #[cfg(target_os = "macos")]
+            Self::Gpu(renderer) => renderer.publish_pending(),
+        }
+    }
+
+    fn has_pending(&self) -> bool {
+        match self {
+            Self::Software(_) => false,
+            #[cfg(target_os = "macos")]
+            Self::Gpu(renderer) => renderer.has_pending(),
+        }
+    }
+
+    fn discard_pending(&mut self) {
+        match self {
+            Self::Software(_) => {}
+            #[cfg(target_os = "macos")]
+            Self::Gpu(renderer) => renderer.discard_pending(),
         }
     }
 
@@ -806,6 +830,9 @@ impl Runner {
             if had_frame {
                 self.present(shared);
             }
+            if self.renderer.has_pending() && self.waits_for_a_tail_frame() {
+                self.publish_tail(shared);
+            }
             if !had_frame && self.metadata_dirty && self.playback_started {
                 self.refresh_metadata(shared);
             }
@@ -860,6 +887,7 @@ impl Runner {
         self.position_ready = false;
         self.current_entry_id = None;
         self.expected_entry_id = None;
+        self.renderer.discard_pending();
         self.pending_seek_serial = None;
         self.queued_seek = None;
         self.seek_started = false;
@@ -952,6 +980,7 @@ impl Runner {
         };
         self.pending_seek_serial = None;
         self.seek_started = false;
+        self.renderer.discard_pending();
         if let Err(error) = self
             .core
             .command(&["seek", &format!("{target:.3}"), "absolute"])
@@ -1409,6 +1438,29 @@ impl Runner {
                     frame.height,
                     frame.generation,
                     began.elapsed()
+                );
+                let load_id = self.load_id;
+                publish(shared, |snapshot| {
+                    snapshot.load_id = load_id;
+                    snapshot.frame = Some(frame);
+                });
+                self.ticks.bump();
+            }
+            Ok(None) => {}
+            Err(error) => self.fail("render_failed", error.to_string(), shared),
+        }
+    }
+
+    fn waits_for_a_tail_frame(&self) -> bool {
+        self.paused || self.state != PlayerState::Playing
+    }
+
+    fn publish_tail(&mut self, shared: &Arc<Mutex<PlayerSnapshot>>) {
+        match self.renderer.publish_pending() {
+            Ok(Some(frame)) => {
+                trace!(
+                    "present: tail published {}x{} gen {}",
+                    frame.width, frame.height, frame.generation
                 );
                 let load_id = self.load_id;
                 publish(shared, |snapshot| {

@@ -48,16 +48,36 @@ synopses are stored in the library, so the same film does not need the network
 twice. Provider artwork retention is a separate setting: turning it off keeps the
 extracted frame instead of the downloaded poster.
 
+**Retention is the gate on provider posters, not enrichment.** The setting
+`metadataArtworkRetention` is unset on a fresh library and unset means
+`DoNotStore`, so an enrichment pass fills genres and synopses but stores no
+provider poster. Only `keep` stores one. On 2026-11-21 the owner's library was
+switched to `keep` for verification: 150 provider posters were stored and every
+one decoded with `ffprobe` at its declared size (12,873–139,861 bytes against the
+2 MiB budget), while the 93 media-extracted frames were left alone. Turning it
+back off stops *new* posters being stored; it does not delete the ones already
+there.
+
 To run it without the interface:
 
 ```
 cargo run --release -p screenroom-core --example enrich_check -- <library.db> 14
 ```
 
-It prints the capability, the queue depth, and a line per round. A round that
-reports `succeeded=40` with `remaining` falling is working; a round with failures
-and a static `remaining` is usually rate limiting, and running it again later
-drains the rest.
+Add `--drain-only` to drain the queue that already exists **without** re-queueing
+the whole library. That distinction matters: the default path resets every `done`
+row to `queued`, so on a library that has already been enriched it repeats work
+and spends provider quota. `--drain-only` leaves completed rows alone and stops on
+a deferred round (rate limit or waiting for the network) instead of hammering the
+provider.
+
+It prints the capability, a one-shot provider probe, the queue depth, and a line
+per round. A round that reports `succeeded=40` with `remaining` falling is
+working; a round with failures and a static `remaining` is usually rate limiting,
+and running it again later drains the rest. A work the provider has no entry for
+fails with `The provider has no matching entry.` and stays failed rather than
+being retried forever; on the owner's library 93 of 410 works are in that state,
+91 of them without a parsed year.
 
 ## When it is not configured
 
