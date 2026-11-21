@@ -20,10 +20,13 @@ pub const AV_TRANSPORT_SERVICE: &str = "urn:schemas-upnp-org:service:AVTransport
 pub const RENDERING_CONTROL_SERVICE: &str = "urn:schemas-upnp-org:service:RenderingControl:1";
 
 pub const CAPABILITY_TEXT: &str = "A casting session can describe a receiver, serve one chosen \
-file from a temporary endpoint that closes itself, and send AVTransport controls. That path has \
-only been run against an in-process fake receiver: no real device has ever played anything \
-through it, and no receiver has answered a search on this network either, so casting stays \
-unverified until a device answers and you watch a film play on it.";
+file from a temporary endpoint that closes itself, and send AVTransport controls. On 2026-11-21 \
+the whole path ran over real LAN sockets against Screenroom's own test receiver in \
+scripts/dev-receiver: discovery found it, pause, seek, resume and stop each read back, and the \
+receiver fetched the served file with a 206 that ffprobe accepted as the same media. That \
+receiver is a first-party test double, not a device: no real device has ever answered a search \
+or played anything through this path, so casting stays unverified on hardware until a receiver \
+you own answers and you watch a film play on it.";
 
 const MULTICAST_ADDRESS: &str = "239.255.255.250:1900";
 
@@ -1845,10 +1848,9 @@ mod tests {
         let capability = capability();
         assert!(capability.can_start_a_session);
         assert!(!capability.verified_on_a_receiver);
-        assert!(CAPABILITY_TEXT.contains("fake receiver"));
-        assert!(CAPABILITY_TEXT.contains("no real device"));
+        assert!(CAPABILITY_TEXT.contains("test receiver"));
         assert!(
-            CAPABILITY_TEXT.contains("no receiver has answered a search"),
+            CAPABILITY_TEXT.contains("no real device has ever answered a search"),
             "the text must carry what the network survey found, got {CAPABILITY_TEXT}"
         );
         assert!(!CAPABILITY_TEXT.contains("works with"));
