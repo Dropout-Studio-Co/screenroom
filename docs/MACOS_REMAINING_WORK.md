@@ -998,3 +998,25 @@ this backlog was written. Its design decision is
 
 The updater does not change any other row: playback, scanning, subtitles, casting,
 backup and the design system are untouched, and `cargo test --workspace` is green.
+
+### A defect the 2026-11-21 verification found, and the fix
+
+Driving the installed application's update path against the published feed showed
+that Sparkle could download and arm a newer release while the application reported
+nothing: the status stayed `idle`, so the banner would never have offered the
+update, and the headless check timed out while the update installed behind it.
+`scripts/check-updater.sh` reproduced the same failure on the base commit, so it
+predates this run.
+
+- **Cause:** the `install_on_quit` announcement moved `quit_install_ready` and
+  nothing else — no status change and no version.
+- **Fix (`7b65a4f`, released as 0.1.8):** the event carries its version and
+  `Updater::feed` moves to `Ready { deferred_to_quit: true }`; the launch-check retry
+  backs off to one attempt every four seconds, three attempts, instead of ten
+  one-second attempts that could restart a check Sparkle had begun.
+- **Receipts:** `scripts/check-updater.sh` green on all seven cases; a live 0.1.7 →
+  0.1.8 install with the library intact and no relaunch; the shipped 0.1.8 build
+  reports `checking → up_to_date` against the published feed.
+
+The literal pointer press on *Update now* is still an accepted limitation
+(`plans/2026-11-21-accepted-limitations.md`).

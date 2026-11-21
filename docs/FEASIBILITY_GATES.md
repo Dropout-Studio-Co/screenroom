@@ -399,6 +399,18 @@ real installed binary with `SCREENROOM_WINDOW=hidden`:
 | feed with its signatures removed | `failed`, error 1000 "The update feed is improperly signed and could not be validated", version stays 0.1.0 |
 | **the published release, over HTTPS** | `check-live-update.sh`: a 0.0.9 build followed `releases/latest/download/appcast.xml` (a 302 to `release-assets.githubusercontent.com`), downloaded `Screenroom-0.1.0-macos-arm64.zip`, verified the feed and archive signatures, installed on quit, and reports 0.1.0 with the library intact and no relaunch |
 
+**Re-run on 2026-11-21, and it found a real defect that the base commit shared.**
+`scripts/check-updater.sh` failed its first case: Sparkle downloaded the newer
+release and armed it for quit, but the application never reported it, so the status
+stayed `idle` and the headless run timed out while the update installed behind it.
+Cause: `install_on_quit` was handled by setting `quit_install_ready` and nothing
+else. Fixed in `Updater::feed`, which now moves to
+`Ready { deferred_to_quit: true }` with the announced version; the launch-check retry
+also backs off to one attempt every four seconds instead of every second. The whole
+script is green afterwards (7 cases), and a live run of the shipped 0.1.8 build
+reports `checking → up_to_date` against the published feed. A live 0.1.7 → 0.1.8
+install through the same path kept the library intact and did not relaunch.
+
 **Not covered by this gate, and not claimed:**
 
 - a person pressing the visible "Update now" button: the action it sends is

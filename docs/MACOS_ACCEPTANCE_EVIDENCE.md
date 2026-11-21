@@ -406,3 +406,30 @@ Whether a film *sounds* right, whether a poster *looks* right to its owner, and
 whether playback *feels* smooth are not machine questions. This pass answers what
 an image and an instrument can answer and says so; the owner's own session stays
 PENDING in `MACOS_ACCEPTANCE_CHECKLIST.md`.
+
+## In-app update path, driven without a pointer (2026-11-21)
+
+The installed application's own update action was exercised against the published
+GitHub feed, never against a local one, and never with the pointer.
+
+| Step | Observed |
+| --- | --- |
+| preserved 0.1.7, installed it with `scripts/release.sh install` | `CFBundleShortVersionString` reads 0.1.7 |
+| ran it with `SCREENROOM_UPDATE_INSTALL=quit` against `releases/latest` | the receipt shows `idle → check_requested`, then Sparkle's own `install_on_quit` for 0.1.7, then `timed_out` at the deadline |
+| installed bundle afterwards | **0.1.8**, replaced in place, no relaunch |
+| library after the upgrade | `PRAGMA integrity_check` ok, 410 works, 867 files |
+| shipped 0.1.8 run against the same feed | `idle → check_requested → checking → up_to_date`, i.e. the status path reports correctly |
+
+**A defect was found and fixed by this check.** The 0.1.7 build above reported
+nothing: Sparkle armed the update for quit and the application left its status at
+`idle`, so the banner would never have offered it. `Updater::feed` now handles the
+`install_on_quit` announcement by moving to `Ready { deferred_to_quit: true }` with
+the announced version, and the launch-check retry backs off to four seconds
+instead of re-issuing the check every second. `scripts/check-updater.sh` — which
+reproduced the same failure on the base commit — is green on all seven cases after
+the fix.
+
+**Not run, and not claimed:** a person pressing the visible *Update now* button.
+`SCREENROOM_ALLOW_FOREGROUND` was never set in this run, so the pointer press is an
+accepted limitation; the action it sends is the one the headless path drives and
+`scripts/check-updater.sh` asserts it installs in place without relaunching.
