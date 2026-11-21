@@ -326,3 +326,285 @@ mod tests {
         assert!(SurfaceFrame::new_with_format(16, 9, PixelFormat::Rgba8).is_err());
     }
 }
+
+pub mod tearing {
+    use super::SurfaceFrame;
+
+    pub const STRIP_TOLERANCE: u8 = 12;
+    const STRIP_SAMPLES: usize = 16;
+    const STRIP_BYTES: usize = 4;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Strip {
+        pub color: [u8; 4],
+        pub uniform: bool,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Strips {
+        pub top: Strip,
+        pub middle: Strip,
+        pub bottom: Strip,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Verdict {
+        Clean,
+        Stale,
+        Torn,
+        Unjudgeable,
+    }
+
+    pub fn near(one: [u8; 4], other: [u8; 4]) -> bool {
+        (0..3).all(|channel| {
+            (one[channel] as i16 - other[channel] as i16).unsigned_abs()
+                <= u16::from(STRIP_TOLERANCE)
+        })
+    }
+
+    pub fn classify(strips: Strips, previous: Option<[u8; 4]>) -> Verdict {
+        if !strips.top.uniform || !strips.middle.uniform || !strips.bottom.uniform {
+            return Verdict::Unjudgeable;
+        }
+        let top = strips.top.color;
+        if !near(top, strips.middle.color) || !near(top, strips.bottom.color) {
+            return Verdict::Torn;
+        }
+        match previous {
+            Some(last) if near(last, top) => Verdict::Stale,
+            _ => Verdict::Clean,
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct TearWatch {
+        previous: Option<[u8; 4]>,
+        samples: u64,
+        mismatches: u64,
+        stale: u64,
+    }
+
+    impl TearWatch {
+        pub fn observe(&mut self, strips: Strips) -> Verdict {
+            let verdict = classify(strips, self.previous);
+            match verdict {
+                Verdict::Clean => {
+                    self.samples += 1;
+                    self.previous = Some(strips.top.color);
+                }
+                Verdict::Torn => {
+                    self.samples += 1;
+                    self.mismatches += 1;
+                    self.previous = Some(strips.top.color);
+                }
+                Verdict::Stale => {
+                    self.samples += 1;
+                    self.stale += 1;
+                    self.previous = Some(strips.top.color);
+                }
+                Verdict::Unjudgeable => {}
+            }
+            verdict
+        }
+
+        pub fn samples(&self) -> u64 {
+            self.samples
+        }
+
+        pub fn mismatches(&self) -> u64 {
+            self.mismatches
+        }
+
+        pub fn stale_repeats(&self) -> u64 {
+            self.stale
+        }
+    }
+
+    pub fn enabled() -> bool {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ENABLED.get_or_init(|| {
+            std::env::var("SCREENROOM_TEAR_CHECK").is_ok_and(|value| {
+                value == "1"
+                    || value.eq_ignore_ascii_case("yes")
+                    || value.eq_ignore_ascii_case("on")
+            })
+        })
+    }
+
+    pub fn sample_strips(surface: &SurfaceFrame) -> Option<Strips> {
+        let width = surface.width();
+        let height = surface.height();
+        if width < 8 || height < 8 {
+            return None;
+        }
+        surface.with_pixels(|bytes| {
+            let stride = surface.bytes_per_row() as usize;
+            let row_of = |eighths: usize| (height as usize * eighths) / 8;
+            let top = strip(bytes, stride, width as usize, row_of(1))?;
+            let middle = strip(bytes, stride, width as usize, row_of(4))?;
+            let bottom = strip(bytes, stride, width as usize, row_of(7))?;
+            Some(Strips {
+                top,
+                middle,
+                bottom,
+            })
+        })
+    }
+
+    fn strip(bytes: &[u8], stride: usize, width: usize, row: usize) -> Option<Strip> {
+        let left = width / 8;
+        let span = width - left * 2;
+        let mut first: Option<[u8; 4]> = None;
+        let mut uniform = true;
+        for sample in 0..STRIP_SAMPLES {
+            let column = left + (span * sample) / STRIP_SAMPLES;
+            let offset = row * stride + column * STRIP_BYTES;
+            let pixel = bytes.get(offset..offset + STRIP_BYTES)?;
+            let color = [pixel[0], pixel[1], pixel[2], pixel[3]];
+            match first {
+                None => first = Some(color),
+                Some(reference) if !near(reference, color) => uniform = false,
+                Some(_) => {}
+            }
+        }
+        Some(Strip {
+            color: first?,
+            uniform,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        const RED: [u8; 4] = [0, 0, 255, 255];
+        const BLUE: [u8; 4] = [255, 0, 0, 255];
+
+        fn uniform(color: [u8; 4]) -> Strip {
+            Strip {
+                color,
+                uniform: true,
+            }
+        }
+
+        fn frame(color: [u8; 4]) -> Strips {
+            Strips {
+                top: uniform(color),
+                middle: uniform(color),
+                bottom: uniform(color),
+            }
+        }
+
+        #[test]
+        fn a_uniform_frame_is_clean_and_a_repeat_of_it_is_stale() {
+            assert_eq!(classify(frame(RED), None), Verdict::Clean);
+            assert_eq!(
+                classify(frame(BLUE), Some(RED)),
+                Verdict::Clean,
+                "the alternating fixture must pass on every frame change"
+            );
+            assert_eq!(
+                classify(frame(RED), Some(RED)),
+                Verdict::Stale,
+                "the same colour twice is a frame that never advanced"
+            );
+        }
+
+        #[test]
+        fn a_frame_whose_top_and_bottom_disagree_is_torn() {
+            let torn = Strips {
+                top: uniform(RED),
+                middle: uniform(RED),
+                bottom: uniform(BLUE),
+            };
+            assert_eq!(classify(torn, None), Verdict::Torn);
+            let split_across_the_middle = Strips {
+                top: uniform(BLUE),
+                middle: uniform(RED),
+                bottom: uniform(BLUE),
+            };
+            assert_eq!(classify(split_across_the_middle, None), Verdict::Torn);
+        }
+
+        #[test]
+        fn a_strip_with_content_in_it_is_not_judged_rather_than_blamed_for_tearing() {
+            let busy = Strips {
+                top: Strip {
+                    color: RED,
+                    uniform: false,
+                },
+                middle: uniform(RED),
+                bottom: uniform(RED),
+            };
+            assert_eq!(
+                classify(busy, None),
+                Verdict::Unjudgeable,
+                "real footage is not uniform, so the check must abstain instead of inventing a tear"
+            );
+        }
+
+        #[test]
+        fn a_watch_counts_clean_stale_and_torn_frames_separately() {
+            let mut watch = TearWatch::default();
+            assert_eq!(watch.observe(frame(RED)), Verdict::Clean);
+            assert_eq!(watch.observe(frame(RED)), Verdict::Stale);
+            assert_eq!(
+                watch.observe(Strips {
+                    top: uniform(RED),
+                    middle: uniform(RED),
+                    bottom: uniform(BLUE),
+                }),
+                Verdict::Torn
+            );
+            assert_eq!(watch.observe(frame(BLUE)), Verdict::Clean);
+            assert_eq!(watch.samples(), 4);
+            assert_eq!(watch.stale_repeats(), 1);
+            assert_eq!(watch.mismatches(), 1);
+        }
+
+        #[test]
+        fn near_tolerates_compression_noise_and_nothing_wider() {
+            assert!(near(RED, [0, 0, 255 - STRIP_TOLERANCE, 255]));
+            assert!(!near(RED, [0, 0, 255 - STRIP_TOLERANCE - 1, 255]));
+            assert!(near([10, 10, 10, 255], [10, 10, 10, 0]));
+        }
+
+        #[test]
+        fn strips_read_the_top_middle_and_bottom_of_a_surface() {
+            let surface = SurfaceFrame::new(64, 64).expect("a surface exists");
+            let base = surface.base_address();
+            let stride = surface.bytes_per_row() as usize;
+            for row in 0..64 {
+                for column in 0..64 {
+                    let offset = row * stride + column * 4;
+                    let color: [u8; 4] = if row < 32 { RED } else { BLUE };
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(color.as_ptr(), base.add(offset), 4);
+                    }
+                }
+            }
+            let strips = sample_strips(&surface).expect("the strips are readable");
+            assert!(strips.top.uniform && strips.bottom.uniform);
+            assert!(near(strips.top.color, RED));
+            assert!(near(strips.bottom.color, BLUE));
+            assert_eq!(classify(strips, None), Verdict::Torn);
+        }
+
+        #[test]
+        fn a_uniform_surface_is_clean() {
+            let surface = SurfaceFrame::new(128, 72).expect("a surface exists");
+            let base = surface.base_address();
+            let stride = surface.bytes_per_row() as usize;
+            for row in 0..72 {
+                for column in 0..128 {
+                    let offset = row * stride + column * 4;
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(BLUE.as_ptr(), base.add(offset), 4);
+                    }
+                }
+            }
+            let strips = sample_strips(&surface).expect("the strips are readable");
+            assert_eq!(classify(strips, None), Verdict::Clean);
+        }
+    }
+}

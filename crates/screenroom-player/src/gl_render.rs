@@ -1,7 +1,7 @@
 use std::ffi::{c_char, c_int, c_void};
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::frame::PixelFormat;
@@ -13,9 +13,14 @@ pub const UPDATE_FRAME: u64 = 1;
 const SURFACE_POOL_SIZE: usize = 3;
 const MAX_SURFACE_POOL_SIZE: usize = 16;
 
-const FENCE_TIMEOUT: Duration = Duration::from_secs(1);
+const FENCE_DEADLINE: Duration = Duration::from_secs(1);
 
 const READER_GRACE: Duration = Duration::from_millis(1000);
+
+const PENDING_PIPELINE_DEPTH: usize = 2;
+const PENDING_MAX: usize = 3;
+const TAIL_SLICE: Duration = Duration::from_millis(2);
+const TAIL_DEADLINE: Duration = Duration::from_millis(50);
 
 const PARAM_API_TYPE: c_int = 1;
 const PARAM_OPENGL_INIT_PARAMS: c_int = 2;
@@ -271,6 +276,261 @@ impl std::fmt::Debug for GlFence {
     }
 }
 
+enum Fence {
+    Live(GlFence),
+    #[cfg(test)]
+    Stub(std::cell::Cell<FenceOutcome>),
+}
+
+impl Fence {
+    fn record() -> Option<Self> {
+        GlFence::record().map(Self::Live)
+    }
+
+    fn probe(&self) -> FenceOutcome {
+        match self {
+            Self::Live(fence) => fence.probe(),
+            #[cfg(test)]
+            Self::Stub(outcome) => outcome.get(),
+        }
+    }
+
+    fn wait(&self, timeout: Duration) -> FenceOutcome {
+        match self {
+            Self::Live(fence) => fence.wait(timeout),
+            #[cfg(test)]
+            Self::Stub(outcome) => outcome.get(),
+        }
+    }
+
+    #[cfg(test)]
+    fn stub(outcome: FenceOutcome) -> Self {
+        Self::Stub(std::cell::Cell::new(outcome))
+    }
+
+    #[cfg(test)]
+    fn signal(&self) {
+        if let Self::Stub(outcome) = self {
+            outcome.set(FenceOutcome::Signalled);
+        }
+    }
+}
+
+impl std::fmt::Debug for Fence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Live(fence) => f.debug_tuple("Live").field(fence).finish(),
+            #[cfg(test)]
+            Self::Stub(outcome) => f.debug_tuple("Stub").field(&outcome.get()).finish(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingStep {
+    Publish,
+    Wait,
+    Reclaim,
+}
+
+fn pending_step(probe: FenceOutcome, waited: Duration) -> PendingStep {
+    match probe {
+        FenceOutcome::Signalled => PendingStep::Publish,
+        FenceOutcome::Failed => PendingStep::Reclaim,
+        FenceOutcome::Waiting if waited >= FENCE_DEADLINE => PendingStep::Reclaim,
+        FenceOutcome::Waiting => PendingStep::Wait,
+    }
+}
+
+struct PendingFrame {
+    generation: u64,
+    slot: usize,
+    fence: Fence,
+    started: Instant,
+}
+
+impl std::fmt::Debug for PendingFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingFrame")
+            .field("generation", &self.generation)
+            .field("slot", &self.slot)
+            .field("started", &self.started)
+            .finish_non_exhaustive()
+    }
+}
+
+struct PendingQueue {
+    frames: Vec<PendingFrame>,
+}
+
+impl PendingQueue {
+    fn new() -> Self {
+        Self { frames: Vec::new() }
+    }
+
+    fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+
+    fn front(&self) -> Option<&PendingFrame> {
+        self.frames.first()
+    }
+
+    fn push(&mut self, frame: PendingFrame) -> bool {
+        if self.frames.len() >= PENDING_MAX {
+            return false;
+        }
+        self.frames.push(frame);
+        true
+    }
+
+    fn pop_front(&mut self) -> Option<PendingFrame> {
+        if self.frames.is_empty() {
+            None
+        } else {
+            Some(self.frames.remove(0))
+        }
+    }
+
+    fn holds_slot(&self, slot: usize) -> bool {
+        self.frames.iter().any(|frame| frame.slot == slot)
+    }
+
+    fn clear(&mut self) -> Vec<PendingFrame> {
+        std::mem::take(&mut self.frames)
+    }
+}
+
+impl std::fmt::Debug for PendingQueue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(&self.frames).finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PublicationStats {
+    pub generations_published: u64,
+    pub generations_consumed: u64,
+    pub pending_publishes: u64,
+    pub publish_wait_max_ms: u64,
+    pub fence_timeouts: u64,
+    pub tail_waits: u64,
+    pub skipped: u64,
+    pub reclaimed_while_reading: u64,
+    pub tear_samples: u64,
+    pub tear_mismatches: u64,
+    pub stale_repeats: u64,
+}
+
+static STATS: [AtomicU64; 11] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+
+pub fn publication_stats() -> PublicationStats {
+    let read = |index: usize| STATS[index].load(Ordering::Acquire);
+    PublicationStats {
+        generations_published: read(0),
+        generations_consumed: read(1),
+        pending_publishes: read(2),
+        publish_wait_max_ms: read(3),
+        fence_timeouts: read(4),
+        tail_waits: read(5),
+        skipped: read(6),
+        reclaimed_while_reading: read(7),
+        tear_samples: read(8),
+        tear_mismatches: read(9),
+        stale_repeats: read(10),
+    }
+}
+
+fn store_stats(stats: PublicationStats) {
+    let values = [
+        stats.generations_published,
+        stats.generations_consumed,
+        stats.pending_publishes,
+        stats.publish_wait_max_ms,
+        stats.fence_timeouts,
+        stats.tail_waits,
+        stats.skipped,
+        stats.reclaimed_while_reading,
+        stats.tear_samples,
+        stats.tear_mismatches,
+        stats.stale_repeats,
+    ];
+    for (slot, value) in STATS.iter().zip(values) {
+        slot.store(value, Ordering::Release);
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Counters {
+    generations_published: u64,
+    generations_consumed: u64,
+    pending_publishes: u64,
+    publish_wait_max_ms: u64,
+    fence_timeouts: u64,
+    tail_waits: u64,
+    skipped: u64,
+    reclaimed_while_reading: u64,
+}
+
+impl Counters {
+    fn stats(self, tears: crate::surface::tearing::TearWatch) -> PublicationStats {
+        PublicationStats {
+            generations_published: self.generations_published,
+            generations_consumed: self.generations_consumed,
+            pending_publishes: self.pending_publishes,
+            publish_wait_max_ms: self.publish_wait_max_ms,
+            fence_timeouts: self.fence_timeouts,
+            tail_waits: self.tail_waits,
+            skipped: self.skipped,
+            reclaimed_while_reading: self.reclaimed_while_reading,
+            tear_samples: tears.samples(),
+            tear_mismatches: tears.mismatches(),
+            stale_repeats: tears.stale_repeats(),
+        }
+    }
+}
+
+fn reclaim_front(counters: &mut Counters, queue: &mut PendingQueue) -> Option<PendingFrame> {
+    let pending = queue.pop_front()?;
+    counters.fence_timeouts += 1;
+    Some(pending)
+}
+
+fn wait_for_signalled(
+    waited: Duration,
+    deadline: Duration,
+    slice: Duration,
+    wait: &mut dyn FnMut(Duration) -> FenceOutcome,
+    elapsed: &mut dyn FnMut() -> Duration,
+) -> FenceOutcome {
+    let mut waited = waited;
+    loop {
+        if waited >= deadline {
+            return FenceOutcome::Waiting;
+        }
+        match wait(slice) {
+            FenceOutcome::Waiting => waited = elapsed(),
+            outcome => return outcome,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct SlotWrite {
     generation: u64,
@@ -297,8 +557,8 @@ struct Slot {
     texture: u32,
     framebuffer: u32,
     write: SlotWrite,
-    fence: Option<GlFence>,
     published_at: Option<Instant>,
+    awaiting_release: bool,
 }
 
 impl Slot {
@@ -370,8 +630,8 @@ impl Slot {
             texture,
             framebuffer,
             write: SlotWrite::default(),
-            fence: None,
             published_at: None,
+            awaiting_release: false,
         })
     }
 
@@ -420,9 +680,10 @@ pub struct GlRenderer {
     width: u32,
     height: u32,
     generation: u64,
-    skipped: u64,
-    fence_timeouts: u64,
-    reclaimed_while_reading: u64,
+    pending: PendingQueue,
+    counters: Counters,
+    tears: crate::surface::tearing::TearWatch,
+    tear_check: bool,
     output: PixelFormat,
     target_failure: Option<String>,
 }
@@ -433,9 +694,9 @@ impl std::fmt::Debug for GlRenderer {
             .field("size", &(self.width, self.height))
             .field("slots", &self.slots)
             .field("generation", &self.generation)
-            .field("skipped", &self.skipped)
-            .field("fence_timeouts", &self.fence_timeouts)
-            .field("reclaimed_while_reading", &self.reclaimed_while_reading)
+            .field("pending", &self.pending)
+            .field("counters", &self.counters)
+            .field("tear_check", &self.tear_check)
             .finish_non_exhaustive()
     }
 }
@@ -514,9 +775,10 @@ impl GlRenderer {
             width: 0,
             height: 0,
             generation: 0,
-            skipped: 0,
-            fence_timeouts: 0,
-            reclaimed_while_reading: 0,
+            pending: PendingQueue::new(),
+            counters: Counters::default(),
+            tears: crate::surface::tearing::TearWatch::default(),
+            tear_check: crate::surface::tearing::enabled(),
             output: PixelFormat::Bgra8,
             target_failure: None,
         })
@@ -548,6 +810,7 @@ impl GlRenderer {
         self.width = width;
         self.height = height;
         self.target_failure = None;
+        self.abandon_pending();
         self.release_slots();
         let mut slots = Vec::with_capacity(SURFACE_POOL_SIZE);
         for _ in 0..SURFACE_POOL_SIZE {
@@ -560,18 +823,59 @@ impl GlRenderer {
             }
         }
         self.slots = slots;
+        self.publish_stats();
     }
 
     pub fn skipped(&self) -> u64 {
-        self.skipped
+        self.counters.skipped
     }
 
     pub fn fence_timeouts(&self) -> u64 {
-        self.fence_timeouts
+        self.counters.fence_timeouts
     }
 
     pub fn reclaimed_while_reading(&self) -> u64 {
-        self.reclaimed_while_reading
+        self.counters.reclaimed_while_reading
+    }
+
+    pub fn generations_published(&self) -> u64 {
+        self.counters.generations_published
+    }
+
+    pub fn generations_consumed(&self) -> u64 {
+        self.counters.generations_consumed
+    }
+
+    pub fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+
+    pub fn pipeline_depth(&self) -> usize {
+        PENDING_PIPELINE_DEPTH
+    }
+
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    pub fn discard_pending(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        if self.cgl.make_current().is_err() {
+            return;
+        }
+        for pending in self.pending.clear() {
+            self.settle_slot(pending.slot);
+            if let Some(report_swap) = self.symbols.report_swap {
+                unsafe { report_swap(self.context.as_ptr()) };
+            }
+        }
+        self.publish_stats();
+    }
+
+    pub fn publication_stats(&self) -> PublicationStats {
+        self.counters.stats(self.tears)
     }
 
     pub fn render(&mut self) -> Result<Option<Frame>, PlayerError> {
@@ -584,8 +888,14 @@ impl GlRenderer {
             )));
         }
         self.cgl.make_current()?;
-        self.settle_fences();
+        self.collect_consumed();
+        let published = self.drain_pending()?;
         self.reap_surplus_slots();
+        if self.pending.len() >= PENDING_MAX {
+            self.counters.skipped += 1;
+            self.publish_stats();
+            return Ok(published);
+        }
         let index = match writable_slot(&self.slots, Instant::now()) {
             Some(index) => index,
             None if self.slots.len() < MAX_SURFACE_POOL_SIZE => {
@@ -595,20 +905,22 @@ impl GlRenderer {
                         self.slots.len() - 1
                     }
                     Err(_) => {
-                        self.skipped += 1;
-                        return Ok(None);
+                        self.counters.skipped += 1;
+                        self.publish_stats();
+                        return Ok(published);
                     }
                 }
             }
             None => {
-                self.skipped += 1;
-                return Ok(None);
+                self.counters.skipped += 1;
+                self.publish_stats();
+                return Ok(published);
             }
         };
-        let framebuffer = self.slots[index].framebuffer;
         if !self.slots[index].reads_reported() {
-            self.reclaimed_while_reading += 1;
+            self.counters.reclaimed_while_reading += 1;
         }
+        let framebuffer = self.slots[index].framebuffer;
         let (internal_format, _, _) = gl_formats(self.output);
         let mut fbo = OpenGlFbo {
             fbo: framebuffer as c_int,
@@ -647,72 +959,181 @@ impl GlRenderer {
             });
         }
         self.slots[index].write.begin(generation);
-        let Some(fence) = GlFence::record() else {
+        let Some(fence) = Fence::record() else {
             return Err(PlayerError::Unavailable(
                 "the OpenGL driver refused a fence sync object".to_string(),
             ));
         };
-        let outcome = match fence.probe() {
-            FenceOutcome::Signalled => FenceOutcome::Signalled,
-            FenceOutcome::Waiting => fence.wait(FENCE_TIMEOUT),
-            FenceOutcome::Failed => FenceOutcome::Failed,
+        let queued = PendingFrame {
+            generation,
+            slot: index,
+            fence,
+            started: Instant::now(),
         };
+        if !self.pending.push(queued) {
+            self.slots[index].write.settle();
+            self.counters.skipped += 1;
+            self.publish_stats();
+            return Ok(published);
+        }
+        if std::env::var_os("SCREENROOM_PLAYER_TRACE").is_some() {
+            eprintln!(
+                "[gl_render] {}x{} slot {} generation {generation} — libmpv {drawn:?}, fence recorded, {} pending",
+                self.width,
+                self.height,
+                index,
+                self.pending.len()
+            );
+        }
+        self.publish_stats();
+        Ok(published)
+    }
+
+    pub fn publish_pending(&mut self) -> Result<Option<Frame>, PlayerError> {
+        if self.pending.is_empty() {
+            return Ok(None);
+        }
+        if let Some(reason) = &self.target_failure {
+            return Err(PlayerError::Unavailable(format!(
+                "the OpenGL surface pool is not ready: {reason}"
+            )));
+        }
+        self.cgl.make_current()?;
+        self.counters.tail_waits += 1;
+        let began = Instant::now();
+        while let Some(front) = self.pending.front() {
+            let step = pending_step(front.fence.probe(), front.started.elapsed());
+            match step {
+                PendingStep::Publish => {
+                    let frame = self.publish_front(Instant::now(), false)?;
+                    self.collect_consumed();
+                    self.publish_stats();
+                    return Ok(Some(frame));
+                }
+                PendingStep::Reclaim => {
+                    if let Some(frame) = reclaim_front(&mut self.counters, &mut self.pending) {
+                        self.settle_slot(frame.slot);
+                    }
+                }
+                PendingStep::Wait => {
+                    let outcome = wait_for_signalled(
+                        Duration::ZERO,
+                        TAIL_DEADLINE,
+                        TAIL_SLICE,
+                        &mut |slice| {
+                            self.pending
+                                .front()
+                                .map(|pending| pending.fence.wait(slice))
+                                .unwrap_or(FenceOutcome::Signalled)
+                        },
+                        &mut || began.elapsed(),
+                    );
+                    match outcome {
+                        FenceOutcome::Signalled => {}
+                        FenceOutcome::Waiting => break,
+                        FenceOutcome::Failed => {
+                            return Err(PlayerError::Unavailable(
+                                "the OpenGL fence for this frame could not be waited on"
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        self.collect_consumed();
+        self.publish_stats();
+        Ok(None)
+    }
+
+    fn drain_pending(&mut self) -> Result<Option<Frame>, PlayerError> {
+        let mut published = None;
+        while let Some(front) = self.pending.front() {
+            let step = pending_step(front.fence.probe(), front.started.elapsed());
+            match step {
+                PendingStep::Publish => {
+                    if published.is_some() {
+                        break;
+                    }
+                    published = Some(self.publish_front(Instant::now(), true)?);
+                }
+                PendingStep::Reclaim => {
+                    if let Some(frame) = reclaim_front(&mut self.counters, &mut self.pending) {
+                        self.settle_slot(frame.slot);
+                    }
+                }
+                PendingStep::Wait => break,
+            }
+        }
+        Ok(published)
+    }
+
+    fn publish_front(&mut self, now: Instant, drained: bool) -> Result<Frame, PlayerError> {
+        let Some(pending) = self.pending.pop_front() else {
+            return Err(PlayerError::Unavailable(
+                "a frame was published from an empty queue".to_string(),
+            ));
+        };
+        let waited = now.saturating_duration_since(pending.started);
+        self.counters.publish_wait_max_ms = self
+            .counters
+            .publish_wait_max_ms
+            .max(waited.as_millis() as u64);
+        if drained {
+            self.counters.pending_publishes += 1;
+        }
         if let Some(report_swap) = self.symbols.report_swap {
             unsafe { report_swap(self.context.as_ptr()) };
         }
-        match outcome {
-            FenceOutcome::Signalled => {}
-            FenceOutcome::Waiting => {
-                self.fence_timeouts += 1;
-                self.skipped += 1;
-                self.slots[index].fence = Some(fence);
-                return Ok(None);
-            }
-            FenceOutcome::Failed => {
-                return Err(PlayerError::Unavailable(
-                    "the OpenGL fence for this frame could not be waited on".to_string(),
-                ));
-            }
+        let slot = &mut self.slots[pending.slot];
+        slot.write.settle();
+        slot.published_at = Some(now);
+        slot.awaiting_release = true;
+        if self.tear_check
+            && let Some(strips) = crate::surface::tearing::sample_strips(&slot.surface)
+        {
+            self.tears.observe(strips);
         }
-        self.slots[index].write.settle();
-        self.slots[index].published_at = Some(Instant::now());
-        if std::env::var_os("SCREENROOM_PLAYER_TRACE").is_some() {
-            eprintln!(
-                "[gl_render] {}x{} slot {} generation {generation} — libmpv {drawn:?}, fence waited",
-                self.width, self.height, index
-            );
-        }
-        let surface = Arc::clone(&self.slots[index].surface);
-        Ok(Some(Frame::gpu(
+        let surface = Arc::clone(&slot.surface);
+        self.counters.generations_published += 1;
+        Ok(Frame::gpu(
             self.width,
             self.height,
             surface,
-            generation,
-        )))
+            pending.generation,
+        ))
     }
 
-    fn settle_fences(&mut self) {
+    fn settle_slot(&mut self, index: usize) {
+        if let Some(slot) = self.slots.get_mut(index) {
+            slot.write.settle();
+        }
+    }
+
+    fn collect_consumed(&mut self) {
         for slot in &mut self.slots {
-            let Some(fence) = slot.fence.as_ref() else {
-                continue;
-            };
-            if fence.probe() == FenceOutcome::Signalled {
-                slot.fence = None;
-                slot.write.settle();
+            if slot.awaiting_release && slot.reads_reported() {
+                slot.awaiting_release = false;
+                self.counters.generations_consumed += 1;
             }
         }
+    }
+
+    fn publish_stats(&self) {
+        store_stats(self.counters.stats(self.tears));
     }
 
     fn reap_surplus_slots(&mut self) {
         if self.slots.len() <= SURFACE_POOL_SIZE {
             return;
         }
-        if self.slots.iter().any(|slot| {
+        let busy = self.slots.iter().enumerate().any(|(index, slot)| {
             Arc::strong_count(&slot.surface) != 1
                 || slot.write.pending
-                || slot.fence.is_some()
+                || self.pending.holds_slot(index)
                 || !slot.reads_reported()
-        }) {
+        });
+        if busy {
             return;
         }
         while self.slots.len() > SURFACE_POOL_SIZE {
@@ -724,6 +1145,15 @@ impl GlRenderer {
     #[allow(dead_code)]
     pub fn raw_context(&self) -> *mut c_void {
         self.context.as_ptr()
+    }
+
+    fn abandon_pending(&mut self) {
+        let abandoned = self.pending.clear();
+        for pending in abandoned {
+            if let Some(slot) = self.slots.get_mut(pending.slot) {
+                slot.write.settle();
+            }
+        }
     }
 
     fn release_slots(&mut self) {
@@ -740,6 +1170,7 @@ impl Drop for GlRenderer {
             (self.symbols.free)(self.context.as_ptr());
         }
         if self.cgl.make_current().is_ok() {
+            self.abandon_pending();
             self.release_slots();
         }
         self.callback_data.dirty.store(false, Ordering::Release);
@@ -756,8 +1187,8 @@ mod tests {
             texture: 0,
             framebuffer: 0,
             write: SlotWrite::default(),
-            fence: None,
             published_at: None,
+            awaiting_release: false,
         }
     }
 
@@ -777,6 +1208,15 @@ mod tests {
 
     fn release(slot: &Slot, generation: u64) {
         slot.surface.reads().note_released(generation);
+    }
+
+    fn pending(generation: u64, slot: usize, outcome: FenceOutcome) -> PendingFrame {
+        PendingFrame {
+            generation,
+            slot,
+            fence: Fence::stub(outcome),
+            started: Instant::now(),
+        }
     }
 
     #[test]
@@ -920,6 +1360,142 @@ mod tests {
             release(&slots[index], generation);
         }
         assert_eq!(drawn.len(), 12);
+    }
+
+    #[test]
+    fn a_pending_frame_is_not_published_before_its_fence_signals() {
+        let frame = pending(1, 0, FenceOutcome::Waiting);
+        assert_eq!(
+            pending_step(frame.fence.probe(), Duration::from_millis(1)),
+            PendingStep::Wait,
+            "a frame whose fence has not signalled may still be half drawn"
+        );
+        frame.fence.signal();
+        assert_eq!(
+            pending_step(frame.fence.probe(), Duration::from_millis(1)),
+            PendingStep::Publish
+        );
+    }
+
+    #[test]
+    fn frames_are_published_in_the_order_they_were_drawn_and_each_exactly_once() {
+        let mut queue = PendingQueue::new();
+        for generation in 1..=PENDING_MAX as u64 {
+            assert!(queue.push(pending(
+                generation,
+                generation as usize - 1,
+                FenceOutcome::Waiting
+            )));
+        }
+        let mut published = Vec::new();
+        while let Some(frame) = queue.pop_front() {
+            frame.fence.signal();
+            published.push(frame.generation);
+        }
+        assert_eq!(published, vec![1, 2, 3]);
+        assert!(queue.is_empty());
+        assert_eq!(
+            published
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            published.len(),
+            "no generation may be published twice"
+        );
+    }
+
+    #[test]
+    fn a_full_queue_skips_a_frame_instead_of_overwriting_one_in_flight() {
+        let mut queue = PendingQueue::new();
+        for generation in 1..=PENDING_MAX as u64 {
+            assert!(queue.push(pending(generation, 0, FenceOutcome::Waiting)));
+        }
+        let full = pending(99, 1, FenceOutcome::Waiting);
+        assert!(
+            !queue.push(full),
+            "the queue is bounded, so a full one refuses rather than recycles a live fence"
+        );
+        assert_eq!(queue.len(), PENDING_MAX);
+        assert_eq!(
+            queue.front().map(|frame| frame.generation),
+            Some(1),
+            "the oldest frame keeps its place"
+        );
+        assert_eq!(PENDING_MAX, 3);
+        assert_eq!(PENDING_PIPELINE_DEPTH, 2);
+    }
+
+    #[test]
+    fn a_lost_fence_is_reclaimed_after_the_deadline_and_counted_apart_from_skips() {
+        let mut counters = Counters::default();
+        let mut queue = PendingQueue::new();
+        queue.push(pending(5, 2, FenceOutcome::Waiting));
+        let front = queue.front().expect("the frame is queued");
+        assert_eq!(
+            pending_step(
+                front.fence.probe(),
+                FENCE_DEADLINE - Duration::from_millis(1)
+            ),
+            PendingStep::Wait
+        );
+        assert_eq!(
+            pending_step(front.fence.probe(), FENCE_DEADLINE),
+            PendingStep::Reclaim,
+            "a fence that never reports must eventually be given up on"
+        );
+        let reclaimed = reclaim_front(&mut counters, &mut queue).expect("the frame was reclaimed");
+        assert_eq!(reclaimed.generation, 5);
+        assert_eq!(counters.fence_timeouts, 1);
+        assert_eq!(counters.skipped, 0);
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn the_tail_poll_publishes_the_last_frame_of_a_pause() {
+        let clock = std::cell::Cell::new(Duration::ZERO);
+        let mut outcomes = std::collections::VecDeque::from([
+            FenceOutcome::Waiting,
+            FenceOutcome::Waiting,
+            FenceOutcome::Signalled,
+        ]);
+        let outcome = wait_for_signalled(
+            Duration::ZERO,
+            TAIL_DEADLINE,
+            TAIL_SLICE,
+            &mut |slice| {
+                clock.set(clock.get() + slice);
+                outcomes.pop_front().unwrap_or(FenceOutcome::Signalled)
+            },
+            &mut || clock.get(),
+        );
+        assert_eq!(
+            outcome,
+            FenceOutcome::Signalled,
+            "the frame drawn just before a pause must still reach the screen"
+        );
+        assert!(clock.get() <= TAIL_DEADLINE);
+    }
+
+    #[test]
+    fn the_tail_poll_gives_up_rather_than_stalling_the_worker() {
+        let clock = std::cell::Cell::new(Duration::ZERO);
+        let outcome = wait_for_signalled(
+            Duration::ZERO,
+            TAIL_DEADLINE,
+            TAIL_SLICE,
+            &mut |slice| {
+                clock.set(clock.get() + slice);
+                FenceOutcome::Waiting
+            },
+            &mut || clock.get(),
+        );
+        assert_eq!(outcome, FenceOutcome::Waiting);
+        let waited = clock.get();
+        assert!(
+            waited <= TAIL_DEADLINE,
+            "the tail wait is bounded by its deadline, not by the fence: {waited:?}"
+        );
     }
 
     #[test]
