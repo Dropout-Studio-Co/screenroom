@@ -2487,3 +2487,34 @@ check` all clean at this tree; the library, the player and the acceptance suite 
 untouched by the change. Captures and their before/after are recorded in
 [`MACOS_ACCEPTANCE_EVIDENCE.md`](MACOS_ACCEPTANCE_EVIDENCE.md) § "The three nits,
 closed".
+
+## Source folder selection and onboarding states (2026-11-23)
+
+A source is a storage location, and the folders read from it are an explicit
+selection ([`ADR-020`](ADR-020_SOURCE_FOLDER_SELECTION.md)). Selected folders are
+stored as paths relative to the source root with `""` for the root itself, siblings
+and nested folders combine, a selected parent covers its descendants, and the set is
+normalised before it is written. A new source starts unconfigured — the legacy
+whole-root walk — and configuring it sets `sources.folders_configured = 1` and scans
+only the selected subtrees. Schema 11 adds `source_folders` and that column
+additively, so an existing version 10 library migrates forward without a rewritten
+source, a re-indexed item or a read file, and behaves exactly as it did.
+
+The desktop gains a **Sources** screen (source rail; folder browser with breadcrumbs,
+an *Everything in this folder* row, per-subfolder direct media counts and the
+selected / included-by-parent / excluded state; *Scan selected folders*, *Clear
+selection*, *Rescan*, *Remove*, *Relink*, *Add a location*) and three presentation
+states: a welcome screen with no source, an empty state for sources holding nothing
+playable, and the main interface. Home and Library are withheld until an indexed item
+exists. A missing selected subfolder reads as a folder condition and does not
+disconnect the source or withdraw files in other selected folders.
+
+**Verified by tests:** the core suite covers the schema 11 migration, the selection
+round-trip and normalisation, the subtree walk and withdrawal scoped to the scanned
+subtree; the desktop suite covers the folder browser's inclusion states, the three
+states and the withheld navigation. `cargo test --workspace` runs both.
+
+**PENDING:** the owner has not looked at the Sources screen, the welcome or empty
+states, or the withheld navigation, and no window capture of them is recorded here.
+Visual acceptance is an owner judgement and is not claimed. No device result is
+claimed either: this is the macOS host, and the Windows and TV targets are untouched.

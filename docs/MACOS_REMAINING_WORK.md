@@ -162,7 +162,8 @@ player's chrome receding has not been watched in a window. That is P2-06 below.
 
 | ID | Capability | Impl | Automated | Human | Blocker |
 | --- | --- | --- | --- | --- | --- |
-| F01 | Sources: grant, label, scan, rescan, relink, remove, connection state | COMPLETE | `step_1`, `step_12`, `a_folder_that_moved_keeps_its_history_until_it_is_relinked` | steps 1, 12 | — |
+| F01 | Sources: grant, label, folder-level selection, scan, rescan, relink, remove, connection state | COMPLETE (code and tests) — a source is a storage location; an arbitrary set of selected folders is stored relative to its root (`""` is the root), and a configured source scans only those subtrees ([ADR-020](ADR-020_SOURCE_FOLDER_SELECTION.md), schema 11) | `step_1`, `step_12`, `a_folder_that_moved_keeps_its_history_until_it_is_relinked`, plus the core selection/migration/scan-scope tests and the desktop folder-browser tests | steps 1, 12; the Sources screen and its folder states are **PENDING** (no owner look, no capture) | — |
+| F01b | Onboarding and empty states: welcome with no source, an empty state for sources holding no media, Home and Library withheld until a library exists (a sub-row of F01; no new requirement ID) | COMPLETE (code and tests) | desktop tests for the three states and for the withheld navigation | **PENDING** (no owner look, no capture) | — |
 | F02 | Discovery: incremental, bounded, cancelable, restartable, partial results | COMPLETE | `step_1` (1,200 files, cards mid-walk), scan tests in `screenroom-core/tests/scanner.rs` | step 1 | — |
 | F03 | Structured library: work/series/season/episode/edition/file, unknowns kept | COMPLETE | `described_episodes`, `screenroom-core/tests/library.rs`, TV contract tests | step 2 | — |
 | F04 | Identity matching: filename/folder, local NFO, manual match, protected override | COMPLETE (local only) | parsing tests, `step_18` (NFO), manual-match tests | step 2 | online IDs absent (F05) |
@@ -187,6 +188,38 @@ player's chrome receding has not been watched in a window. That is P2-06 below.
 | F23 | Source directory | **PARTIAL** — owner-written bookmarks with provenance; no shipped list | `step_19` | — | no verified list or operator permission (ADR-011) |
 | F24 | Acquisition handoff | COMPLETE — http/https/ftp only, to the system browser | `step_19`, handoff tests | — | — |
 | F25 | Local conversion | COMPLETE | `step_16` (real remux, verification, original untouched) | watch the panel once | — |
+
+#### Source folder selection and onboarding states (2026-11-23)
+
+A source is now a storage location with an arbitrary set of selected folders
+inside it, and a new source or an empty library opens onto a screen that says so
+([ADR-020](ADR-020_SOURCE_FOLDER_SELECTION.md)). Folders are stored as paths
+relative to the source root with `""` for the root itself; a parent selection
+covers its descendants; configuring a source sets `sources.folders_configured = 1`
+and scans only the selected subtrees, while an unconfigured source keeps the
+whole-root walk it had and every existing library opens unchanged. The schema moves
+to 11 with the additive `source_folders` table and that column.
+
+The screen manages one source at a time: a rail with each source's label and state,
+and a browser with breadcrumbs, an *Everything in this folder* row, per-subfolder
+direct media counts and the selected / included-by-parent / excluded distinction,
+then *Scan selected folders*, *Clear selection*, *Rescan*, and per-source *Remove*
+and *Relink*. A missing selected subfolder reads as a folder condition, not as a
+disconnected drive, and it does not withdraw files in the other selected folders.
+The three states are a welcome screen with no source, a purpose-built empty state
+for sources that hold nothing playable, and the main interface; Home and Library
+are withheld until an indexed item exists. F01b is a sub-row of F01, so the tracked
+row count above is unchanged.
+
+**What is verified:** the core suite covers the schema 11 migration, the selection
+round-trip and its normalisation, the subtree walk and withdrawal that stays inside
+the scanned subtree; the desktop suite covers the folder browser's inclusion states,
+the three application states and the navigation gating, and `cargo test
+--workspace` runs both. **What is not evidenced:** no owner has looked at the
+Sources screen, the welcome or empty states, or the withheld navigation, and no
+window capture of them is recorded in the repository. Those stay `PENDING` — a test
+proves a row and a message exist, not that the screen reads clearly. No device
+result is claimed: this is the macOS host only.
 
 ### 4.2 Quality (Q00–Q08)
 

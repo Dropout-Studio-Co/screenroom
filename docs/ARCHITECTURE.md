@@ -165,15 +165,18 @@ written, and no sidecar is created beside it.
 ## SQLite and migrations
 
 One physical schema (`crates/screenroom-core/src/schema.rs`) and one
-`user_version` (`SCHEMA_VERSION = 4`) for every platform. The base layout
+`user_version` (`SCHEMA_VERSION = 11`) for every platform. The base layout
 deliberately matches the schema the Flutter candidate wrote, so an existing library
 on a device opens without a destructive migration.
 
 - Opening applies `PRAGMA foreign_keys = ON` and `busy_timeout`.
-- A schema version of `0` creates and stamps; `2` and `3` are migrated forward
-  additively (`2 → 3` adds the artwork table, `3 → 4` adds the join indexes) and
-  `4` opens unchanged; `1` fails closed with `migration_unavailable`; anything newer
-  fails with `future_database` and leaves the file untouched.
+- A schema version of `0` creates and stamps; `2` through `10` are migrated forward
+  additively, each step adding its own tables or columns — the artwork table and the
+  join indexes, conversion jobs, metadata provenance, source bookmarks, subtitle
+  bytes, the enrichment queue, the volume identity, and `10 → 11` for source folder
+  selection — and `11` opens unchanged; `1` fails closed with
+  `migration_unavailable`; anything newer fails with `future_database` and leaves the
+  file untouched.
 - `PRAGMA quick_check` must return `ok`, otherwise `corrupt_database` and the file
   is left for recovery/restore.
 - Opening closes dangling sessions and re-queues `running` jobs: a crashed process
@@ -183,7 +186,8 @@ on a device opens without a destructive migration.
 
 ## Scanning
 
-`LibraryScanner` walks one authorized root, breadth-first, with hard caps:
+`LibraryScanner` walks the roots it is given — a source's selected folders, or the
+whole root of a source that has no selection — breadth-first, with hard caps:
 250,000 entries, depth 64, 15-second settle window, 1,000 issues retained plus an
 explicit `additional_errors_omitted` marker.
 
@@ -201,6 +205,36 @@ Ingestion is incremental: identical rescan keeps the row; replaced bytes at the
 same path get a **new edition** so the old cut keeps its own progress; a small file
 that reappears with the same fingerprint under a new name keeps its identity when
 the old locator is gone.
+
+### Source discovery boundaries
+
+A **source** is a storage location — a folder, an external drive, a USB volume —
+and it is the unit of identity, relink, removal and state. What gets read from it is
+a separate choice: a set of **selected folders**, stored as paths relative to the
+source root, where `""` is the root itself. The decision is
+[`ADR-020`](ADR-020_SOURCE_FOLDER_SELECTION.md) and the invariants are in
+[`DATA_MODEL.md`](DATA_MODEL.md).
+
+Three boundaries follow from that split, and each one is enforced in the core rather
+than in a screen:
+
+- **The scan.** The scanner walks the selected subtrees, not the root, once the
+  source is configured (`sources.folders_configured = 1`). An unconfigured source —
+  which is every source migrated from schema 10 — keeps the whole-root walk, so an
+  existing library behaves as it did.
+- **The watcher.** `apps/desktop`'s filesystem watcher registers the same folders.
+  A change under a folder that is not selected raises no event, because the
+  application is not reading that folder.
+- **Availability.** A complete scan may withdraw a file that it proves gone, and
+  only inside the subtree it scanned. A missing selected subfolder is reported at
+  the folder, not as a disconnected drive, and it never withdraws files in the
+  other selected folders. Deselecting a folder stops watching and scanning it; its
+  rows stay, unvisited, until it is selected again.
+
+The library's three presentation states — no source, sources with nothing indexed,
+and a populated library — are the application's response to the same facts: the
+Sources screen is the only route that can change them, so Home and Library are not
+offered until there is an indexed item.
 
 ## Playback
 
