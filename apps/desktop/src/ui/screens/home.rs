@@ -45,6 +45,8 @@ pub struct Home<'a> {
 
     pub waiting: &'a HashSet<String>,
 
+    pub failed: &'a HashSet<String>,
+
     pub motion: &'a MotionState,
 
     pub width: f32,
@@ -285,6 +287,7 @@ impl<'a> Home<'a> {
             let mut card = Poster::new(item.title.as_str(), caption(item))
                 .art(self.art.get(&item.work_id).cloned())
                 .waiting(self.waiting.contains(&item.work_id))
+                .failed(self.failed.contains(&item.work_id))
                 .width(card_width)
                 .focused(focused)
                 .lift(self.motion.lift(base + position))
@@ -844,6 +847,7 @@ mod tests {
             empty: true,
             art: &art,
             waiting: &HashSet::new(),
+            failed: &HashSet::new(),
             motion: &MotionState::default(),
             width: 1440.0,
         };
@@ -902,6 +906,7 @@ mod tests {
             empty: false,
             art: &art,
             waiting: &HashSet::new(),
+            failed: &HashSet::new(),
             motion: &MotionState::default(),
             width: 1280.0,
         };

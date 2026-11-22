@@ -1,6 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use iced::overlay::menu::Style as MenuStyle;
+use iced::widget::text::Wrapping;
 use iced::widget::{
     Id, Space, button, column, container, image, mouse_area, operation, pick_list, row, scrollable,
     stack, text, text_input,
@@ -13,17 +14,15 @@ use screenroom_core::LibraryItem;
 
 use crate::app::{KindFilter, Message, SortChoice, WatchFilter};
 use crate::design;
-use crate::ui::components::poster::{CARD_GAP, CARD_WIDTH, card_columns, truncate};
+use crate::ui::components::poster::{
+    CARD_GAP, CARD_WIDTH, NO_POSTER_LABEL, card_columns, fitted_label, text_inset, text_room,
+};
 use crate::ui::icons::{self, Icon};
 use crate::ui::motion::{self, MotionState};
 use crate::ui::route::{FocusPos, Nav};
 use crate::ui::theme::{self, Breakpoint, Gap, Radius};
 
 pub const PAGE_TILES: usize = 24;
-
-const TILE_TITLE_CHARS: usize = 26;
-
-const CAPTION_CHARS: usize = 34;
 
 const ART_RATIO: f32 = 9.0 / 16.0;
 
@@ -210,6 +209,8 @@ pub struct Library<'a> {
     pub genre: Option<&'a str>,
 
     pub art: &'a HashMap<String, image::Handle>,
+
+    pub failed: &'a HashSet<String>,
 
     pub motion: &'a MotionState,
 
@@ -479,6 +480,7 @@ impl<'a> Library<'a> {
                     focus == Some(index),
                     width,
                     self.motion.lift(base + index),
+                    self.failed.contains(&item.work_id),
                 ));
             }
 
@@ -684,8 +686,22 @@ pub fn count_line(total: usize) -> String {
     }
 }
 
-pub fn tile_title(title: &str) -> &str {
-    truncate(title, TILE_TITLE_CHARS)
+pub fn tile_title(title: &str, room: f32) -> String {
+    let fitted = fitted_label(title, room, label_size(), theme::medium());
+
+    if fitted.is_empty() && !title.is_empty() {
+        title.to_string()
+    } else {
+        fitted
+    }
+}
+
+fn label_size() -> f32 {
+    design::tokens().type_scale.label
+}
+
+fn caption_size() -> f32 {
+    design::tokens().type_scale.caption
 }
 
 fn tile<'a>(
@@ -694,6 +710,7 @@ fn tile<'a>(
     focused: bool,
     width: f32,
     lift: f32,
+    failed: bool,
 ) -> Element<'a, Message> {
     let tokens = design::tokens();
     let art_height = (width * ART_RATIO).round();
@@ -704,6 +721,18 @@ fn tile<'a>(
             .height(Length::Fill)
             .content_fit(ContentFit::Cover)
             .into(),
+        None if failed => container(
+            text(NO_POSTER_LABEL.to_string())
+                .size(tokens.type_scale.caption)
+                .font(theme::regular())
+                .color(theme::muted())
+                .align_x(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center)
+        .into(),
         None => container(Space::new().width(Length::Fill).height(Length::Fill)).into(),
     };
 
@@ -719,19 +748,35 @@ fn tile<'a>(
         layers = stack![layers, progress_bar(width, progress)];
     }
 
-    let title = text(tile_title(&item.title).to_string())
-        .size(tokens.type_scale.label)
+    let room = text_room(width);
+    let title = text(tile_title(&item.title, room))
+        .size(label_size())
         .font(theme::medium())
         .color(theme::ink())
+        .wrapping(Wrapping::None)
         .width(Length::Fill);
 
-    let caption = text(truncate(&caption_of(item), CAPTION_CHARS).to_string())
-        .size(tokens.type_scale.caption)
-        .font(theme::regular())
-        .color(theme::muted())
-        .width(Length::Fill);
+    let caption = text(fitted_label(
+        &caption_of(item),
+        room,
+        caption_size(),
+        theme::regular(),
+    ))
+    .size(caption_size())
+    .font(theme::regular())
+    .color(theme::muted())
+    .wrapping(Wrapping::None)
+    .width(Length::Fill);
 
-    let card = column![layers, title, caption]
+    let lines = container(
+        column![title, caption]
+            .spacing(theme::gap(Gap::Tight))
+            .width(Length::Fill),
+    )
+    .padding([0.0, text_inset(width)])
+    .width(Length::Fill);
+
+    let card = column![layers, lines]
         .spacing(theme::gap(Gap::Tight))
         .width(Length::Fixed(width));
 
@@ -979,19 +1024,22 @@ fn quiet_button(_theme: &Theme, status: button::Status) -> button::Style {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     use screenroom_core::{LibraryItem, MediaKind};
 
     use super::{
         Chip, ChipRows, FilterChips, HeaderLayout, Library, PAGE_TILES, SortChoice,
-        SourcePlacement, capped_window, chip_rows, header_layout, source_line, source_placement,
-        tile_title, tile_width, visible_tiles,
+        SourcePlacement, capped_window, chip_rows, header_layout, label_size, source_line,
+        source_placement, tile_title, tile_width, visible_tiles,
     };
     use crate::app::{KindFilter, Screen, WatchFilter};
-    use crate::ui::components::poster::{CARD_GAP, card_columns};
+    use crate::ui::components::poster::{
+        CARD_GAP, CARD_WIDTH, card_columns, text_inset, text_room,
+    };
     use crate::ui::motion::MotionState;
     use crate::ui::route::{FocusPos, Nav};
+    use crate::ui::text_fit;
     use crate::ui::theme;
     use crate::ui::theme::Breakpoint;
 
@@ -1051,16 +1099,46 @@ mod tests {
     }
 
     #[test]
-    fn a_very_long_title_truncates_instead_of_overflowing() {
+    fn a_very_long_title_is_fitted_to_the_card_instead_of_wrapping() {
+        let room = 200.0;
         let long = "The Extraordinarily Long Title Of A Film That Nobody Would Ever Name This Way";
-        let cut = tile_title(long);
-        assert!(cut.chars().count() <= 26);
-        assert!(long.starts_with(cut));
+        let cut = tile_title(long, room);
+
+        assert!(cut.ends_with(text_fit::ELLIPSIS), "{cut}");
+        assert!(
+            text_fit::measured_width(&cut, label_size(), theme::medium()) <= room,
+            "{cut} is wider than {room}"
+        );
+        assert!(long.starts_with(cut.trim_end_matches(text_fit::ELLIPSIS)));
 
         let emoji = "ফিল্ম 🎬 café\u{0301} and more words than fit";
-        let cut = tile_title(emoji);
-        assert_eq!(cut.chars().count(), 26, "no char boundary may be split");
-        assert!(emoji.starts_with(cut));
+        let cut = tile_title(emoji, 120.0);
+
+        assert!(!cut.contains('\u{FFFD}'), "no char boundary may be split");
+        assert!(emoji.starts_with(cut.trim_end_matches(text_fit::ELLIPSIS)));
+    }
+
+    #[test]
+    fn a_short_title_is_left_whole() {
+        assert_eq!(tile_title("Green Book", 200.0), "Green Book");
+    }
+
+    #[test]
+    fn card_text_is_inset_by_the_room_the_lift_needs() {
+        let half_the_lift = CARD_WIDTH * crate::ui::motion::MOTION.lift / 2.0;
+
+        assert_eq!(
+            text_inset(CARD_WIDTH),
+            half_the_lift.ceil(),
+            "the inset must clear the room a lifted card grows into"
+        );
+        assert_eq!(
+            text_room(CARD_WIDTH),
+            CARD_WIDTH - 2.0 * text_inset(CARD_WIDTH)
+        );
+        assert!(text_inset(1460.0) > text_inset(CARD_WIDTH));
+        assert_eq!(text_inset(f32::NAN), 1.0);
+        assert_eq!(text_room(f32::NAN), 1.0);
     }
 
     #[test]
@@ -1116,6 +1194,7 @@ mod tests {
             genres: &genres,
             genre: None,
             art: &art,
+            failed: &HashSet::new(),
             motion: &MotionState::default(),
             width: 1440.0,
         };
@@ -1195,6 +1274,7 @@ mod tests {
             genres: &genres,
             genre: Some("Drama"),
             art: &art,
+            failed: &HashSet::new(),
             motion: &MotionState::default(),
             width: 1440.0,
         };

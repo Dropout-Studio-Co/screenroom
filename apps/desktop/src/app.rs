@@ -144,6 +144,18 @@ fn window_size_from(width: Option<&str>, height: Option<&str>) -> iced::Size {
     )
 }
 
+fn opening_screen() -> Screen {
+    start_screen_from(std::env::var("SCREENROOM_START_SCREEN").ok().as_deref())
+}
+
+fn start_screen_from(requested: Option<&str>) -> Screen {
+    match requested.map(str::trim) {
+        Some(value) if value.eq_ignore_ascii_case("library") => Screen::Browse,
+        Some(value) if value.eq_ignore_ascii_case("settings") => Screen::Settings,
+        _ => Screen::Home,
+    }
+}
+
 fn library_path() -> Option<PathBuf> {
     match std::env::var_os("SCREENROOM_LIBRARY") {
         Some(path) => Some(PathBuf::from(path)),
@@ -1315,15 +1327,18 @@ impl App {
             .clone()
             .unwrap_or_else(default_conversion_folder);
         let profile_id = opening_profile(&library, &preferences);
+        let screen = opening_screen();
+        let mut nav = Nav::new(Screen::Home);
+        nav.set(screen);
         let mut app = Self {
             library,
             library_label,
             profile_id,
             capability: screenroom_player::capability(),
             play_check: crate::play_check::Run::from_environment(),
-            screen: Screen::Home,
+            screen,
             focus: 0,
-            nav: Nav::new(Screen::Home),
+            nav,
             home: Vec::new(),
             suggestions: Vec::new(),
             browse: Browse::new(),
@@ -1860,14 +1875,10 @@ impl App {
                         }
                     }
                 }
-                ArtworkEvent::Failed { work_id, reason } => {
+                ArtworkEvent::Failed { work_id, .. } => {
                     self.artwork_queued.remove(&work_id);
                     self.artwork_failed.insert(work_id);
                     self.artwork_failures += 1;
-
-                    if self.artwork_failures == 1 {
-                        self.status = Some(format!("No poster could be drawn — {reason}"));
-                    }
                 }
             }
         }
@@ -2705,14 +2716,20 @@ impl App {
             Ok(Ok(report)) => {
                 self.enrichment = None;
                 self.error = None;
-                self.status = Some(format!(
-                    "Enrichment: {} attempted, {} updated, {} failed, {} waiting for the network, {} still queued.",
-                    report.attempted,
-                    report.succeeded,
-                    report.failed,
-                    report.waiting_network,
-                    report.remaining
-                ));
+                self.status = Some(match report.stopped.as_deref() {
+                    Some(reason) => format!(
+                        "Enrichment stopped: {reason} {} updated, {} still queued.",
+                        report.succeeded, report.remaining
+                    ),
+                    None => format!(
+                        "Enrichment: {} attempted, {} updated, {} failed, {} waiting for the network, {} still queued.",
+                        report.attempted,
+                        report.succeeded,
+                        report.failed,
+                        report.waiting_network,
+                        report.remaining
+                    ),
+                });
                 self.reload();
             }
             Ok(Err(message)) => {
@@ -5968,6 +5985,7 @@ impl App {
             empty: false,
             art: &self.artwork,
             waiting: &self.artwork_queued,
+            failed: &self.artwork_failed,
             motion: &self.motion,
             width: self.window_width,
         }
@@ -5992,6 +6010,7 @@ impl App {
             genres: &self.browse.genres,
             genre: self.browse.genre.as_deref(),
             art: &self.artwork,
+            failed: &self.artwork_failed,
             motion: &self.motion,
             width: self.window_width,
         }
@@ -7467,6 +7486,16 @@ mod tests {
             ui::screens::library::HeaderLayout::Stacked,
             "the header must stack at the narrowest window it allows"
         );
+    }
+
+    #[test]
+    fn a_requested_start_screen_opens_there_and_an_unknown_one_opens_at_home() {
+        assert_eq!(start_screen_from(Some("library")), Screen::Browse);
+        assert_eq!(start_screen_from(Some(" Library ")), Screen::Browse);
+        assert_eq!(start_screen_from(Some("settings")), Screen::Settings);
+        assert_eq!(start_screen_from(Some("player")), Screen::Home);
+        assert_eq!(start_screen_from(Some("")), Screen::Home);
+        assert_eq!(start_screen_from(None), Screen::Home);
     }
 
     #[test]

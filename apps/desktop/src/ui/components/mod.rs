@@ -86,4 +86,51 @@ mod tests {
         assert_eq!(poster::card_columns(1024.0), 4);
         assert_eq!(poster::card_columns(600.0), 2);
     }
+
+    #[test]
+    fn a_card_with_no_readable_frame_says_so_instead_of_loading_forever() {
+        assert_eq!(
+            poster::face_label(true, true),
+            Some("No poster"),
+            "a failure outranks a pending extraction"
+        );
+        assert_eq!(
+            poster::face_label(true, false),
+            Some("Loading poster\u{2026}")
+        );
+        assert_eq!(poster::face_label(false, false), None);
+    }
+
+    #[test]
+    fn a_card_inset_clears_the_room_a_lifted_card_grows_into() {
+        for width in [214.5_f32, 240.0, 382.0, 1_460.0] {
+            let grown = width * crate::ui::motion::MOTION.lift / 2.0;
+
+            assert!(
+                poster::text_inset(width) >= grown,
+                "at {width} the inset {} is smaller than the {grown} a lift takes",
+                poster::text_inset(width)
+            );
+            assert_eq!(
+                poster::text_room(width),
+                width - 2.0 * poster::text_inset(width)
+            );
+        }
+    }
+
+    #[test]
+    fn a_card_title_is_fitted_to_its_own_room_and_never_wraps() {
+        let room = poster::text_room(poster::CARD_WIDTH);
+        let long = "The Extraordinarily Long Title Of A Film That Nobody Would Ever Name This Way";
+        let fitted = poster::fitted_label(long, room, 14.0, crate::ui::theme::medium());
+
+        assert!(fitted.ends_with(crate::ui::text_fit::ELLIPSIS), "{fitted}");
+        assert!(
+            crate::ui::text_fit::measured_width(&fitted, 14.0, crate::ui::theme::medium()) <= room
+        );
+        assert_eq!(
+            poster::fitted_label("Green Book", room, 14.0, crate::ui::theme::medium()),
+            "Green Book"
+        );
+    }
 }

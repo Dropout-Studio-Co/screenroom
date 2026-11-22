@@ -1,23 +1,25 @@
 use crate::app::Message;
 use crate::design;
 use crate::ui::motion::{self, lift_scale};
+use crate::ui::text_fit;
 use crate::ui::theme::{self, Breakpoint, Gap, Radius};
+use iced::widget::text::Wrapping;
 use iced::widget::{Float, Space, button, column, container, image, row, stack, text};
-use iced::{Alignment, Background, Border, ContentFit, Element, Length, Shadow, Theme};
+use iced::{Alignment, Background, Border, ContentFit, Element, Font, Length, Shadow, Theme};
 
 pub const CARD_WIDTH: f32 = 240.0;
 
 pub const CARD_GAP: f32 = 16.0;
 
+const MIN_TEXT_INSET: f32 = 1.0;
+
 const ART_RATIO: f32 = 9.0 / 16.0;
-
-const TITLE_CHARS: usize = 28;
-
-const CAPTION_CHARS: usize = 34;
 
 const PROGRESS_HEIGHT: f32 = 2.0;
 
 const WAITING_LABEL: &str = "Loading poster…";
+
+pub const NO_POSTER_LABEL: &str = "No poster";
 
 pub fn bar_width(progress: f32) -> f32 {
     if !progress.is_finite() {
@@ -40,11 +42,46 @@ pub fn card_columns(width: f32) -> usize {
     Breakpoint::at(width).columns()
 }
 
+pub fn text_inset(width: f32) -> f32 {
+    if !width.is_finite() || width <= 0.0 {
+        return MIN_TEXT_INSET;
+    }
+
+    (width * motion::MOTION.lift / 2.0)
+        .ceil()
+        .max(MIN_TEXT_INSET)
+}
+
+pub fn text_room(width: f32) -> f32 {
+    let room = width - 2.0 * text_inset(width);
+
+    if room.is_finite() && room > 1.0 {
+        room
+    } else {
+        1.0
+    }
+}
+
+pub fn fitted_label(label: &str, room: f32, size: f32, font: Font) -> String {
+    text_fit::fit_measured(label, room, size, font)
+}
+
+pub fn face_label(waiting: bool, failed: bool) -> Option<&'static str> {
+    if failed {
+        Some(NO_POSTER_LABEL)
+    } else if waiting {
+        Some(WAITING_LABEL)
+    } else {
+        None
+    }
+}
+
 pub struct Poster<'a> {
     title: &'a str,
     caption: String,
     art: Option<image::Handle>,
     waiting: bool,
+    failed: bool,
     progress: Option<f32>,
     focused: bool,
     lift: f32,
@@ -60,6 +97,7 @@ impl<'a> Poster<'a> {
             caption,
             art: None,
             waiting: true,
+            failed: false,
             progress: None,
             focused: false,
             lift: 0.0,
@@ -75,6 +113,11 @@ impl<'a> Poster<'a> {
 
     pub fn waiting(mut self, waiting: bool) -> Self {
         self.waiting = waiting;
+        self
+    }
+
+    pub fn failed(mut self, failed: bool) -> Self {
+        self.failed = failed;
         self
     }
 
@@ -119,8 +162,10 @@ impl<'a> Poster<'a> {
                 .height(Length::Fill)
                 .content_fit(ContentFit::Cover)
                 .into(),
-            None if self.waiting => waiting_face(),
-            None => container(Space::new().width(Length::Fill).height(Length::Fill)).into(),
+            None => match face_label(self.waiting, self.failed) {
+                Some(label) => placeholder(label),
+                None => container(Space::new().width(Length::Fill).height(Length::Fill)).into(),
+            },
         };
 
         let framed: Element<'a, Message> = container(face)
@@ -138,23 +183,42 @@ impl<'a> Poster<'a> {
             layers = stack![layers, progress_bar(self.width, progress)];
         }
 
-        let title = text(truncate(self.title, TITLE_CHARS).to_string())
-            .size(tokens.type_scale.label)
+        let room = text_room(self.width);
+        let label_size = tokens.type_scale.label;
+        let caption_size = tokens.type_scale.caption;
+
+        let title = text(fitted_label(self.title, room, label_size, theme::medium()))
+            .size(label_size)
             .font(theme::medium())
             .color(if focused {
                 theme::ink()
             } else {
                 theme::muted()
             })
+            .wrapping(Wrapping::None)
             .width(Length::Fill);
 
-        let caption = text(truncate(&self.caption, CAPTION_CHARS).to_string())
-            .size(tokens.type_scale.caption)
-            .font(theme::regular())
-            .color(theme::muted())
-            .width(Length::Fill);
+        let caption = text(fitted_label(
+            &self.caption,
+            room,
+            caption_size,
+            theme::regular(),
+        ))
+        .size(caption_size)
+        .font(theme::regular())
+        .color(theme::muted())
+        .wrapping(Wrapping::None)
+        .width(Length::Fill);
 
-        let card = column![layers, title, caption]
+        let lines = container(
+            column![title, caption]
+                .spacing(theme::gap(Gap::Tight))
+                .width(Length::Fill),
+        )
+        .padding([0.0, text_inset(self.width)])
+        .width(Length::Fill);
+
+        let card = column![layers, lines]
             .spacing(theme::gap(Gap::Tight))
             .width(Length::Fixed(self.width));
 
@@ -185,9 +249,9 @@ impl Poster<'_> {
     }
 }
 
-fn waiting_face() -> Element<'static, Message> {
+fn placeholder(label: &'static str) -> Element<'static, Message> {
     container(
-        text(WAITING_LABEL.to_string())
+        text(label.to_string())
             .size(design::tokens().type_scale.caption)
             .font(theme::regular())
             .color(theme::muted())
