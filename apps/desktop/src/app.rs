@@ -3912,7 +3912,11 @@ impl App {
     }
 
     fn onboarding_holds(&self) -> bool {
-        self.media_total == 0 && !matches!(self.screen, Screen::Sources | Screen::Settings)
+        self.media_total == 0
+            && !matches!(
+                self.screen,
+                Screen::Sources | Screen::Settings | Screen::Player | Screen::Detail
+            )
     }
 
     fn effective_screen(&self) -> Screen {
@@ -4145,7 +4149,11 @@ impl App {
         if self.source_selection.iter().any(|entry| entry.is_empty()) {
             return;
         }
-        for entry in &self.folder_entries {
+        for entry in self
+            .folder_entries
+            .iter()
+            .take(ui::screens::sources::VISIBLE_FOLDERS)
+        {
             if ui::screens::sources::inclusion(&self.source_selection, &entry.relative_path)
                 == ui::screens::sources::Inclusion::Excluded
             {
@@ -4190,7 +4198,9 @@ impl App {
             .map(|source| source.id.clone())
             .collect();
         if sources.is_empty() {
-            self.status = Some("No readable location to scan. Add one first.".to_string());
+            self.status = Some(
+                "No readable location right now. Reconnect or relink one, then scan.".to_string(),
+            );
             return;
         }
         for source in sources {
@@ -5323,6 +5333,13 @@ impl App {
     fn handle_watched(&mut self, event: crate::watch::Watched) {
         match event {
             crate::watch::Watched::Changes { root, changes } => {
+                let Some(source_id) = self.source_for_root(&root).map(|(id, _)| id) else {
+                    return;
+                };
+                let changes: Vec<screenroom_core::MediaChange> = changes
+                    .into_iter()
+                    .filter(|change| self.change_is_selected(&source_id, change))
+                    .collect();
                 let work = crate::watch::work_for(&root, &changes);
                 self.apply_work(&root, work);
             }
@@ -5417,31 +5434,43 @@ impl App {
     }
 
     fn arm_watchers(&mut self) -> Vec<PathBuf> {
-        let mut roots: Vec<PathBuf> = Vec::new();
-        for source in &self.sources {
-            let root = PathBuf::from(&source.root_path);
-            if !root.is_dir() {
-                continue;
-            }
-            if !source.folders_configured {
-                roots.push(root);
-                continue;
-            }
-            let Some(folders) = self.source_folders.get(&source.id) else {
-                continue;
-            };
-            if folders.iter().any(|folder| folder.is_empty()) {
-                roots.push(root);
-                continue;
-            }
-            for folder in folders {
-                let path = root.join(folder);
-                if path.is_dir() {
-                    roots.push(path);
-                }
-            }
-        }
+        let roots: Vec<PathBuf> = self
+            .sources
+            .iter()
+            .map(|source| PathBuf::from(&source.root_path))
+            .filter(|root| root.is_dir())
+            .collect();
         self.watchers.sync(&roots)
+    }
+
+    fn change_is_selected(&self, source_id: &str, change: &screenroom_core::MediaChange) -> bool {
+        let Some(source) = self.sources.iter().find(|source| source.id == source_id) else {
+            return false;
+        };
+        if !source.folders_configured {
+            return true;
+        }
+        let Some(folders) = self.source_folders.get(source_id) else {
+            return false;
+        };
+        if folders.iter().any(|folder| folder.is_empty()) {
+            return true;
+        }
+        let root = std::fs::canonicalize(&source.root_path)
+            .unwrap_or_else(|_| PathBuf::from(&source.root_path));
+        [Some(change.target()), change.previous()]
+            .into_iter()
+            .flatten()
+            .any(|path| {
+                let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+                let Ok(relative) = resolved.strip_prefix(&root) else {
+                    return false;
+                };
+                let relative = relative.to_string_lossy().replace('\\', "/");
+                folders.iter().any(|folder| {
+                    relative == *folder || relative.starts_with(&format!("{folder}/"))
+                })
+            })
     }
 
     fn reconcile(&mut self) {
@@ -10919,7 +10948,7 @@ mod tests {
     }
 
     #[test]
-    fn watchers_arm_only_the_folders_that_are_selected() {
+    fn a_source_is_watched_once_and_unselected_changes_are_dropped() {
         let directory = tempfile::TempDir::new().expect("temp dir");
         let root = directory.path().join("media");
         write_settled(&root.join("Films/Film.mkv"), b"not really a video");
@@ -10927,26 +10956,36 @@ mod tests {
         let library = Library::open_in_memory().expect("library");
         let mut app = App::with_library(library, None, "test".into());
 
-        let _ = app.library.add_source(&root, None).expect("source");
+        let source = app.library.add_source(&root, None).expect("source");
         app.reload_administration();
-        let source_id = app.sources[0].id.clone();
         app.library
-            .configure_source_folders(&source_id, &["Films".to_string()])
+            .configure_source_folders(&source.id, &["Films".to_string()])
             .expect("selection");
         app.reload_administration();
         let _ = app.arm_watchers();
 
         let watching = app.watchers.watching();
+        assert_eq!(watching.len(), 1, "one watcher per source: {watching:?}");
         assert_eq!(
-            watching.len(),
-            1,
-            "only one subtree is watched: {watching:?}"
+            std::fs::canonicalize(&watching[0]).expect("watched root"),
+            std::fs::canonicalize(&root).expect("source root"),
+            "the watcher must cover the source, not one thread per folder"
         );
-        assert!(watching[0].ends_with("Films"));
+
+        let selected = root.join("Films/Film.mkv");
+        let excluded = root.join("Shows/Show.mkv");
+        assert!(app.change_is_selected(&source.id, &screenroom_core::MediaChange::Added(selected)));
         assert!(
-            !watching.iter().any(|path| path.ends_with("Shows")),
-            "an unselected sibling was watched"
+            !app.change_is_selected(&source.id, &screenroom_core::MediaChange::Added(excluded))
         );
+        app.library
+            .configure_source_folders(&source.id, &[String::new()])
+            .expect("whole location");
+        app.reload_administration();
+        assert!(app.change_is_selected(
+            &source.id,
+            &screenroom_core::MediaChange::Added(root.join("Shows/Show.mkv"))
+        ));
         app.watchers.sync(&[]);
     }
 

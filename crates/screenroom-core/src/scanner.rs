@@ -227,9 +227,14 @@ impl<'a> LibraryScanner<'a> {
         let mut bounded = false;
         let mut prepared: Vec<PreparedFile> = Vec::new();
         let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::new();
+        let selections = if source.folders_configured {
+            self.library.source_folders(source_id)?
+        } else {
+            Vec::new()
+        };
         if source.folders_configured {
-            for selection in self.library.source_folders(source_id)? {
-                if let Some(directory) = self.selected_directory(&root, &selection, &mut issues) {
+            for selection in &selections {
+                if let Some(directory) = self.selected_directory(&root, selection, &mut issues) {
                     queue.push_back((directory, 0));
                 }
             }
@@ -363,6 +368,16 @@ impl<'a> LibraryScanner<'a> {
         let complete = !bounded && issues.is_empty();
         let known = facts.len() as u64;
         let withdrawal = withdrawal_allowed(volume, imported, known);
+        if source.folders_configured && !cancelled {
+            let unselected: Vec<String> = facts
+                .keys()
+                .filter(|relative| {
+                    !crate::library::selection_covers(&selections, &relative.replace('\\', "/"))
+                })
+                .cloned()
+                .collect();
+            self.library.withdraw_locators(source_id, &unselected)?;
+        }
         if !cancelled {
             let partial = self.probe_partial_scan(
                 source_id,
@@ -1793,6 +1808,47 @@ mod tests {
             SourceState::Available,
             "one missing selection must not disconnect the whole source"
         );
+    }
+
+    #[test]
+    fn narrowing_the_selection_withdraws_the_old_folder_even_in_a_partial_scan() {
+        let directory = TempDir::new().unwrap();
+        let root = media_tree(&directory);
+        write_settled(&root.join("Alpha/Alpha.2020.mkv"), b"alpha");
+        write_settled(&root.join("Beta/Beta.2020.mkv"), b"beta");
+
+        let library = Library::open_in_memory().unwrap();
+        let source = configured_source(&library, &root);
+        library
+            .configure_source_folders(&source.id, &["Alpha".to_string(), "Beta".to_string()])
+            .unwrap();
+        scanner(&library)
+            .scan(&source.id, &ScanToken::new(), |_| {})
+            .unwrap();
+
+        library
+            .configure_source_folders(&source.id, &["Alpha".to_string(), "Ghost".to_string()])
+            .unwrap();
+        let summary = scanner(&library)
+            .scan(&source.id, &ScanToken::new(), |_| {})
+            .unwrap();
+
+        assert!(!summary.complete, "the missing selection is still an issue");
+        let items = library.items(&LibraryQuery::page(10)).unwrap();
+        let alpha = items
+            .iter()
+            .find(|item| item.filename == "Alpha.2020.mkv")
+            .unwrap();
+        assert!(alpha.available);
+        let beta = items
+            .iter()
+            .find(|item| item.filename == "Beta.2020.mkv")
+            .unwrap();
+        assert!(
+            !beta.available,
+            "a deselected folder stayed indexed after a partial scan"
+        );
+        assert_eq!(library.available_media_count().unwrap(), 1);
     }
 
     #[test]

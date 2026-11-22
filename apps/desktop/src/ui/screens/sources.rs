@@ -26,7 +26,7 @@ const STEP_MEASURE: f32 = 980.0;
 
 const RAIL_GAP: f32 = 26.0;
 
-const VISIBLE_FOLDERS: usize = 200;
+pub const VISIBLE_FOLDERS: usize = 200;
 
 const HAIRLINE: f32 = 1.0;
 
@@ -1258,32 +1258,12 @@ pub fn empty_library(view: EmptyLibrary) -> Element<'static, Message> {
     let measure = inner_width(page).min(EMPTY_MEASURE);
     let prose = measure.min(BODY_MEASURE);
 
-    let headline = text("No playable media in these folders yet")
+    let (headline_text, copy) = empty_state_copy(&cards, scanning);
+    let headline = text(headline_text)
         .size(tokens.type_scale.title)
         .font(theme::semibold())
         .color(theme::ink())
         .width(Length::Fill);
-
-    let configured = cards
-        .iter()
-        .any(|card| card.folders_configured && !card.folders.is_empty());
-    let scanned = cards.iter().any(|card| card.last_scan.is_some());
-    let mut copy = if configured || scanned {
-        String::from(
-            "Screenroom looked where you pointed it and found nothing it can play. \
-             Nothing was moved, renamed or deleted.",
-        )
-    } else {
-        String::from(
-            "No folders are included yet, so there is nothing to read. Choose at least \
-             one folder in a location, then scan it. Nothing on disk is changed.",
-        )
-    };
-    if scanning {
-        copy.push_str(" A scan is running now, and this list updates as files arrive.");
-    } else if configured || scanned {
-        copy.push_str(" Review the included folders, add another location, or scan again.");
-    }
 
     let lead = column![
         text("LIBRARY")
@@ -1402,6 +1382,46 @@ pub fn empty_library(view: EmptyLibrary) -> Element<'static, Message> {
         .height(Length::Fill)
         .clip(true)
         .into()
+}
+
+fn empty_state_copy(cards: &[SourceCard], scanning: bool) -> (String, String) {
+    let unreachable = cards
+        .iter()
+        .any(|card| card.state != SourceState::Available);
+    let configured = cards
+        .iter()
+        .any(|card| card.folders_configured && !card.folders.is_empty());
+    let scanned = cards.iter().any(|card| card.last_scan.is_some());
+    let headline = if unreachable {
+        "Your media is offline"
+    } else {
+        "No playable media in these folders yet"
+    };
+    let mut copy = if unreachable {
+        String::from(
+            "Screenroom cannot read a location right now, so its titles are not available. \
+             The indexed titles and your place in them are kept: reconnect the drive, \
+             restore access, or relink the location. Nothing was deleted.",
+        )
+    } else if configured || scanned {
+        String::from(
+            "Screenroom looked where you pointed it and found nothing it can play. \
+             Nothing was moved, renamed or deleted.",
+        )
+    } else {
+        String::from(
+            "No folders are included yet, so there is nothing to read. Choose at least \
+             one folder in a location, then scan it. Nothing on disk is changed.",
+        )
+    };
+    if scanning {
+        copy.push_str(" A scan is running now, and this list updates as files arrive.");
+    } else if unreachable {
+        copy.push_str(" Use Review folders to relink it.");
+    } else if configured || scanned {
+        copy.push_str(" Review the included folders, add another location, or scan again.");
+    }
+    (headline.to_string(), copy)
 }
 
 fn empty_card(card: &SourceCard, measure: f32) -> Element<'static, Message> {
@@ -1922,11 +1942,15 @@ fn folder_panel(
         );
     } else if browser.selected.is_empty() {
         notes.push(
-            text("Include at least one folder to make a scan.")
-                .size(tokens.type_scale.micro)
-                .font(theme::regular())
-                .color(theme::muted())
-                .into(),
+            text(if browser.folders_configured {
+                "Include at least one folder to make a scan."
+            } else {
+                "This whole location is read until you save a folder selection."
+            })
+            .size(tokens.type_scale.micro)
+            .font(theme::regular())
+            .color(theme::muted())
+            .into(),
         );
     }
     notes.push(
@@ -2207,17 +2231,26 @@ fn folder_section(browser: &FolderBrowser, panel: f32) -> Element<'static, Messa
                 .font(theme::semibold())
                 .color(theme::muted()),
             Space::new().width(Length::Fill),
-            text(format!("{} shown", browser.entries.len()))
-                .size(tokens.type_scale.micro)
-                .font(theme::regular())
-                .color(theme::muted()),
+            text(format!(
+                "{} of {} shown",
+                browser.entries.len().min(VISIBLE_FOLDERS),
+                browser.entries.len()
+            ))
+            .size(tokens.type_scale.micro)
+            .font(theme::regular())
+            .color(theme::muted()),
         ]
         .align_y(Alignment::Center)
         .width(Length::Fill),
-        text("Included folders are scanned. Including a folder includes everything inside it.")
-            .size(tokens.type_scale.caption)
-            .font(theme::regular())
-            .color(theme::muted()),
+        text(if browser.folders_configured {
+            "Included folders are scanned. Including a folder includes everything inside it."
+        } else {
+            "No folder selection is saved yet, so a scan reads this whole location. Include \
+             folders to narrow it."
+        })
+        .size(tokens.type_scale.caption)
+        .font(theme::regular())
+        .color(theme::muted()),
         list,
     ]
     .spacing(theme::gap(Gap::Group))
@@ -2901,6 +2934,31 @@ mod tests {
                 width,
             });
         }
+    }
+
+    #[test]
+    fn an_unreachable_location_is_not_reported_as_an_empty_search() {
+        let mut source = card("drive", "External SSD", 40, vec!["Films"]);
+        source.state = SourceState::Disconnected;
+        source.last_scan = Some("2 hours ago".to_string());
+        let (headline, copy) = empty_state_copy(&[source], false);
+        assert!(headline.contains("offline"), "{headline}");
+        assert!(copy.contains("cannot read"), "{copy}");
+        assert!(copy.contains("kept"), "{copy}");
+        assert!(
+            !copy.contains("looked where you pointed it"),
+            "an absent drive is not an empty search: {copy}"
+        );
+    }
+
+    #[test]
+    fn an_unscanned_location_does_not_claim_a_finished_search() {
+        let mut source = card("new", "New location", 0, Vec::new());
+        source.folders_configured = true;
+        source.last_scan = None;
+        let (_, copy) = empty_state_copy(&[source], false);
+        assert!(copy.contains("No folders are included yet"), "{copy}");
+        assert!(!copy.contains("looked where"), "{copy}");
     }
 
     #[test]

@@ -98,6 +98,10 @@ because the application is not reading that folder.
 A complete scan may withdraw availability, and a partial, cancelled or bounded scan
 may not — the existing rule. Its scope is now the selected subtree: a file becomes
 unavailable only when a complete scan of the folder that contains it proves it gone.
+One explicit addition: a file outside the saved selection is withdrawn on any scan
+that runs to the end, even when that scan is otherwise partial, because the owner has
+already removed its folder from the selection and its presence on disk says nothing
+about whether it belongs in the library.
 
 A missing selected subfolder is a folder-level condition. It does not mark the
 source `Disconnected`, and it does not withdraw files in the folders that are still
