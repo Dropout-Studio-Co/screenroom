@@ -1654,6 +1654,12 @@ impl App {
             Ok(total) => self.media_total = total.max(0) as usize,
             Err(error) => self.report(&error),
         }
+        if let Some(source_id) = self.manager_source.clone() {
+            match self.library.folder_media_counts(&source_id) {
+                Ok(counts) => self.folder_counts = counts.into_iter().collect(),
+                Err(_) => self.folder_counts.clear(),
+            }
+        }
         if self
             .relink_target
             .as_ref()
@@ -5132,6 +5138,9 @@ impl App {
             self.scan_quiet = false;
             let onboarding = self.media_total == 0;
             self.reload();
+            if self.manager_source.is_some() {
+                self.load_folder_view();
+            }
             if onboarding && self.media_total > 0 && self.screen != Screen::Settings {
                 self.sources_editing = false;
                 self.navigate(Screen::Home);
@@ -6660,6 +6669,7 @@ impl App {
             folders_configured: source.folders_configured,
             relink_path: self.relink_path.clone(),
             unreadable: self.folder_unreadable.clone(),
+            focus: (self.sources_pane == SourcesPane::Folders).then_some(self.folder_focus),
         })
     }
 

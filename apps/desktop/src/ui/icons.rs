@@ -33,9 +33,11 @@ pub enum Icon {
 
     Library,
 
+    Settings,
+
     Folder,
 
-    Settings,
+    Drive,
 }
 
 impl Icon {
@@ -53,8 +55,9 @@ impl Icon {
         Icon::Check,
         Icon::Home,
         Icon::Library,
-        Icon::Folder,
         Icon::Settings,
+        Icon::Folder,
+        Icon::Drive,
     ];
 
     fn index(self) -> usize {
@@ -74,6 +77,7 @@ impl Icon {
             Icon::Library => 12,
             Icon::Settings => 13,
             Icon::Folder => 14,
+            Icon::Drive => 15,
         }
     }
 }
@@ -92,7 +96,7 @@ fn shape(points: &[(f32, f32)]) -> Segment {
     )
 }
 
-fn build() -> [Vec<Segment>; 15] {
+fn build() -> [Vec<Segment>; 16] {
     let search_ring = [
         (15.5, 10.5),
         (14.83, 13.0),
@@ -177,17 +181,22 @@ fn build() -> [Vec<Segment>; 15] {
             line(&[(11.0, 14.5), (11.0, 19.5)]),
         ],
         vec![shape(&[
-            (3.5, 7.0),
-            (9.5, 7.0),
-            (11.5, 9.5),
-            (20.5, 9.5),
-            (20.5, 19.0),
-            (3.5, 19.0),
+            (3.0, 7.0),
+            (9.0, 7.0),
+            (11.0, 9.0),
+            (21.0, 9.0),
+            (21.0, 19.0),
+            (3.0, 19.0),
         ])],
+        vec![
+            shape(&[(4.0, 7.0), (20.0, 7.0), (20.0, 17.0), (4.0, 17.0)]),
+            line(&[(7.0, 13.0), (17.0, 13.0)]),
+            line(&[(7.0, 10.0), (11.0, 10.0)]),
+        ],
     ]
 }
 
-static PATHS: LazyLock<[Vec<Segment>; 15]> = LazyLock::new(build);
+static PATHS: LazyLock<[Vec<Segment>; 16]> = LazyLock::new(build);
 
 pub fn path(icon: Icon) -> &'static [Segment] {
     &PATHS[icon.index()]
@@ -284,7 +293,7 @@ mod tests {
 
     #[test]
     fn the_icon_set_covers_every_glyph_the_ui_draws() {
-        assert_eq!(Icon::ALL.len(), 15);
+        assert_eq!(Icon::ALL.len(), 16);
     }
 
     #[test]
