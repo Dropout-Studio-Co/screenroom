@@ -237,7 +237,9 @@ mod tests {
     use rusqlite::params;
 
     use super::*;
-    use crate::{Checkpoint, Ingest, LibraryQuery, parse_filename};
+    use std::time::Duration;
+
+    use crate::{Checkpoint, Ingest, LibraryQuery, LibraryScanner, ScanToken, parse_filename};
 
     fn media_root(directory: &tempfile::TempDir, name: &str) -> std::path::PathBuf {
         let root = directory.path().join(name);
@@ -562,6 +564,107 @@ mod tests {
         let media = &library.source_media().unwrap()[0];
         assert_eq!(media.total, 1);
         assert_eq!(media.available, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_that_cannot_be_listed_is_permission_lost() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = media_root(&directory, "media");
+        let library = Library::open_in_memory().unwrap();
+        let source = library.add_source(&root, None).unwrap();
+        let stored_root = library.source(&source.id).unwrap().root_path;
+        ingest(&library, &source.id, &stored_root, "Film.2020.mkv", true);
+
+        let original = std::fs::metadata(&root).unwrap().permissions();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = std::fs::read_dir(&root).is_err();
+        let probed = library.probe_source(&source.id).unwrap();
+        std::fs::set_permissions(&root, original).unwrap();
+
+        if !unreadable {
+            return;
+        }
+        assert_eq!(probed, crate::SourceState::PermissionLost);
+        assert_eq!(
+            library.source(&source.id).unwrap().state,
+            crate::SourceState::PermissionLost
+        );
+        assert_eq!(library.available_media_count().unwrap(), 0);
+        assert_eq!(library.source_media().unwrap()[0].total, 1);
+        assert_eq!(
+            library.probe_source(&source.id).unwrap(),
+            crate::SourceState::Available,
+            "the restored permission is visible to a probe"
+        );
+        assert_eq!(
+            library.source(&source.id).unwrap().state,
+            crate::SourceState::PermissionLost,
+            "only a scan may restore availability"
+        );
+    }
+
+    #[test]
+    fn a_reconnected_source_needs_a_scan_and_keeps_the_place() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = media_root(&directory, "media");
+        std::fs::write(root.join("Film.2020.mkv"), vec![b'x'; 200_000]).unwrap();
+        let library = Library::open_in_memory().unwrap();
+        let source = library.add_source(&root, None).unwrap();
+        let scan = || {
+            LibraryScanner::new(&library)
+                .with_limits(1_000, 16, Duration::ZERO)
+                .scan(&source.id, &ScanToken::new(), |_| {})
+                .unwrap();
+        };
+        scan();
+        let profile = library.profiles().unwrap()[0].id.clone();
+        let item = library.items(&LibraryQuery::page(1)).unwrap().remove(0);
+        let session = library.start_session(&profile, &item.id).unwrap();
+        library
+            .checkpoint(Checkpoint {
+                session: &session,
+                position_ms: 1_000,
+                duration_ms: 60_000,
+                sequence: 1,
+                seek_generation: 0,
+                ended: false,
+            })
+            .unwrap();
+        assert_eq!(library.continue_watching(&profile, 10).unwrap().len(), 1);
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(
+            library.probe_source(&source.id).unwrap(),
+            crate::SourceState::Missing
+        );
+        assert!(library.continue_watching(&profile, 10).unwrap().is_empty());
+
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Film.2020.mkv"), vec![b'x'; 200_000]).unwrap();
+        assert_eq!(
+            library.probe_source(&source.id).unwrap(),
+            crate::SourceState::Available
+        );
+        assert_eq!(
+            library.source(&source.id).unwrap().state,
+            crate::SourceState::Missing,
+            "a probe alone must not declare the old rows playable"
+        );
+        assert!(library.continue_watching(&profile, 10).unwrap().is_empty());
+
+        scan();
+        assert_eq!(
+            library.source(&source.id).unwrap().state,
+            crate::SourceState::Available
+        );
+        let restored = library.continue_watching(&profile, 10).unwrap();
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].id, item.id, "the file row was replaced");
+        assert_eq!(restored[0].position_ms, 1_000, "the place was lost");
+        assert_eq!(library.source_media().unwrap()[0].total, 1);
     }
 
     #[test]

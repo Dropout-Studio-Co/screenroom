@@ -2550,7 +2550,7 @@ existing *Available offline* chip able to show unavailable rows deliberately.
 **Evidence.** A copy of the real library was launched hidden with the drive absent:
 the source changed from `available` to `missing`, its files stopped counting as
 available, and the connected test source kept its six available files. On the same
-tree, `cargo test --workspace` passes (479 desktop unit tests, 178 core unit tests,
+tree, `cargo test --workspace` passes (479 desktop unit tests, 180 core unit tests,
 and the integration suites), including new tests for launch probing, watcher-stop
 probing, metadata retention, Continue watching and the unavailable hero.
 `crates/screenroom-core/tests/scanner.rs` now asserts that a replaced volume keeps its
