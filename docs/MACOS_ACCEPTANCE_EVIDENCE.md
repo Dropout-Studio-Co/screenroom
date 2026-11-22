@@ -418,10 +418,13 @@ The capture set is `.artifacts/fixes-2026-11-22/`, Git-ignored: `before-1460-hom
 (the first attempt at 1 px, which proved the clip is the lift and not the string),
 `final-1460-library`, `final-860-library` and `final-1460-home`.
 
-One interference, recorded: the two `open -g` launches of the installed build kept
-the frontmost application unchanged, but the five launches of the development
-binary took the foreground once, for the length of a capture. No input was sent and
-no other window moved.
+One interference, recorded: the launches of the installed 0.1.8 build used `open -g`
+and the frontmost application was unchanged. The first launch of the development
+binary did take the foreground — the frontmost application identifier changed from
+`0x0-0x11fa1f9` to `0x0-0x195c95b` and stayed there — and it was not measured after
+that, so this says what happened at least once, not how many times. No input was
+sent and no other window moved. The window sizes, the scratch library and the
+captures are the same for every launch.
 
 `SCREENROOM_START_SCREEN=home|library|settings` now opens the window on a chosen
 screen, so a Library or Settings capture needs no pointer; it is the same shape as
