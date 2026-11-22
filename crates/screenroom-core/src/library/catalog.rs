@@ -133,7 +133,7 @@ impl Library {
             "SELECT DISTINCT w.genres FROM works w WHERE EXISTS(
                SELECT 1 FROM editions e JOIN files f ON f.edition_id = e.id
                JOIN sources s ON s.id = f.source_id
-               WHERE e.work_id = w.id AND s.state != 'removed')
+               WHERE e.work_id = w.id AND f.available = 1 AND s.state = 'available')
              ORDER BY w.genres LIMIT 200 OFFSET ?1",
         )?;
         let mut labels: Vec<String> = Vec::new();

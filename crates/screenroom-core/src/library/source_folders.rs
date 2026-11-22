@@ -559,7 +559,9 @@ mod tests {
             0,
             "a disconnected source must not count as available media"
         );
-        assert_eq!(library.source_media().unwrap()[0].total, 1);
+        let media = &library.source_media().unwrap()[0];
+        assert_eq!(media.total, 1);
+        assert_eq!(media.available, 0);
     }
 
     #[test]
