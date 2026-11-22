@@ -5379,11 +5379,24 @@ impl App {
             }
             crate::watch::Watched::Stopped { root, reason } => {
                 self.probe_sources();
-                self.status = Some(format!(
-                    "{} is no longer readable ({reason}). Its titles stay in the library \
-                     but are unavailable until it returns.",
-                    root.display()
-                ));
+                let key = self.library.path_key(&root);
+                let unavailable = self.sources.iter().any(|source| {
+                    self.library.path_key(Path::new(&source.root_path)) == key
+                        && source.state != SourceState::Available
+                });
+                self.status = Some(if unavailable {
+                    format!(
+                        "{} is no longer readable ({reason}). Its titles stay in the library \
+                         but are unavailable until it returns.",
+                        root.display()
+                    )
+                } else {
+                    format!(
+                        "Stopped watching {} ({reason}). The titles are still readable; \
+                         Screenroom will check the location again.",
+                        root.display()
+                    )
+                });
             }
         }
     }
@@ -5800,6 +5813,7 @@ impl App {
             }
             Message::Back => self.back(),
             Message::Refresh => {
+                self.probe_sources();
                 self.reload();
                 self.refresh_detail();
                 if self.screen == Screen::Sources {
