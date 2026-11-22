@@ -168,7 +168,14 @@ impl Library {
         }
         let root = Path::new(&source.root_path);
         let state = match std::fs::metadata(root) {
-            Ok(metadata) if metadata.is_dir() => SourceState::Available,
+            Ok(metadata) if metadata.is_dir() => match std::fs::read_dir(root) {
+                Ok(_) => SourceState::Available,
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    SourceState::PermissionLost
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => SourceState::Missing,
+                Err(_) => SourceState::Disconnected,
+            },
             Ok(_) => SourceState::Missing,
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
                 SourceState::PermissionLost
