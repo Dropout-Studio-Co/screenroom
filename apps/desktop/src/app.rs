@@ -4048,10 +4048,15 @@ impl App {
     }
 
     fn find_source_by_root(&self, root: &Path) -> Option<Source> {
-        let key = self.library.path_key(root);
+        let resolved = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        let key = self.library.path_key(&resolved);
         self.sources
             .iter()
-            .find(|source| self.library.path_key(Path::new(&source.root_path)) == key)
+            .find(|source| {
+                let stored = std::fs::canonicalize(&source.root_path)
+                    .unwrap_or_else(|_| PathBuf::from(&source.root_path));
+                self.library.path_key(&stored) == key
+            })
             .cloned()
     }
 
@@ -4876,10 +4881,18 @@ impl App {
         self.navigate(Screen::Sources);
         self.focus_card(0);
         self.manage_source(source.id.clone());
-        self.source_selection.clear();
-        self.status = Some(
-            "Choose the folders to include, then scan. Nothing is read until you scan.".to_string(),
-        );
+        if created {
+            self.source_selection.clear();
+            self.status = Some(
+                "Choose the folders to include, then scan. Nothing is read until you scan."
+                    .to_string(),
+            );
+        } else {
+            self.status = Some(
+                "Review the included folders, then scan. Nothing is read until you scan."
+                    .to_string(),
+            );
+        }
     }
 
     fn choose_relink_folder(&mut self) {
@@ -10821,6 +10834,28 @@ mod tests {
                 .any(|entry| entry == &first_entry),
             "Enter ticks the highlighted folder"
         );
+    }
+
+    #[test]
+    fn reopening_a_known_location_keeps_its_saved_folder_selection() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let root = directory.path().join("media");
+        write_settled(&root.join("Films/Film.mkv"), b"not really a video");
+        write_settled(&root.join("Shows/Show.mkv"), b"not really a video");
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+
+        app.stage_location(root.clone());
+        let source_id = app.sources[0].id.clone();
+        app.library
+            .configure_source_folders(&source_id, &["Films".to_string()])
+            .expect("selection");
+        app.reload_administration();
+
+        app.stage_location(root);
+
+        assert_eq!(app.sources.len(), 1);
+        assert_eq!(app.source_selection, vec!["Films".to_string()]);
     }
 
     #[test]
