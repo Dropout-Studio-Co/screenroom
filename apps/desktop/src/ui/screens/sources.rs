@@ -327,17 +327,17 @@ fn fit_path(value: &str, room: f32, size: f32) -> String {
 
 fn indexed_phrase(indexed: usize) -> String {
     match indexed {
-        0 => "No media indexed".to_string(),
-        1 => "1 title indexed".to_string(),
-        count => format!("{count} titles indexed"),
+        0 => "No media available".to_string(),
+        1 => "1 title available".to_string(),
+        count => format!("{count} titles available"),
     }
 }
 
 fn indexed_short(indexed: usize) -> String {
     match indexed {
-        0 => "Nothing indexed".to_string(),
-        1 => "1 title".to_string(),
-        count => format!("{count} titles"),
+        0 => "Nothing available".to_string(),
+        1 => "1 title available".to_string(),
+        count => format!("{count} titles available"),
     }
 }
 
@@ -376,9 +376,9 @@ fn scan_phrase(card: &SourceCard) -> String {
 
 fn media_phrase(media: usize) -> String {
     match media {
-        0 => "No indexed media inside".to_string(),
-        1 => "1 indexed item inside".to_string(),
-        count => format!("{count} indexed items inside"),
+        0 => "No available media inside".to_string(),
+        1 => "1 available item inside".to_string(),
+        count => format!("{count} available items inside"),
     }
 }
 
@@ -2699,7 +2699,7 @@ mod tests {
         assert!(phrase.to_lowercase().contains("no media"), "{phrase}");
         assert!(!phrase.contains(char::is_numeric), "{phrase}");
         assert!(!phrase.to_lowercase().contains("title"), "{phrase}");
-        assert_eq!(indexed_short(0), "Nothing indexed");
+        assert_eq!(indexed_short(0), "Nothing available");
     }
 
     #[test]
@@ -2752,9 +2752,9 @@ mod tests {
 
     #[test]
     fn a_folder_with_no_indexed_media_never_claims_a_number() {
-        assert_eq!(media_phrase(0), "No indexed media inside");
-        assert_eq!(media_phrase(1), "1 indexed item inside");
-        assert_eq!(media_phrase(9), "9 indexed items inside");
+        assert_eq!(media_phrase(0), "No available media inside");
+        assert_eq!(media_phrase(1), "1 available item inside");
+        assert_eq!(media_phrase(9), "9 available items inside");
         assert!(!media_phrase(0).contains(char::is_numeric));
     }
 
@@ -3030,8 +3030,8 @@ mod tests {
             folders_short(&["Films".to_string(), "Series".to_string()]),
             "2 folders"
         );
-        assert_eq!(indexed_short(12), "12 titles");
-        assert_eq!(indexed_phrase(12), "12 titles indexed");
+        assert_eq!(indexed_short(12), "12 titles available");
+        assert_eq!(indexed_phrase(12), "12 titles available");
         assert_eq!(
             scan_phrase(&card("films", "Films", 1, vec!["Films"])),
             "Scanned 4 minutes ago"

@@ -122,7 +122,7 @@ folder keeps its works, progress, lists and posters.
 The screen is a source rail beside a folder browser. The rail lists each source with
 its label, its state and its location, plus **Add a location**. The browser shows
 the current folder's breadcrumb, an **Everything in this folder** row for the
-current folder itself, and each subfolder with its indexed media count and the
+current folder itself, and each subfolder with its available media count and the
 inclusion state it holds: selected, included by a selected parent, or excluded. It
 carries **Scan selected folders**, **Clear selection**, **Rescan**, and the
 per-source **Remove** and **Relink** actions, with add available from the rail.

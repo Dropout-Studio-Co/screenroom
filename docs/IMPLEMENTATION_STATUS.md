@@ -2504,7 +2504,7 @@ additively, so an existing version 10 library migrates forward without a rewritt
 source, a re-indexed item or a read file, and behaves exactly as it did.
 
 The desktop gains a **Sources** screen (source rail; folder browser with breadcrumbs,
-an *Everything in this folder* row, per-folder indexed media counts and the
+an *Everything in this folder* row, per-folder available media counts and the
 selected / included-by-parent / excluded state; *Scan selected folders*, *Clear
 selection*, *Rescan*, *Remove*, *Relink*, *Add a location*) and three presentation
 states: a welcome screen with no source, an empty state for sources holding nothing
