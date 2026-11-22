@@ -74,14 +74,20 @@ fails `future_database` and is left untouched.
 
 Withdrawal rules:
 
-- Only a complete scan may withdraw availability; a cancelled, bounded or partial
-  scan may not.
+- Only a complete scan may withdraw availability for files it could not locate; a
+  cancelled, bounded or partial scan may not. The one exception is a file that is
+  no longer inside the saved selection: it is withdrawn on any scan that reaches the
+  end, because the owner has already deselected its folder.
 - Withdrawal is scoped to the subtree that was scanned. A file becomes unavailable
   only when a complete scan of the selected folder containing it proves it gone.
 - A missing selected subfolder is a folder-level condition. It does not set the
   source to `Disconnected` and does not withdraw files in other selected folders.
 - Deselecting a folder stops future scans and watches from visiting it. Its rows are
   not deleted; selecting it again returns it to the scan.
+- A source is probed at launch, on a stopped watcher and at each reconcile. A
+  non-available source marks all its files unavailable and keeps every row.
+  `LibraryItem.available` requires both the file flag and an `available` source, so
+  a stale flag alone never presents media as playable.
 - Removal of a source, a disconnected drive or a revoked permission marks rows
   unavailable and preserves works, editions, progress, lists, markers and artwork.
   Nothing is deleted, and no user media is modified, moved or renamed.

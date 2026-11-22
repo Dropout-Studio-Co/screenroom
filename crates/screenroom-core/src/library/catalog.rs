@@ -10,7 +10,8 @@ use crate::error::{CoreError, Result};
 use crate::filename::{ParsedName, parse_filename};
 
 const SELECT: &str = "SELECT f.id, f.source_id, f.edition_id, f.relative_path, f.filename,
-    f.available, f.added_ms, w.id work_id, w.title, w.kind, w.year, w.overview, w.genres,
+    (f.available = 1 AND s.state = 'available') AS available, f.added_ms,
+    w.id work_id, w.title, w.kind, w.year, w.overview, w.genres,
     w.manual_match, w.metadata_origin, e.duration_ms, f.season_number, f.episode_number,
     (SELECT CASE WHEN ep.metadata_origin='stale' THEN '' ELSE ep.title END
        FROM episodes ep JOIN file_episodes fe ON fe.episode_id=ep.id
@@ -107,7 +108,8 @@ impl Library {
         let connection = self.connection();
         let mut statement = connection.prepare(&format!(
             "{SELECT} WHERE pr.position_ms > 0 AND pr.watched = 0 AND pr.hidden = 0
-             AND s.state != 'removed' ORDER BY pr.updated_ms DESC, f.id LIMIT ?"
+             AND f.available = 1 AND s.state = 'available'
+             ORDER BY pr.updated_ms DESC, f.id LIMIT ?"
         ))?;
         let rows = statement.query_map(params![profile_id, profile_id, limit], item_from_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

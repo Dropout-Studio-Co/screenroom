@@ -150,11 +150,42 @@ impl Library {
     }
 
     pub(crate) fn mark_source_unreachable(&self, id: &str, state: SourceState) -> Result<()> {
-        self.connection().execute(
+        let mut connection = self.connection();
+        let tx = connection.transaction()?;
+        tx.execute(
             "UPDATE sources SET state = ?1 WHERE id = ?2 AND state != 'removed'",
             params![state.as_str(), id],
         )?;
+        tx.execute("UPDATE files SET available = 0 WHERE source_id = ?1", [id])?;
+        tx.commit()?;
         Ok(())
+    }
+
+    pub fn probe_source(&self, id: &str) -> Result<SourceState> {
+        let source = self.source(id)?;
+        if source.state == SourceState::Removed {
+            return Ok(SourceState::Removed);
+        }
+        let root = Path::new(&source.root_path);
+        let state = match std::fs::metadata(root) {
+            Ok(metadata) if metadata.is_dir() => SourceState::Available,
+            Ok(_) => SourceState::Missing,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                SourceState::PermissionLost
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if root.parent().is_some_and(Path::exists) {
+                    SourceState::Missing
+                } else {
+                    SourceState::Disconnected
+                }
+            }
+            Err(_) => SourceState::Disconnected,
+        };
+        if state != SourceState::Available && source.state != state {
+            self.set_source_state(id, state)?;
+        }
+        Ok(state)
     }
 
     pub fn rename_source(&self, id: &str, label: &str) -> Result<()> {

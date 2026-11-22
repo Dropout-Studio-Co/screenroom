@@ -222,14 +222,24 @@ than in a screen:
   source is configured (`sources.folders_configured = 1`). An unconfigured source —
   which is every source migrated from schema 10 — keeps the whole-root walk, so an
   existing library behaves as it did.
-- **The watcher.** `apps/desktop`'s filesystem watcher registers the same folders.
-  A change under a folder that is not selected raises no event, because the
-  application is not reading that folder.
-- **Availability.** A complete scan may withdraw a file that it proves gone, and
-  only inside the subtree it scanned. A missing selected subfolder is reported at
-  the folder, not as a disconnected drive, and it never withdraws files in the
-  other selected folders. Deselecting a folder stops watching and scanning it; its
-  rows stay, unvisited, until it is selected again.
+- **The watcher.** `apps/desktop` watches each source root once, recursively, and
+  drops events whose paths fall outside the source's selected folders before an
+  ingest or withdrawal is submitted. One filesystem thread and one stream per
+  source stays bounded however many folders are selected, and a change in a folder
+  that is not selected is ignored. Deselecting a folder stops watching and scanning
+  it; its rows stay, unvisited, until it is selected again.
+- **Availability.** A source is probed at launch, when a watcher stops, and at each
+  reconcile: a readable root is `Available`; a missing root whose parent still
+  exists is `Missing`; a vanished mount point is `Disconnected`; a refused read is
+  `PermissionLost`. A non-available source marks all its files `available = 0` and
+  keeps every row, work, poster and progress record. A scan restores availability
+  when the source returns; only a scan may do so. `LibraryItem.available` is
+  derived from **both** the file flag and the source state, so a stale file flag
+  can never present unavailable media as playable. A complete scan may withdraw a
+  file that it proves gone, and only inside the subtree it scanned. A missing
+  selected subfolder is reported at the folder, not as a disconnected drive, and
+  it never withdraws files in the other selected folders. Files that leave the
+  saved selection are withdrawn even from an otherwise partial scan.
 
 The library's three presentation states — no source, sources with nothing indexed,
 and a populated library — are the application's response to the same facts: the

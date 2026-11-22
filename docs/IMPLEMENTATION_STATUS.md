@@ -2526,3 +2526,35 @@ the three states' construction; it is not a visual acceptance.
 states, or the withheld navigation, and no window capture of them is recorded here.
 Visual acceptance is an owner judgement and is not claimed. No device result is
 claimed either: this is the macOS host, and the Windows and TV targets are untouched.
+
+## A disconnected source stops presenting its media as available (2026-11-23)
+
+**Symptom and root cause.** After an external SSD was unplugged, its titles stayed
+on Home and Library and the source card still read available. The database showed
+the source as `available` with every file flag set. Reconciliation skipped any
+source whose root was not a directory, so the scanner — the only code that classified
+an unreachable source — never ran for the absent drive. On top of that, item
+availability was read from the file flag alone, `Continue watching` did not require
+availability, and the Home hero fell back to an unavailable item. A stale file flag
+could therefore present missing media as playable even after a state change.
+
+**Fix.** `Library::probe_source` classifies a root from the filesystem and a
+non-available source marks its files unavailable while keeping every row. The
+desktop probes at launch (before the first frame), on a stopped watcher and at each
+reconcile, and reconciliation scans only sources whose root is readable. Item
+availability is derived from **both** the file flag and the source state;
+`Continue watching`, recommendations, available counts, folder counts and the Home
+hero all require an available source; the Library opens on available media, with the
+existing *Available offline* chip able to show unavailable rows deliberately.
+
+**Evidence.** A copy of the real library was launched hidden with the drive absent:
+the source changed from `available` to `missing`, its files stopped counting as
+available, and the connected test source kept its six available files. On the same
+tree, `cargo test --workspace` passes (479 desktop unit tests, 178 core unit tests,
+and the integration suites), including new tests for launch probing, watcher-stop
+probing, metadata retention, Continue watching and the unavailable hero.
+`crates/screenroom-core/tests/scanner.rs` now asserts that a replaced volume keeps its
+rows but reports nothing available.
+
+**PENDING:** the owner has not reconnected the SSD and confirmed the titles return,
+and no visual capture of the corrected Home is recorded.

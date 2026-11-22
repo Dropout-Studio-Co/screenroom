@@ -80,7 +80,8 @@ impl Library {
         let connection = self.connection();
         let mut statement = connection.prepare(
             "SELECT s.id,
-               (SELECT COUNT(*) FROM files f WHERE f.source_id = s.id AND f.available = 1),
+               (SELECT COUNT(*) FROM files f WHERE f.source_id = s.id AND f.available = 1
+                  AND s.state = 'available'),
                (SELECT COUNT(*) FROM files f WHERE f.source_id = s.id)
              FROM sources s WHERE s.state != 'removed'
              ORDER BY s.label COLLATE NOCASE, s.id",
@@ -98,8 +99,10 @@ impl Library {
     pub fn folder_media_counts(&self, source_id: &str) -> Result<Vec<(String, i64)>> {
         self.ensure_source_present(source_id)?;
         let connection = self.connection();
-        let mut statement = connection
-            .prepare("SELECT relative_path FROM files WHERE source_id = ?1 AND available = 1")?;
+        let mut statement = connection.prepare(
+            "SELECT f.relative_path FROM files f JOIN sources s ON s.id = f.source_id
+                 WHERE f.source_id = ?1 AND f.available = 1 AND s.state = 'available'",
+        )?;
         let rows = statement.query_map([source_id], |row| row.get::<_, String>(0))?;
         let mut counts: HashMap<String, i64> = HashMap::new();
         for relative in rows {
@@ -119,7 +122,7 @@ impl Library {
         let connection = self.connection();
         Ok(connection.query_row(
             "SELECT COUNT(*) FROM files f JOIN sources s ON s.id = f.source_id
-             WHERE f.available = 1 AND s.state != 'removed'",
+             WHERE f.available = 1 AND s.state = 'available'",
             [],
             |row| row.get(0),
         )?)
@@ -234,7 +237,7 @@ mod tests {
     use rusqlite::params;
 
     use super::*;
-    use crate::{Ingest, LibraryQuery, parse_filename};
+    use crate::{Checkpoint, Ingest, LibraryQuery, parse_filename};
 
     fn media_root(directory: &tempfile::TempDir, name: &str) -> std::path::PathBuf {
         let root = directory.path().join(name);
@@ -477,7 +480,7 @@ mod tests {
     }
 
     #[test]
-    fn a_source_that_is_not_available_still_counts_its_media() {
+    fn an_unavailable_source_is_not_counted_as_available_media() {
         let directory = tempfile::tempdir().unwrap();
         let root = media_root(&directory, "media");
         let library = Library::open_in_memory().unwrap();
@@ -498,8 +501,98 @@ mod tests {
 
         assert_eq!(
             library.available_media_count().unwrap(),
+            0,
+            "an unplugged drive must not count as available media"
+        );
+        assert_eq!(
+            library.source_media().unwrap()[0].total,
             1,
-            "an unplugged drive must not empty the library on its own"
+            "the row and its metadata are still kept"
+        );
+    }
+
+    #[test]
+    fn an_unavailable_source_never_fills_continue_watching_or_item_availability() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = media_root(&directory, "media");
+        let library = Library::open_in_memory().unwrap();
+        let source = library.add_source(&root, None).unwrap();
+        let stored_root = library.source(&source.id).unwrap().root_path;
+        ingest(&library, &source.id, &stored_root, "Film.2020.mkv", true);
+        let profile = library.profiles().unwrap()[0].id.clone();
+        let item = library.items(&LibraryQuery::page(1)).unwrap().remove(0);
+        let session = library.start_session(&profile, &item.id).unwrap();
+        library
+            .checkpoint(Checkpoint {
+                session: &session,
+                position_ms: 1_000,
+                duration_ms: 60_000,
+                sequence: 1,
+                seek_generation: 0,
+                ended: false,
+            })
+            .unwrap();
+        assert_eq!(library.continue_watching(&profile, 10).unwrap().len(), 1);
+
+        library
+            .set_source_state(&source.id, crate::SourceState::Disconnected)
+            .unwrap();
+        library
+            .connection()
+            .execute(
+                "UPDATE files SET available = 1 WHERE source_id = ?1",
+                [&source.id],
+            )
+            .unwrap();
+
+        assert!(
+            library.continue_watching(&profile, 10).unwrap().is_empty(),
+            "a disconnected source must not fill Continue watching"
+        );
+        let item = library.item(&item.id, Some(&profile)).unwrap().unwrap();
+        assert!(
+            !item.available,
+            "a disconnected source must not report an item as available"
+        );
+        assert_eq!(
+            library.available_media_count().unwrap(),
+            0,
+            "a disconnected source must not count as available media"
+        );
+        assert_eq!(library.source_media().unwrap()[0].total, 1);
+    }
+
+    #[test]
+    fn probing_an_absent_source_marks_it_unavailable_without_losing_its_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = media_root(&directory, "media");
+        let library = Library::open_in_memory().unwrap();
+        let source = library.add_source(&root, None).unwrap();
+        let stored_root = library.source(&source.id).unwrap().root_path;
+        ingest(&library, &source.id, &stored_root, "Film.2020.mkv", true);
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(
+            library.probe_source(&source.id).unwrap(),
+            crate::SourceState::Missing
+        );
+        assert_eq!(
+            library.source(&source.id).unwrap().state,
+            crate::SourceState::Missing
+        );
+        assert_eq!(library.available_media_count().unwrap(), 0);
+        assert_eq!(library.source_media().unwrap()[0].total, 1);
+
+        std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(
+            library.probe_source(&source.id).unwrap(),
+            crate::SourceState::Available,
+            "a readable root is reported as available"
+        );
+        assert_eq!(
+            library.source(&source.id).unwrap().state,
+            crate::SourceState::Missing,
+            "only a scan may restore availability"
         );
     }
 

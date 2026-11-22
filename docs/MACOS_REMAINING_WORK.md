@@ -163,7 +163,7 @@ player's chrome receding has not been watched in a window. That is P2-06 below.
 | ID | Capability | Impl | Automated | Human | Blocker |
 | --- | --- | --- | --- | --- | --- |
 | F01 | Sources: grant, label, folder-level selection, scan, rescan, relink, remove, connection state | COMPLETE (code and tests) — a source is a storage location; an arbitrary set of selected folders is stored relative to its root (`""` is the root), and a configured source scans only those subtrees ([ADR-020](ADR-020_SOURCE_FOLDER_SELECTION.md), schema 11) | `step_1`, `step_12`, `a_folder_that_moved_keeps_its_history_until_it_is_relinked`, plus the core selection/migration/scan-scope tests and the desktop folder-browser tests | steps 1, 12; the Sources screen and its folder states are **PENDING** (no owner look, no capture) | — |
-| F01b | Onboarding and empty states: welcome with no source, an empty state for sources holding no media, Home and Library withheld until a library exists (a sub-row of F01; no new requirement ID) | COMPLETE (code and tests) | desktop tests for the three states and for the withheld navigation | **PENDING** (no owner look, no capture) | — |
+| F01b | Onboarding and empty states: welcome with no source, an empty state for sources holding no media or an offline source, Home and Library withheld until available media exists (a sub-row of F01; no new requirement ID) | COMPLETE (code and tests) | desktop tests for the three states, withheld navigation and disconnected-source probing | **PENDING** (no owner look, no capture) | — |
 | F02 | Discovery: incremental, bounded, cancelable, restartable, partial results | COMPLETE | `step_1` (1,200 files, cards mid-walk), scan tests in `screenroom-core/tests/scanner.rs` | step 1 | — |
 | F03 | Structured library: work/series/season/episode/edition/file, unknowns kept | COMPLETE | `described_episodes`, `screenroom-core/tests/library.rs`, TV contract tests | step 2 | — |
 | F04 | Identity matching: filename/folder, local NFO, manual match, protected override | COMPLETE (local only) | parsing tests, `step_18` (NFO), manual-match tests | step 2 | online IDs absent (F05) |
@@ -210,6 +210,17 @@ The three states are a welcome screen with no source, a purpose-built empty stat
 for sources that hold nothing playable, and the main interface; Home and Library
 are withheld until an indexed item exists. F01b is a sub-row of F01, so the tracked
 row count above is unchanged.
+
+A disconnected source is now detected rather than trusted from its last scan. The
+library probes every source at launch, when a watcher stops and at each reconcile;
+an unavailable source is `Missing`, `Disconnected` or `PermissionLost`, all of its
+files are marked unavailable, and every work, poster and progress row is kept. Item
+availability requires both the file flag and an available source, `Continue
+watching` and the Home hero exclude unavailable titles, and the Library opens on
+available media with the *Available offline* chip available for deliberate
+inspection. This closes the stale-USB symptom observed on 2026-11-23: reconciliation
+had skipped a root that was not a directory, so a source whose drive was gone kept
+`available` and its files stayed playable-looking.
 
 **What is verified:** the core suite covers the schema 11 migration, the selection
 round-trip and its normalisation, the subtree walk and withdrawal that stays inside

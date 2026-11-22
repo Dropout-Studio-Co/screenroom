@@ -75,9 +75,7 @@ pub fn hero_item<'a>(
         return Some(item);
     }
 
-    resume
-        .or_else(|| continue_watching.first())
-        .or_else(|| suggested.first().copied())
+    None
 }
 
 pub fn rails_for<'a>(
@@ -884,6 +882,18 @@ mod tests {
                 60,
             ),
         ]
+    }
+
+    #[test]
+    fn an_unavailable_title_never_becomes_the_hero() {
+        let mut offline = item("offline", "Offline", MediaKind::Movie, 1_000, 60_000, 10);
+        offline.available = false;
+        let single = [offline.clone()];
+        let suggested: Vec<&LibraryItem> = single.iter().collect();
+        assert!(
+            home::hero_item(Some(&offline), &single, &suggested).is_none(),
+            "a missing file must not own the hero or its Resume button"
+        );
     }
 
     #[test]

@@ -70,7 +70,6 @@ impl FilterChips {
     pub fn narrowed(&self) -> bool {
         self.kind != KindFilter::All
             || self.watch != WatchFilter::Any
-            || self.available_only
             || self.watchlist_only
             || self.favorites_only
     }

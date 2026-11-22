@@ -1506,15 +1506,14 @@ mod tests {
             summary.issues
         );
         assert!(!summary.complete);
+        let media = library.source_media().unwrap();
         assert_eq!(
-            library
-                .items(&LibraryQuery::page(10))
-                .unwrap()
-                .iter()
-                .filter(|item| item.available)
-                .count(),
-            2,
-            "an empty walk of a different volume withdrew the library"
+            media[0].total, 2,
+            "the rows of the replaced volume were lost"
+        );
+        assert_eq!(
+            media[0].available, 0,
+            "a replaced volume must not report its old files as available"
         );
         assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 2);
         assert_eq!(

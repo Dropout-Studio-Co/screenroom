@@ -412,7 +412,7 @@ impl Browse {
             sort: SortChoice::Title,
             watchlist_only: false,
             favorites_only: false,
-            available_only: false,
+            available_only: true,
             page: 0,
             items: Vec::new(),
             total: 0,
@@ -436,7 +436,6 @@ impl Browse {
             || self.watch != WatchFilter::Any
             || self.watchlist_only
             || self.favorites_only
-            || self.available_only
     }
 }
 
@@ -1564,6 +1563,7 @@ impl App {
         };
         app.sync_language_inputs();
         app.reload();
+        let _ = app.probe_sources();
         app
     }
 
@@ -1633,6 +1633,30 @@ impl App {
         self.reload_browse();
         self.reload_administration();
         self.ensure_artwork();
+    }
+
+    fn probe_sources(&mut self) -> Vec<String> {
+        if self.restore_job.is_some() {
+            return Vec::new();
+        }
+        let mut available = Vec::new();
+        let mut changed = false;
+        for source in self.sources.clone() {
+            match self.library.probe_source(&source.id) {
+                Ok(state) => {
+                    changed |= state != source.state;
+                    if state == SourceState::Available {
+                        available.push(source.id);
+                    }
+                }
+                Err(error) => self.report(&error),
+            }
+        }
+        if changed {
+            self.reload();
+            self.refresh_detail();
+        }
+        available
     }
 
     fn reload_administration(&mut self) {
@@ -5354,8 +5378,10 @@ impl App {
                 self.status = Some(format!("{} — {reason}. Checking it again.", root.display()));
             }
             crate::watch::Watched::Stopped { root, reason } => {
+                self.probe_sources();
                 self.status = Some(format!(
-                    "Stopped watching {} ({reason}). The library re-checks on its own.",
+                    "{} is no longer readable ({reason}). Its titles stay in the library \
+                     but are unavailable until it returns.",
                     root.display()
                 ));
             }
@@ -5477,15 +5503,15 @@ impl App {
         self.watch_reconcile_at = std::time::Instant::now();
         self.watch_reconciled = true;
         self.watchers.clear_retries();
+        let available = self.probe_sources();
         self.arm_watchers();
         for source in self.sources.clone() {
-            if !Path::new(&source.root_path).is_dir() {
-                continue;
+            if available.contains(&source.id) {
+                self.submit_job(crate::watch::Job::Scan {
+                    source: source.id,
+                    quiet: true,
+                });
             }
-            self.submit_job(crate::watch::Job::Scan {
-                source: source.id,
-                quiet: true,
-            });
         }
     }
 
@@ -8568,6 +8594,10 @@ mod tests {
         let mut browse = Browse::new();
         browse.sort = SortChoice::Progress;
         assert!(!browse.narrowed());
+        assert!(
+            browse.available_only,
+            "the library starts with only playable media in view"
+        );
 
         for narrow in [
             |b: &mut Browse| b.text = "x".into(),
@@ -8575,7 +8605,6 @@ mod tests {
             |b: &mut Browse| b.genre = Some("Drama".into()),
             |b: &mut Browse| b.watchlist_only = true,
             |b: &mut Browse| b.favorites_only = true,
-            |b: &mut Browse| b.available_only = true,
         ] {
             let mut browse = Browse::new();
             narrow(&mut browse);
@@ -10791,6 +10820,185 @@ mod tests {
         let siblings = summarise_folders(true, &["Films".to_string(), "Shows".to_string()]);
         assert!(siblings.contains("Films") && siblings.contains("Shows"));
         assert!(siblings.contains('2'));
+    }
+
+    #[test]
+    fn a_removed_source_is_unavailable_before_the_first_frame() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let root = directory.path().join("media");
+        write_settled(&root.join("Film/Film.2020.mkv"), b"not really a video");
+        let library = Library::open_in_memory().expect("library");
+        let source = library.add_source(&root, None).expect("source");
+        let token = ScanToken::new();
+        LibraryScanner::new(&library)
+            .with_limits(1_000, 16, std::time::Duration::ZERO)
+            .scan(&source.id, &token, |_| {})
+            .expect("scan");
+        let item = library
+            .items(&LibraryQuery::page(1))
+            .expect("items")
+            .into_iter()
+            .next()
+            .expect("one item");
+        let profile = library.profiles().expect("profiles")[0].id.clone();
+        let session = library.start_session(&profile, &item.id).expect("session");
+        library
+            .checkpoint(Checkpoint {
+                session: &session,
+                position_ms: 1_000,
+                duration_ms: 60_000,
+                sequence: 1,
+                seek_generation: 0,
+                ended: false,
+            })
+            .expect("checkpoint");
+        assert_eq!(
+            library
+                .continue_watching(&profile, 10)
+                .expect("watching")
+                .len(),
+            1,
+            "the fixture is visible while the source is there"
+        );
+
+        std::fs::remove_dir_all(&root).expect("disconnect the source");
+        let app = App::with_library(library, None, "test".into());
+
+        assert_eq!(
+            app.sources[0].state,
+            SourceState::Missing,
+            "an absent source must be classified before the first frame"
+        );
+        assert_eq!(
+            app.media_total, 0,
+            "an absent source has no available media"
+        );
+        assert!(
+            app.onboarding_holds(),
+            "the library must not claim media is present"
+        );
+        assert!(
+            app.library
+                .continue_watching(&profile, 10)
+                .expect("watching")
+                .is_empty(),
+            "an absent source must not fill Continue watching"
+        );
+        assert!(
+            app.library.count(&LibraryQuery::default()).expect("count") >= 1,
+            "legitimate metadata must survive the disconnect"
+        );
+    }
+
+    fn scanned_source(
+        library: &Library,
+        root: &Path,
+        name: &str,
+    ) -> (screenroom_core::Source, String) {
+        write_settled(&root.join(name), b"not really a video");
+        let source = library.add_source(root, None).expect("source");
+        LibraryScanner::new(library)
+            .with_limits(1_000, 16, std::time::Duration::ZERO)
+            .scan(&source.id, &ScanToken::new(), |_| {})
+            .expect("scan");
+        let item = library
+            .items(&LibraryQuery::page(20))
+            .expect("items")
+            .into_iter()
+            .find(|item| item.filename == name)
+            .expect("item");
+        (source, item.id)
+    }
+
+    fn watch_from(library: &Library, profile: &str, file_id: &str) {
+        let session = library.start_session(profile, file_id).expect("session");
+        library
+            .checkpoint(Checkpoint {
+                session: &session,
+                position_ms: 1_000,
+                duration_ms: 60_000,
+                sequence: 1,
+                seek_generation: 0,
+                ended: false,
+            })
+            .expect("checkpoint");
+    }
+
+    #[test]
+    fn a_disconnected_source_leaves_the_connected_library_usable() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let connected = directory.path().join("connected");
+        let removed = directory.path().join("removed");
+        std::fs::create_dir_all(&connected).expect("connected");
+        std::fs::create_dir_all(&removed).expect("removed");
+        let library = Library::open_in_memory().expect("library");
+        let profile = library.profiles().expect("profiles")[0].id.clone();
+        let (_, online) = scanned_source(&library, &connected, "Online.2020.mkv");
+        let (_, offline) = scanned_source(&library, &removed, "Offline.2020.mkv");
+        watch_from(&library, &profile, &online);
+        watch_from(&library, &profile, &offline);
+
+        std::fs::remove_dir_all(&removed).expect("disconnect");
+
+        let app = App::with_library(library, None, "test".into());
+        let states: Vec<(String, SourceState)> = app
+            .sources
+            .iter()
+            .map(|source| (source.root_path.clone(), source.state))
+            .collect();
+        assert!(
+            states
+                .iter()
+                .any(|(root, state)| root.ends_with("removed") && *state == SourceState::Missing),
+            "the absent source is not marked unavailable: {states:?}"
+        );
+        assert_eq!(app.media_total, 1, "only the connected source is available");
+        assert!(!app.onboarding_holds(), "one source still has media");
+        assert_eq!(
+            app.home.len(),
+            1,
+            "Continue watching kept the disconnected item"
+        );
+        assert_eq!(app.home[0].filename, "Online.2020.mkv");
+        assert!(
+            app.browse.items.iter().all(|item| item.available),
+            "the default library view kept an unavailable item"
+        );
+        assert_eq!(app.browse.items.len(), 1);
+        assert!(
+            app.library
+                .count(&LibraryQuery::default())
+                .expect("metadata count")
+                >= 2,
+            "the disconnected source's metadata was deleted"
+        );
+    }
+
+    #[test]
+    fn a_watcher_that_stops_marks_the_source_unavailable_immediately() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let root = directory.path().join("media");
+        write_settled(&root.join("Film.2020.mkv"), b"not really a video");
+        let library = Library::open_in_memory().expect("library");
+        let source = library.add_source(&root, None).expect("source");
+        LibraryScanner::new(&library)
+            .with_limits(1_000, 16, std::time::Duration::ZERO)
+            .scan(&source.id, &ScanToken::new(), |_| {})
+            .expect("scan");
+        let mut app = App::with_library(library, None, "test".into());
+        assert_eq!(app.media_total, 1);
+
+        std::fs::remove_dir_all(&root).expect("disconnect");
+        app.handle_watched(crate::watch::Watched::Stopped {
+            root: root.clone(),
+            reason: "the watched folder is no longer there".to_string(),
+        });
+
+        assert_eq!(app.sources[0].state, SourceState::Missing);
+        assert_eq!(app.media_total, 0);
+        assert!(app.onboarding_holds());
+        assert!(app.home.is_empty());
+        assert!(app.browse.items.is_empty());
     }
 
     #[test]

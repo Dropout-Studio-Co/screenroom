@@ -676,18 +676,15 @@ fn a_stale_empty_mount_point_does_not_empty_the_library() {
     assert!(!stale.complete);
     let items = library.items(&LibraryQuery::page(10)).unwrap();
     assert_eq!(items.len(), 2, "rows were removed");
-    let film = items
-        .iter()
-        .find(|item| item.filename == "Film.2020.mkv")
-        .unwrap();
-    assert!(
-        film.available,
-        "an empty walk of a stale mount point withdrew the library"
-    );
     assert_eq!(
         items.iter().filter(|item| item.available).count(),
-        1,
-        "the withdrawal applied to the stale mount point instead of the deletion"
+        0,
+        "a source whose volume is gone must report nothing as available"
+    );
+    assert_eq!(
+        library.source_media().unwrap()[0].total,
+        2,
+        "the rows and their metadata were deleted"
     );
     assert_eq!(
         library.source(&source_id).unwrap().state,
