@@ -837,6 +837,42 @@ fn a_rate_limited_drain_stops_and_keeps_the_request_for_later() {
 }
 
 #[test]
+fn a_rejected_key_stops_the_drain_after_one_request_and_keeps_the_queue() {
+    let (_directory, library) =
+        library_with(&["Lantern.Keeper.1998.mkv", "Quiet.Harbour.2001.mkv"]);
+    let shared = Shared::new(vec![Reply::Answer(refuses(401))]);
+    let (provider, time) = provider_with(configured(), shared.clone());
+
+    for name in ["Lantern.Keeper.1998.mkv", "Quiet.Harbour.2001.mkv"] {
+        let work = work_id(&library, name);
+        library
+            .enqueue_enrichment(&work, EnrichmentTarget::Work, "en-US", 0)
+            .expect("queued");
+    }
+
+    let report = library
+        .drain_enrichment_queue(&provider, 10, time.now_ms())
+        .expect("drain");
+
+    assert_eq!(
+        shared.request_count(),
+        1,
+        "a rejected key must not walk the whole queue"
+    );
+    assert_eq!(report.attempted, 1);
+    assert_eq!(report.succeeded, 0);
+    assert_eq!(report.failed, 0);
+    assert_eq!(
+        report.remaining, 2,
+        "the tasks stay queued for a working key"
+    );
+    assert_eq!(
+        report.stopped.as_deref(),
+        Some("The provider rejected the configured key.")
+    );
+}
+
+#[test]
 fn a_failing_request_backs_off_then_gives_up_with_a_plain_reason() {
     let (_directory, library) = library_with(&["Lantern.Keeper.1998.mkv"]);
     let work = work_id(&library, "Lantern.Keeper.1998.mkv");

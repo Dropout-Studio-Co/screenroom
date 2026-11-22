@@ -180,6 +180,13 @@ fn main() {
                     );
                     std::process::exit(EXIT_PROVIDER_REJECTED);
                 }
+                if let Some(reason) = report.stopped.as_deref() {
+                    println!(
+                        "stopped: {reason} The remaining {} task(s) stay queued.",
+                        report.remaining
+                    );
+                    std::process::exit(EXIT_PROVIDER_REJECTED);
+                }
                 if report.attempted == 0 {
                     break;
                 }

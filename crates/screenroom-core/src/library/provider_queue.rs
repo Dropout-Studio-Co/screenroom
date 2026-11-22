@@ -162,7 +162,7 @@ impl EnrichmentQueueDepth {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnrichmentDrainReport {
     pub configured: bool,
 
@@ -177,6 +177,8 @@ pub struct EnrichmentDrainReport {
     pub waiting_network: u64,
 
     pub remaining: i64,
+
+    pub stopped: Option<String>,
 }
 
 #[derive(Debug)]
@@ -613,6 +615,21 @@ impl Library {
                         at_ms,
                     )?;
                     report.waiting_network += 1;
+                    break;
+                }
+                Err(EnrichmentFailure::Provider(
+                    error @ (ProviderError::Unauthorized
+                    | ProviderError::LoginRequired
+                    | ProviderError::QuotaExceeded),
+                )) => {
+                    self.defer_enrichment_task(
+                        &task.id,
+                        EnrichmentState::Queued,
+                        0,
+                        &error.message(),
+                        at_ms,
+                    )?;
+                    report.stopped = Some(error.message());
                     break;
                 }
                 Err(EnrichmentFailure::Provider(error)) => {
