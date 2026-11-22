@@ -1903,6 +1903,13 @@ fn folder_panel(
     blocks.push(folder_section(&browser, panel));
     blocks.push(selection_summary(&browser, panel));
     blocks.push(panel_actions(&browser, available, narrow));
+    blocks.push(
+        text("Keyboard: S scan · A select all · C clear · R rescan · N add location · Esc back")
+            .size(tokens.type_scale.micro)
+            .font(theme::regular())
+            .color(theme::muted())
+            .into(),
+    );
 
     let mut notes: Vec<Element<'static, Message>> = Vec::new();
     if !available {

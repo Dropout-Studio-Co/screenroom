@@ -6410,6 +6410,35 @@ impl App {
                 Key::Named(Named::Enter) | Key::Named(Named::Space) => {
                     return self.activate_sources_focus();
                 }
+                Key::Named(Named::Delete) | Key::Named(Named::Backspace) => {
+                    if let Some(source) = self.manager_source.clone() {
+                        self.remove_source(source);
+                    }
+                }
+                Key::Character(character) => match character.as_str() {
+                    "s" => self.save_source_folders(),
+                    "a" => self.select_all_folders(),
+                    "c" => {
+                        self.source_selection.clear();
+                        self.status =
+                            Some("No folders selected. Pick at least one, then scan.".to_string());
+                    }
+                    "r" => {
+                        if let Some(source) = self.manager_source.clone() {
+                            self.rescan_source(source);
+                        }
+                    }
+                    "n" => self.choose_folder(),
+                    "l" => {
+                        let unavailable = self
+                            .selected_source()
+                            .is_some_and(|source| source.state != SourceState::Available);
+                        if unavailable {
+                            self.choose_relink_folder();
+                        }
+                    }
+                    _ => {}
+                },
                 _ => {}
             },
             _ => match key {
