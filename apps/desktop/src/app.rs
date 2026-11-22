@@ -3998,7 +3998,7 @@ impl App {
                 self.folder_media_here += 1;
             }
         }
-        folders.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+        folders.sort_by_key(|left| left.name.to_lowercase());
         self.folder_entries = folders;
         self.folder_media_here = self.media_under(&self.folder_current);
     }
@@ -4014,6 +4014,37 @@ impl App {
             .map(|(_, count)| *count)
             .sum::<i64>()
             .max(0) as usize
+    }
+
+    fn route_to_containing_source(&mut self, root: &Path) -> bool {
+        let Ok(candidate) = std::fs::canonicalize(root) else {
+            return false;
+        };
+        for source in self.sources.clone() {
+            let Ok(stored) = std::fs::canonicalize(&source.root_path) else {
+                continue;
+            };
+            if candidate == stored || !candidate.starts_with(&stored) {
+                continue;
+            }
+            let relative = candidate
+                .strip_prefix(&stored)
+                .ok()
+                .map(|path| path.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            self.reload_administration();
+            self.navigate(Screen::Sources);
+            self.focus_card(0);
+            self.manage_source(source.id);
+            self.folder_current = relative;
+            self.load_folder_view();
+            self.status = Some(format!(
+                "That folder lives inside {}. Include it from here, then scan.",
+                source.label
+            ));
+            return true;
+        }
+        false
     }
 
     fn find_source_by_root(&self, root: &Path) -> Option<Source> {
@@ -4823,6 +4854,9 @@ impl App {
             self.error = Some("Choose an absolute folder path.".to_string());
             return;
         }
+        if self.route_to_containing_source(&root) {
+            return;
+        }
         let existing = self.find_source_by_root(&root);
         let created = existing.is_none();
         let source = match existing {
@@ -4913,6 +4947,9 @@ impl App {
             return;
         }
 
+        if self.route_to_containing_source(&root) {
+            return;
+        }
         let existing = self.find_source_by_root(&root);
         let created = existing.is_none();
         let source = match existing {
@@ -10690,6 +10727,7 @@ mod tests {
         let directory = tempfile::TempDir::new().expect("temp dir");
         let root = directory.path().join("media");
         write_settled(&root.join("Show/Show S01E01.mkv"), b"not really a video");
+        write_settled(&root.join("Other/Other.mkv"), b"not really a video");
         let library = Library::open_in_memory().expect("library");
         let mut app = App::with_library(library, None, "test".into());
 
@@ -10700,7 +10738,12 @@ mod tests {
         let _ = app.update(Message::SaveSourceFolders);
         finish_scan(&mut app);
 
-        assert!(app.media_total > 0, "the selected folder was indexed");
+        assert_eq!(app.media_total, 1, "only the selected folder was indexed");
+        assert_eq!(
+            app.library.count(&LibraryQuery::default()).expect("count"),
+            1,
+            "the unselected sibling was not read"
+        );
         assert!(!app.onboarding_holds(), "media releases the main interface");
         assert_eq!(
             app.screen,
@@ -10749,6 +10792,66 @@ mod tests {
                 .any(|entry| entry == &first_entry),
             "Enter ticks the highlighted folder"
         );
+    }
+
+    #[test]
+    fn choosing_a_folder_inside_a_known_location_opens_its_manager_instead_of_failing() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let root = directory.path().join("media");
+        write_settled(&root.join("Films/Film.mkv"), b"not really a video");
+        write_settled(&root.join("Shows/Show.mkv"), b"not really a video");
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+
+        app.stage_location(root.clone());
+        assert_eq!(app.sources.len(), 1);
+        app.stage_location(root.join("Shows"));
+
+        assert_eq!(
+            app.sources.len(),
+            1,
+            "the folder must not become a second source"
+        );
+        assert_eq!(app.screen, Screen::Sources);
+        assert_eq!(app.folder_current, "Shows");
+        assert!(app.sources_editing);
+        assert!(
+            app.error.is_none(),
+            "an included subfolder is not an error: {:?}",
+            app.error
+        );
+    }
+
+    #[test]
+    fn watchers_arm_only_the_folders_that_are_selected() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let root = directory.path().join("media");
+        write_settled(&root.join("Films/Film.mkv"), b"not really a video");
+        write_settled(&root.join("Shows/Show.mkv"), b"not really a video");
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+
+        let _ = app.library.add_source(&root, None).expect("source");
+        app.reload_administration();
+        let source_id = app.sources[0].id.clone();
+        app.library
+            .configure_source_folders(&source_id, &["Films".to_string()])
+            .expect("selection");
+        app.reload_administration();
+        let _ = app.arm_watchers();
+
+        let watching = app.watchers.watching();
+        assert_eq!(
+            watching.len(),
+            1,
+            "only one subtree is watched: {watching:?}"
+        );
+        assert!(watching[0].ends_with("Films"));
+        assert!(
+            !watching.iter().any(|path| path.ends_with("Shows")),
+            "an unselected sibling was watched"
+        );
+        app.watchers.sync(&[]);
     }
 
     #[test]

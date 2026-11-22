@@ -376,9 +376,9 @@ fn scan_phrase(card: &SourceCard) -> String {
 
 fn media_phrase(media: usize) -> String {
     match media {
-        0 => "No files directly inside".to_string(),
-        1 => "1 file directly inside".to_string(),
-        count => format!("{count} files directly inside"),
+        0 => "No indexed media inside".to_string(),
+        1 => "1 indexed item inside".to_string(),
+        count => format!("{count} indexed items inside"),
     }
 }
 
@@ -1261,13 +1261,24 @@ pub fn empty_library(view: EmptyLibrary) -> Element<'static, Message> {
         .color(theme::ink())
         .width(Length::Fill);
 
-    let mut copy = String::from(
-        "Screenroom looked where you pointed it and found nothing it can play. \
-         Nothing was moved, renamed or deleted.",
-    );
+    let configured = cards
+        .iter()
+        .any(|card| card.folders_configured && !card.folders.is_empty());
+    let scanned = cards.iter().any(|card| card.last_scan.is_some());
+    let mut copy = if configured || scanned {
+        String::from(
+            "Screenroom looked where you pointed it and found nothing it can play. \
+             Nothing was moved, renamed or deleted.",
+        )
+    } else {
+        String::from(
+            "No folders are included yet, so there is nothing to read. Choose at least \
+             one folder in a location, then scan it. Nothing on disk is changed.",
+        )
+    };
     if scanning {
         copy.push_str(" A scan is running now, and this list updates as files arrive.");
-    } else {
+    } else if configured || scanned {
         copy.push_str(" Review the included folders, add another location, or scan again.");
     }
 
@@ -2691,10 +2702,10 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_that_holds_no_direct_files_never_claims_a_number() {
-        assert_eq!(media_phrase(0), "No files directly inside");
-        assert_eq!(media_phrase(1), "1 file directly inside");
-        assert_eq!(media_phrase(9), "9 files directly inside");
+    fn a_folder_with_no_indexed_media_never_claims_a_number() {
+        assert_eq!(media_phrase(0), "No indexed media inside");
+        assert_eq!(media_phrase(1), "1 indexed item inside");
+        assert_eq!(media_phrase(9), "9 indexed items inside");
         assert!(!media_phrase(0).contains(char::is_numeric));
     }
 
