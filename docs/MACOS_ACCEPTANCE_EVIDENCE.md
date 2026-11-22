@@ -418,6 +418,13 @@ The capture set is `.artifacts/fixes-2026-11-22/`, Git-ignored: `before-1460-hom
 (the first attempt at 1 px, which proved the clip is the lift and not the string),
 `final-1460-library`, `final-860-library` and `final-1460-home`.
 
+The published 0.1.9 bundle was then launched on the same scratch library and
+captured (`shipped-0.1.9-library`): the shipped application draws `12 Angry Men`
+whole, fits every long title to one line with an ellipsis, shows **No poster** on
+the file whose frame cannot be read, and has no line under the window. That launch
+used `open -g` and the frontmost application identifier was the same before and
+after it.
+
 One interference, recorded: the launches of the installed 0.1.8 build used `open -g`
 and the frontmost application was unchanged. The first launch of the development
 binary did take the foreground — the frontmost application identifier changed from
