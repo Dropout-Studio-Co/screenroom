@@ -241,7 +241,7 @@ fn span(width: f32) -> f32 {
 }
 
 fn page_pad(width: f32) -> f32 {
-    theme::PAD + theme::content_inset(span(width))
+    theme::content_inset(span(width))
 }
 
 fn inner_width(width: f32) -> f32 {
@@ -1147,8 +1147,8 @@ pub fn welcome<'a>(view: Welcome<'a>) -> Element<'a, Message> {
         .padding(Padding {
             top: theme::gap(Gap::Section) * 1.3,
             bottom: theme::gap(Gap::Section),
-            left: theme::PAD,
-            right: theme::PAD,
+            left: 0.0,
+            right: 0.0,
         });
 
     let scroller = scrollable(page)
@@ -1388,8 +1388,8 @@ pub fn empty_library(view: EmptyLibrary) -> Element<'static, Message> {
         .padding(Padding {
             top: theme::gap(Gap::Section) * 1.3,
             bottom: theme::gap(Gap::Section),
-            left: theme::PAD,
-            right: theme::PAD,
+            left: 0.0,
+            right: 0.0,
         });
 
     let scroller = scrollable(content)
