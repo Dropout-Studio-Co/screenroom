@@ -2558,3 +2558,32 @@ rows but reports nothing available.
 
 **PENDING:** the owner has not reconnected the SSD and confirmed the titles return,
 and no visual capture of the corrected Home is recorded.
+
+## The source-connection waiting state was hidden by a residual test source (2026-11-23)
+
+The no-source and offline gates were not missing. The installed library still held an
+`available` source for the Git-ignored `.artifacts/media` folder, and its six benchmark
+clips were exactly the titles on the screen the owner reported. Lexical, `stat` and
+`read_dir` probes all correctly found that folder present, so the library was correct
+to open Home. The plan is
+[`plans/2026-11-23-source-connection-welcome-state.md`](plans/2026-11-23-source-connection-welcome-state.md).
+
+The residual source was removed through the same non-destructive transition as the
+app's **Remove**: `files.available = 0` for that source and `sources.state =
+'removed'`, in one transaction, after a checksum-matching backup at
+`.artifacts/onboarding-welcome-fix/library.db.before-cleanup`. No row, work, progress,
+artwork or media file was deleted. The missing USB source stays configured so it can be
+relinked.
+
+With `/Volumes/bleh` still missing and zero available media, the deterministic screen
+is the purpose-built offline/no-media state — *Your media is offline*, *Review folders*,
+*Add another location*, *Scan all locations* — with Home and Library hidden. With every
+source removed, the first-run welcome screen is used. No gating or UX code changed.
+
+**Verified:** the postcondition table in the plan (one non-removed source, zero
+available rows, 410 works and 7 progress rows kept, `integrity_check` ok), a hidden
+launch of the installed 0.1.12 binary against the live library with no failure or
+auto re-add, and a hidden launch against a fresh empty database. Regression coverage
+pins the remove-the-last-source transition and `AGENTS.md` now requires a scratch
+`SCREENROOM_LIBRARY` for anything that adds a source. **PENDING:** the owner visual
+pass; no foreground capture was taken.

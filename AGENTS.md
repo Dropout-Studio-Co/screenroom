@@ -204,6 +204,17 @@ In order of preference:
    not add heavyweight virtual machines, do not change global macOS settings, and
    do not disturb unrelated applications.
 
+**Scratch libraries for anything that adds a source.** A check, a script or a
+development launch that adds a media location must point `SCREENROOM_LIBRARY`
+at a scratch database. Never add probe media, test clips or a benchmark folder
+to the library the installed application opens
+(`~/Library/Application Support/Screenroom/library.db`); a GIT-ignored test
+folder is still not owner content. If a residual test source does land there,
+remove it with the app's own non-destructive transition — `files.available = 0`
+for that source and `sources.state = 'removed'` — after backing the database up,
+and never by deleting the media or the rows. `scripts/verify-watch.sh` is the
+model.
+
 **Foreground UI automation is opt-in.** `scripts/drive-app.sh`, the raise in
 `scripts/capture-window.sh` and `scripts/verify-quit.sh` are gated on
 `SCREENROOM_ALLOW_FOREGROUND=1` through `scripts/foreground-guard.sh`, and refuse

@@ -9870,6 +9870,30 @@ mod tests {
             app.library.source(&source.id).is_ok(),
             "but its row survives, so recovery copy can still name it"
         );
+        assert_eq!(app.media_total, 0, "no available media remains");
+        assert_eq!(
+            app.library.available_media_count().expect("count"),
+            0,
+            "an available count must not survive the removal"
+        );
+        assert!(
+            app.onboarding_holds(),
+            "removing the last source gates the library again"
+        );
+        assert_eq!(app.effective_screen(), Screen::Sources);
+        assert!(
+            app.sources.is_empty(),
+            "no source is listed, so the sources screen has no list to draw"
+        );
+        let visible: Vec<&str> = crate::ui::shell::destinations(false)
+            .iter()
+            .map(|destination| destination.label)
+            .collect();
+        assert_eq!(
+            visible,
+            vec!["Sources", "Settings"],
+            "Home and Library stay hidden"
+        );
 
         assert_eq!(
             app.library
