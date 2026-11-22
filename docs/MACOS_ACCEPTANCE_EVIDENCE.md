@@ -385,6 +385,48 @@ icons below 900, the content column stops at its own cap, no title overflows its
 card, no dead band appears, and the player's subtitle panel with **Find online**
 and **Import…** stays inside the window even at the 640×480 minimum.
 
+### The three nits, closed (2026-11-22)
+
+All three were fixed, and each was re-captured on a scratch library built from
+generated clips (`/tmp/sr-ui`, long filenames so titles must be fitted, plus one
+file with no readable frame), at 860×800 and 1460×900:
+
+1. **The clipped first glyph.** The cause was not the title string: a card that is
+   hovered is drawn inside `iced`'s `Float`, which scales it by up to
+   `MOTION.lift` (0.055) and clips it to its **unscaled** bounds, so the outer ~2.75 %
+   of the card is cut on each side — 5.9 px on a 214.5 px column, which is a whole
+   digit. Text is now inset by half that growth, derived from `MOTION.lift` and the
+   card's own width (`poster::text_inset`), so the inset scales with the column and
+   survives the tallest lift. `12 Angry Men` now renders whole in both captures.
+2. **The global artwork-failure line.** A failed extraction no longer writes the
+   general status bar. The card itself says **No poster** (`poster::face_label`,
+   which puts a failure ahead of a pending extraction) and Settings keeps the
+   count ("N title(s) had no readable frame"). Confirmed in both captures: the
+   broken file's card reads **No poster** and no line sits under the window.
+3. **Uneven rows when a title wraps.** Titles and captions are measured with iced's
+   own `Paragraph` (`ui::text_fit`) and fitted to the card's inner width, then drawn
+   with `Wrapping::None`, so every card carries exactly two single lines and every
+   row has one height. A long title now ends in an ellipsis instead of a wrapped
+   second line.
+
+Two side effects, both deliberate: a long title is ellipsized rather than wrapped
+(the Detail screen still shows it whole), and the library card captions are fitted
+the same way, so a caption can no longer push a card taller than its neighbours.
+
+The capture set is `.artifacts/fixes-2026-11-22/`, Git-ignored: `before-1460-home`
+(the installed 0.1.8 build on the same library, showing all three), `inset-1px-1460-library`
+(the first attempt at 1 px, which proved the clip is the lift and not the string),
+`final-1460-library`, `final-860-library` and `final-1460-home`.
+
+One interference, recorded: the two `open -g` launches of the installed build kept
+the frontmost application unchanged, but the five launches of the development
+binary took the foreground once, for the length of a capture. No input was sent and
+no other window moved.
+
+`SCREENROOM_START_SCREEN=home|library|settings` now opens the window on a chosen
+screen, so a Library or Settings capture needs no pointer; it is the same shape as
+`SCREENROOM_WINDOW_WIDTH`/`HEIGHT`.
+
 ### Defects and nits found by looking
 
 1. **A one-pixel left clip on the first glyph of a Library card's title.** The grid

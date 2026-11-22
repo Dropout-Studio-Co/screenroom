@@ -453,9 +453,14 @@ than reclassified.
   is the gate on posters:** `metadataArtworkRetention` unset means *do not store*, so
   the owner's library was switched to `keep` for the verification and left on; a
   fresh install still defaults to not storing.
-- **Follow-up worth its own task, not done here:** an `Unauthorized` answer fails one
-  task rather than stopping the drain, so a bad key would walk the whole queue. The
-  check tool guards with a one-shot probe; the library-level stop does not exist.
+- **Follow-up, closed 2026-11-22:** an `Unauthorized` answer used to fail one task
+  and carry on, so a bad key would walk the whole queue. A credential or account
+  answer from the provider (`Unauthorized`, `LoginRequired`, `QuotaExceeded`) now
+  stops the drain after the one request that revealed it, returns that task to the
+  queue and reports why; the rest of the queue is untouched. The receipt is
+  `a_rejected_key_stops_the_drain_after_one_request_and_keeps_the_queue` in
+  `tests/providers.rs` — one request for a two-work queue, `remaining` still 2, and
+  the report naming the rejection.
 - **Evidence:** [`plans/2026-11-21-ws3-metadata-drain-evidence.md`](plans/2026-11-21-ws3-metadata-drain-evidence.md).
 - **Where:** `crates/screenroom-core/src/nfo.rs` (the origin column and
   `metadata_origin` are where a provider lands), `apps/desktop/src/app.rs` Settings.
@@ -734,9 +739,12 @@ receipts stay in [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md).
   here:** the internal display's logical desktop is 1470 points, so a 1920-wide
   request comes back clamped to 1470×923 — changing the display mode is a global
   macOS setting this project does not change. The Ultra column geometry stays
-  covered by the breakpoint tests. Three nits were recorded and not fixed: a
-  one-pixel left clip on the first glyph of a Library card, the artwork-failure line
-  appearing on every screen, and uneven row heights when a title wraps.
+  covered by the breakpoint tests. Three nits were recorded here and **closed on
+  2026-11-22**: the clipped first glyph of a Library card, the artwork-failure line
+  appearing on every screen, and uneven row heights when a title wraps. Each cause
+  and its fix is recorded under "Three nits closed" in
+  [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) and was verified by
+  captures of a scratch library at 860 and 1460.
 - **What is missing:** eyes. `SCREENROOM_WINDOW_WIDTH` and
   `SCREENROOM_WINDOW_HEIGHT` now open the window at a chosen size, so a
   breakpoint can be captured without a resize; the review below still needs a

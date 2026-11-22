@@ -2463,3 +2463,27 @@ width on a 1470-point display, a third-party casting renderer, a verified source
 directory, and the literal pointer press on *Update now*. Each is recorded with
 its substitute and observation in
 [`plans/2026-11-21-accepted-limitations.md`](plans/2026-11-21-accepted-limitations.md).
+
+## Three nits closed, and a drain that stops on a bad key (2026-11-22)
+
+The three cosmetic nits the 2026-11-21 observation pass recorded were fixed, and
+the one open follow-up in the metadata drain was closed with them.
+
+| Item | Cause | Fix | Receipt |
+| --- | --- | --- | --- |
+| A clipped first glyph on a Library card | The card is drawn inside `iced`'s `Float` whenever it is lifted, and a float is scaled by up to `MOTION.lift` (0.055) inside a layer clipped to its **unscaled** bounds, so ~2.75 % of the card is cut on each side. On a 214.5 px column that is 5.9 px — a whole leading digit. It hit whichever card the pointer was over, not the first column | `poster::text_inset` derives the text inset from `MOTION.lift` and the card's own width, and the title and caption are drawn inside it | `card_text_is_inset_by_the_room_the_lift_needs`, `a_card_inset_clears_the_room_a_lifted_card_grows_into`, captures at 860 and 1460 |
+| An artwork failure announced on every screen | A failed frame extraction wrote the global status line, which the status bar shows on Home, Library, Detail, Settings and the player alike | The card itself says **No poster** and Settings keeps the count; the status bar is left to what the owner did | `a_card_with_no_readable_frame_says_so_instead_of_loading_forever`, captures |
+| Rows of different heights when a title wrapped | Titles were cut by character count and left to wrap, so a card with a two-line title was taller than its neighbours | Titles and captions are measured with iced's own `Paragraph` and fitted to the card's inner width, then drawn with `Wrapping::None` | `a_very_long_title_is_fitted_to_the_card_instead_of_wrapping`, `a_card_title_is_fitted_to_its_own_room_and_never_wraps`, captures |
+| A rejected key walked the whole enrichment queue | `Unauthorized` fell into the per-task failure arm, so each task was attempted and failed in turn | A credential or account answer (`Unauthorized`, `LoginRequired`, `QuotaExceeded`) stops the drain after the request that revealed it, returns that task to the queue and reports the reason; the rest of the queue is untouched | `a_rejected_key_stops_the_drain_after_one_request_and_keeps_the_queue` — red first: without the arm the same test made a second request for the second work |
+
+`SCREENROOM_START_SCREEN=home|library|settings` was added so a Library or Settings
+window can be captured without a pointer; it is validated (an unknown value opens
+Home) and covered by
+`a_requested_start_screen_opens_there_and_an_unknown_one_opens_at_home`.
+
+Verification: `cargo test --workspace`, `cargo clippy --workspace --all-targets
+-- -D warnings`, `cargo fmt --all --check` and `python3 scripts/no_comments.py
+check` all clean at this tree; the library, the player and the acceptance suite are
+untouched by the change. Captures and their before/after are recorded in
+[`MACOS_ACCEPTANCE_EVIDENCE.md`](MACOS_ACCEPTANCE_EVIDENCE.md) § "The three nits,
+closed".
