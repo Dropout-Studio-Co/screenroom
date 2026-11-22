@@ -41,6 +41,8 @@ pub struct Home<'a> {
 
     pub empty: bool,
 
+    pub has_media: bool,
+
     pub art: &'a HashMap<String, image::Handle>,
 
     pub waiting: &'a HashSet<String>,
@@ -96,7 +98,11 @@ impl<'a> Home<'a> {
 
     fn page(&self) -> Element<'a, Message> {
         if self.is_empty() {
-            return invitation();
+            return if self.has_media {
+                caught_up()
+            } else {
+                invitation()
+            };
         }
 
         let width = span(self.width);
@@ -416,6 +422,50 @@ fn invitation() -> Element<'static, Message> {
         row![
             primary_button("Choose a folder…", Icon::Plus, Message::ChooseFolder),
             secondary_button("Refresh", Message::Refresh),
+        ]
+        .spacing(theme::gap(Gap::Group))
+        .align_y(Alignment::Center),
+    ]
+    .spacing(theme::gap(Gap::Rail))
+    .align_x(Alignment::Center)
+    .width(Length::Fixed(INVITATION_WIDTH));
+
+    container(copy)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .padding(Padding {
+            top: 0.0,
+            bottom: 0.0,
+            left: theme::PAD,
+            right: theme::PAD,
+        })
+        .into()
+}
+
+fn caught_up() -> Element<'static, Message> {
+    let tokens = design::tokens();
+
+    let copy = column![
+        text("Nothing to show right now")
+            .size(tokens.type_scale.title_sm)
+            .font(theme::semibold())
+            .color(theme::ink())
+            .width(Length::Fill)
+            .align_x(Alignment::Center),
+        text(
+            "Nothing is in progress and no playable title is available. Browse everything, \
+             or check that the folders in your media locations are still readable."
+        )
+        .size(tokens.type_scale.body)
+        .font(theme::regular())
+        .color(theme::muted())
+        .width(Length::Fill)
+        .align_x(Alignment::Center),
+        row![
+            primary_button("Browse the library", Icon::Library, Message::GoBrowse),
+            secondary_button("Media locations", Message::GoSources),
         ]
         .spacing(theme::gap(Gap::Group))
         .align_y(Alignment::Center),
@@ -845,6 +895,7 @@ mod tests {
             resume: None,
             nav: &Nav::new(Screen::Home),
             empty: true,
+            has_media: false,
             art: &art,
             waiting: &HashSet::new(),
             failed: &HashSet::new(),
@@ -904,6 +955,7 @@ mod tests {
             resume: None,
             nav: &nav,
             empty: false,
+            has_media: true,
             art: &art,
             waiting: &HashSet::new(),
             failed: &HashSet::new(),

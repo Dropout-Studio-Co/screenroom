@@ -456,6 +456,7 @@ fn step_1_a_mid_scan_report_refreshes_the_catalogue_before_the_walk_ends() {
             visited: 40,
             imported: 2,
             issues: 0,
+            folders: 0,
             done: false,
             complete: false,
             enriched: 0,

@@ -243,6 +243,13 @@ fn discard(path: &Path) {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourcesPane {
+    Sources,
+
+    Folders,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     Home,
 
@@ -514,6 +521,7 @@ enum ScanEvent {
         visited: u64,
         imported: u64,
         issues: usize,
+        folders: usize,
         done: bool,
         complete: bool,
         enriched: u64,
@@ -640,6 +648,10 @@ pub struct App {
     source_selection: Vec<String>,
 
     source_selection_configured: bool,
+
+    sources_pane: SourcesPane,
+
+    folder_focus: usize,
 
     new_profile: String,
 
@@ -1446,6 +1458,8 @@ impl App {
             folder_unreadable: None,
             source_selection: Vec::new(),
             source_selection_configured: false,
+            sources_pane: SourcesPane::Sources,
+            folder_focus: 0,
             new_profile: String::new(),
             relink_target: None,
             relink_path: String::new(),
@@ -3806,6 +3820,18 @@ impl App {
         self.start_scan(source_id);
     }
 
+    fn onboarding_holds(&self) -> bool {
+        self.media_total == 0 && !matches!(self.screen, Screen::Sources | Screen::Settings)
+    }
+
+    fn effective_screen(&self) -> Screen {
+        if self.onboarding_holds() {
+            Screen::Sources
+        } else {
+            self.screen
+        }
+    }
+
     fn open_sources(&mut self) {
         self.reload_administration();
         self.navigate(Screen::Sources);
@@ -3991,6 +4017,96 @@ impl App {
         }
     }
 
+    fn move_sources_focus(&mut self, step: i32) -> Task<Message> {
+        if self.manager_source.is_none() {
+            return Task::none();
+        }
+        match self.sources_pane {
+            SourcesPane::Sources => {
+                let Some(current) = self
+                    .manager_source
+                    .as_ref()
+                    .and_then(|id| self.sources.iter().position(|source| &source.id == id))
+                else {
+                    return Task::none();
+                };
+                let next = (current as i32 + step).clamp(0, self.sources.len() as i32 - 1) as usize;
+                if let Some(source) = self.sources.get(next).map(|source| source.id.clone()) {
+                    self.manage_source(source);
+                }
+            }
+            SourcesPane::Folders => {
+                let last = self.folder_entries.len();
+                self.folder_focus =
+                    (self.folder_focus as i32 + step).clamp(0, last as i32) as usize;
+            }
+        }
+        Task::none()
+    }
+
+    fn enter_sources_focus(&mut self) -> Task<Message> {
+        match self.sources_pane {
+            SourcesPane::Sources => {
+                if self.manager_source.is_some() {
+                    self.sources_pane = SourcesPane::Folders;
+                    self.folder_focus = 0;
+                }
+            }
+            SourcesPane::Folders => {
+                if self.folder_focus == 0 {
+                    return self.activate_sources_focus();
+                }
+                if let Some(entry) = self.folder_entries.get(self.folder_focus - 1) {
+                    let relative = entry.relative_path.clone();
+                    self.folder_current = relative;
+                    self.folder_focus = 0;
+                    self.load_folder_view();
+                }
+            }
+        }
+        Task::none()
+    }
+
+    fn leave_sources_focus(&mut self) -> Task<Message> {
+        match self.sources_pane {
+            SourcesPane::Sources => {}
+            SourcesPane::Folders => {
+                if self.folder_current.is_empty() {
+                    self.sources_pane = SourcesPane::Sources;
+                } else {
+                    self.folder_current = ui::screens::sources::parent_of(&self.folder_current);
+                    self.folder_focus = 0;
+                    self.load_folder_view();
+                }
+            }
+        }
+        Task::none()
+    }
+
+    fn activate_sources_focus(&mut self) -> Task<Message> {
+        match self.sources_pane {
+            SourcesPane::Sources => {
+                if let Some(id) = self.manager_source.clone() {
+                    self.manage_source(id);
+                    self.sources_pane = SourcesPane::Folders;
+                    self.folder_focus = 0;
+                }
+            }
+            SourcesPane::Folders => {
+                let relative = if self.folder_focus == 0 {
+                    self.folder_current.clone()
+                } else {
+                    match self.folder_entries.get(self.folder_focus - 1) {
+                        Some(entry) => entry.relative_path.clone(),
+                        None => return Task::none(),
+                    }
+                };
+                self.toggle_folder(relative);
+            }
+        }
+        Task::none()
+    }
+
     fn remove_source(&mut self, source_id: String) {
         if self.armed_remove.as_deref() != Some(source_id.as_str()) {
             self.armed_remove = Some(source_id);
@@ -4004,6 +4120,12 @@ impl App {
         match self.library.remove_source(&source_id) {
             Ok(()) => {
                 self.scan_queue.drop_source(&source_id);
+                if self.manager_source.as_deref() == Some(source_id.as_str()) {
+                    self.manager_source = None;
+                    self.folder_entries.clear();
+                    self.source_selection.clear();
+                    self.folder_current.clear();
+                }
                 self.arm_watchers();
                 self.status = Some(
                     "Folder removed from the library. Its files are untouched on disk.".to_string(),
@@ -4595,13 +4717,46 @@ impl App {
         match crate::picker::choose_folder(start.as_deref()) {
             crate::picker::Picked::Path(folder) => {
                 self.new_root = folder.to_string_lossy().to_string();
-                self.add_root(folder.to_string_lossy().to_string());
+                self.stage_location(folder);
             }
             crate::picker::Picked::Cancelled => {}
             crate::picker::Picked::Unavailable(reason) => {
                 self.status = Some(reason.to_string());
             }
         }
+    }
+
+    fn stage_location(&mut self, root: PathBuf) {
+        if !root.is_absolute() {
+            self.error = Some("Choose an absolute folder path.".to_string());
+            return;
+        }
+        let source = match self.library.sources().map(|sources| {
+            sources
+                .into_iter()
+                .find(|source| source.root_path == root.to_string_lossy())
+        }) {
+            Ok(Some(source)) => Ok(source),
+            Ok(None) => self.library.add_source(&root, None),
+            Err(error) => Err(error),
+        };
+        let source = match source {
+            Ok(source) => source,
+            Err(error) => return self.report(&error),
+        };
+        self.new_root.clear();
+        self.error = None;
+        self.reload_administration();
+        self.navigate(Screen::Sources);
+        self.focus_card(0);
+        self.manage_source(source.id.clone());
+        if self.source_selection.is_empty() {
+            self.source_selection.push(String::new());
+            self.source_selection_configured = false;
+        }
+        self.status = Some(
+            "Choose the folders to include, then scan. Nothing is read until you scan.".to_string(),
+        );
     }
 
     fn choose_relink_folder(&mut self) {
@@ -4728,6 +4883,13 @@ impl App {
                     visited: update.visited,
                     imported: update.imported,
                     issues: update.errors.len(),
+                    folders: update
+                        .errors
+                        .iter()
+                        .filter(|issue| {
+                            matches!(issue.code, "folder_missing" | "folder_permission_lost")
+                        })
+                        .count(),
                     done: false,
                     complete: false,
                     enriched: 0,
@@ -4771,6 +4933,13 @@ impl App {
                         visited: summary.visited,
                         imported: summary.imported,
                         issues: summary.issues.len(),
+                        folders: summary
+                            .issues
+                            .iter()
+                            .filter(|issue| {
+                                matches!(issue.code, "folder_missing" | "folder_permission_lost")
+                            })
+                            .count(),
                         done: true,
                         complete: summary.complete && !summary.cancelled,
                         enriched,
@@ -4800,6 +4969,7 @@ impl App {
                     visited,
                     imported,
                     issues,
+                    folders,
                     done,
                     complete,
                     enriched,
@@ -4808,7 +4978,7 @@ impl App {
                     self.scan_imported = imported;
                     if done {
                         finished = true;
-                        let message = if ingest_job {
+                        let mut message = if ingest_job {
                             format!(
                                 "Added {imported} {}.",
                                 if imported == 1 { "file" } else { "files" }
@@ -4826,6 +4996,12 @@ impl App {
                                  {issues} issue(s). Nothing was deleted."
                             )
                         };
+                        if folders > 0 {
+                            message.push_str(&format!(
+                                " {folders} selected folder(s) could not be read; review them in \
+                                 Sources."
+                            ));
+                        }
                         status = (!quiet).then_some(message);
                     } else if !quiet {
                         status = Some(format!("Scanning… {visited} entries, {imported} imported"));
@@ -5303,11 +5479,21 @@ impl App {
             return iced::exit();
         }
         match message {
+            Message::GoHome if self.media_total == 0 => {
+                let leave = self.end_viewing();
+                self.open_sources();
+                return leave;
+            }
             Message::GoHome => {
                 let leave = self.end_viewing();
                 self.navigate(Screen::Home);
                 self.focus_card(0);
                 self.reload_home();
+                return leave;
+            }
+            Message::GoBrowse if self.media_total == 0 => {
+                let leave = self.end_viewing();
+                self.open_sources();
                 return leave;
             }
             Message::GoBrowse => {
@@ -5321,6 +5507,9 @@ impl App {
             Message::Refresh => {
                 self.reload();
                 self.refresh_detail();
+                if self.screen == Screen::Sources {
+                    self.load_folder_view();
+                }
             }
 
             Message::SearchChanged(text) => {
@@ -5473,7 +5662,11 @@ impl App {
                 self.open_sources();
                 return leave;
             }
-            Message::SourceChosen(source_id) => self.manage_source(source_id),
+            Message::SourceChosen(source_id) => {
+                self.manage_source(source_id);
+                self.navigate(Screen::Sources);
+                self.focus_card(0);
+            }
             Message::FolderBrowseInto(relative) => {
                 self.folder_current = relative;
                 self.load_folder_view();
@@ -5897,7 +6090,12 @@ impl App {
                 self.sync_navigation();
                 self.reload();
             }
-            Screen::Browse | Screen::Settings | Screen::Sources => self.navigate(Screen::Home),
+            Screen::Browse | Screen::Settings => self.navigate(Screen::Home),
+            Screen::Sources => {
+                if self.media_total > 0 {
+                    self.navigate(Screen::Home);
+                }
+            }
             Screen::Home => {}
         }
     }
@@ -5951,7 +6149,7 @@ impl App {
             return Task::none();
         }
 
-        match self.screen {
+        match self.effective_screen() {
             Screen::Player => {
                 self.set_chrome(true);
                 match key {
@@ -6020,6 +6218,17 @@ impl App {
                 Key::Named(Named::ArrowDown) => return self.move_settings_focus(true),
                 Key::Named(Named::ArrowLeft) => return self.step_settings_section(false),
                 Key::Named(Named::ArrowRight) => return self.step_settings_section(true),
+                _ => {}
+            },
+            Screen::Sources => match key {
+                Key::Named(Named::Escape) => self.back(),
+                Key::Named(Named::ArrowUp) => return self.move_sources_focus(-1),
+                Key::Named(Named::ArrowDown) => return self.move_sources_focus(1),
+                Key::Named(Named::ArrowLeft) => return self.leave_sources_focus(),
+                Key::Named(Named::ArrowRight) => return self.enter_sources_focus(),
+                Key::Named(Named::Enter) | Key::Named(Named::Space) => {
+                    return self.activate_sources_focus();
+                }
                 _ => {}
             },
             _ => match key {
@@ -6151,13 +6360,18 @@ impl App {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        let body = match self.screen {
-            Screen::Home => self.home_screen(),
-            Screen::Browse => self.library_screen(),
-            Screen::Detail => self.detail_screen(),
-            Screen::Player => self.player_screen(),
-            Screen::Settings => self.settings_screen(),
-            Screen::Sources => self.sources_screen(),
+        let gated = self.onboarding_holds();
+        let body = if gated {
+            self.sources_screen()
+        } else {
+            match self.screen {
+                Screen::Home => self.home_screen(),
+                Screen::Browse => self.library_screen(),
+                Screen::Detail => self.detail_screen(),
+                Screen::Player => self.player_screen(),
+                Screen::Settings => self.settings_screen(),
+                Screen::Sources => self.sources_screen(),
+            }
         };
 
         if self.fullscreen && self.screen == Screen::Player {
@@ -6185,7 +6399,7 @@ impl App {
 
         let framed = crate::ui::shell::frame(
             content,
-            Some(self.screen),
+            Some(if gated { Screen::Sources } else { self.screen }),
             self.status.as_deref(),
             self.error.as_deref(),
             self.window_width,
@@ -6256,6 +6470,7 @@ impl App {
             resume,
             nav: &self.nav,
             empty: false,
+            has_media: self.media_total > 0,
             art: &self.artwork,
             waiting: &self.artwork_queued,
             failed: &self.artwork_failed,
@@ -6314,6 +6529,35 @@ impl App {
             relink_path: self.relink_path.clone(),
             unreadable: self.folder_unreadable.clone(),
         })
+    }
+
+    fn source_folder_summary(&self, source: &Source) -> String {
+        let folders = self
+            .source_folders
+            .get(&source.id)
+            .cloned()
+            .unwrap_or_default();
+        let configured = self.source_folders.contains_key(&source.id)
+            || (self.manager_source.as_deref() == Some(source.id.as_str())
+                && self.source_selection_configured);
+        if !configured {
+            return "This whole location is indexed until you choose folders.".to_string();
+        }
+        if folders.is_empty() {
+            return "No folders selected, so this location adds no media.".to_string();
+        }
+        if folders.iter().any(|folder| folder.is_empty()) {
+            return "Everything in this location is selected.".to_string();
+        }
+        format!(
+            "{} selected folder(s): {}",
+            folders.len(),
+            folders
+                .iter()
+                .map(|folder| ui::screens::sources::folder_label(folder))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     }
 
     fn source_cards(&self) -> Vec<ui::screens::sources::SourceCard> {
@@ -6753,19 +6997,15 @@ impl App {
 
     fn add_folder_row(&self) -> Element<'_, Message> {
         let tokens = design::tokens();
-        let first_run = self.sources.is_empty();
         container(
             column![
-                text(if first_run {
-                    "Choose a folder of your own media"
-                } else {
-                    "Add another folder"
-                })
-                .size(tokens.type_scale.label),
+                text("Add a media location")
+                    .size(tokens.type_scale.label)
+                    .color(tokens.palette.foreground),
                 row![
-                    button(text("Choose a folder…").size(tokens.type_scale.label))
+                    button(text("Choose a location…").size(tokens.type_scale.label))
                         .on_press(Message::ChooseFolder)
-                        .style(design::action_style(true))
+                        .style(design::action_style(false))
                         .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
                     text_input("…or type an absolute path", &self.new_root)
                         .on_input(Message::NewRootChanged)
@@ -6780,24 +7020,13 @@ impl App {
                 ]
                 .spacing(tokens.spacing.field_x)
                 .align_y(Alignment::Center),
-                text(if first_run {
-                    "Movies and episodes stay where they are. Screenroom reads them in place, \
-                     keeps posters and positions in its own library, and needs no network."
-                } else {
-                    "Files are read in place and never moved, renamed or deleted."
-                })
+                text(
+                    "A location can be a folder, an external drive or another connected \
+                     volume. A typed path is indexed in full; choosing a location lets you \
+                     tick the folders you want first."
+                )
                 .size(tokens.type_scale.micro)
                 .color(tokens.palette.ink_muted),
-                if self.artwork_failures > 0 {
-                    text(format!(
-                        "{} title(s) had no readable frame, so they keep a title-only card.",
-                        self.artwork_failures
-                    ))
-                    .size(tokens.type_scale.micro)
-                    .color(tokens.palette.destructive)
-                } else {
-                    text(String::new()).size(tokens.type_scale.micro)
-                },
             ]
             .spacing(tokens.spacing.field_y),
         )
@@ -6941,26 +7170,45 @@ impl App {
             }
             ui::screens::settings::Section::Folders => {
                 rows.push(Row::Action {
-                    label: "Choose a folder of your own media",
-                    hint: Some("Files are read in place and never moved or renamed."),
-                    action: "Choose…",
-                    on_press: Some(Message::ChooseFolder),
+                    label: "Media locations",
+                    hint: Some("Choose exactly which folders Screenroom reads, on every drive."),
+                    action: "Manage",
+                    on_press: Some(Message::GoSources),
                 });
+                if self.sources.is_empty() {
+                    rows.push(Row::Action {
+                        label: "No media location yet",
+                        hint: Some("Films and episodes are read where they already live."),
+                        action: "Add…",
+                        on_press: Some(Message::ChooseFolder),
+                    });
+                }
                 for source in &self.sources {
                     rows.push(Row::Value {
                         label: source.label.as_str(),
-                        value: source.root_path.clone(),
+                        value: format!(
+                            "{}\n{}\n{}",
+                            source.root_path,
+                            self.source_folder_summary(source),
+                            source_state_label(source.state)
+                        ),
                     });
                     rows.push(Row::Action {
                         label: source.label.as_str(),
-                        hint: Some(source_state_label(source.state)),
+                        hint: Some("Only the folders you tick are indexed."),
+                        action: "Choose folders",
+                        on_press: Some(Message::SourceChosen(source.id.clone())),
+                    });
+                    rows.push(Row::Action {
+                        label: source.label.as_str(),
+                        hint: Some("Reads the selected folders in place; nothing is moved."),
                         action: "Rescan",
                         on_press: Some(Message::RescanSource(source.id.clone())),
                     });
                     let armed = self.armed_remove.as_deref() == Some(source.id.as_str());
                     rows.push(Row::Action {
                         label: source.label.as_str(),
-                        hint: Some("Nothing on disk is changed."),
+                        hint: Some("Nothing on disk is changed or deleted."),
                         action: if armed {
                             "Press again to remove"
                         } else {
