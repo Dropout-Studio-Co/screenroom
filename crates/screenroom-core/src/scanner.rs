@@ -226,7 +226,16 @@ impl<'a> LibraryScanner<'a> {
         let mut imported = 0_u64;
         let mut bounded = false;
         let mut prepared: Vec<PreparedFile> = Vec::new();
-        let mut queue = VecDeque::from([(root.clone(), 0_usize)]);
+        let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::new();
+        if source.folders_configured {
+            for selection in self.library.source_folders(source_id)? {
+                if let Some(directory) = self.selected_directory(&root, &selection, &mut issues) {
+                    queue.push_back((directory, 0));
+                }
+            }
+        } else {
+            queue.push_back((root.clone(), 0));
+        }
 
         while let Some((directory, depth)) = queue.pop_front() {
             if token.is_cancelled() {
@@ -438,6 +447,11 @@ impl<'a> LibraryScanner<'a> {
         let mut prepared: Vec<PreparedFile> = Vec::new();
         let mut visited = 0_u64;
         let mut imported = 0_u64;
+        let selections = if source.folders_configured {
+            self.library.source_folders(&source.id)?
+        } else {
+            Vec::new()
+        };
 
         for path in paths {
             if token.is_cancelled() {
@@ -448,6 +462,11 @@ impl<'a> LibraryScanner<'a> {
                 issues.push_at(path, &root, "outside_root");
                 continue;
             };
+            if source.folders_configured
+                && !crate::library::selection_covers(&selections, &relative)
+            {
+                continue;
+            }
             if !crate::watch::accept(Path::new(&relative)) {
                 continue;
             }
@@ -617,6 +636,44 @@ impl<'a> LibraryScanner<'a> {
         }
 
         self.library.withdraw_locators(&resolved.id, &missing)
+    }
+
+    fn selected_directory(
+        &self,
+        root: &Path,
+        selection: &str,
+        issues: &mut Issues,
+    ) -> Option<PathBuf> {
+        let candidate = if selection.is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(selection)
+        };
+        let directory = match std::fs::canonicalize(&candidate) {
+            Ok(directory) => directory,
+            Err(error) => {
+                issues.push(
+                    selection,
+                    if error.kind() == std::io::ErrorKind::PermissionDenied {
+                        "folder_permission_lost"
+                    } else {
+                        "folder_missing"
+                    },
+                );
+                return None;
+            }
+        };
+        if !directory.starts_with(root)
+            || self.library.path_key(&directory) != self.library.path_key(&candidate)
+        {
+            issues.push(selection, "unsafe_path");
+            return None;
+        }
+        if !directory.is_dir() {
+            issues.push(selection, "folder_missing");
+            return None;
+        }
+        Some(directory)
     }
 
     fn source_for_root(&self, root: &Path) -> Result<crate::domain::Source> {
@@ -1515,5 +1572,303 @@ mod tests {
                 .is_some(),
             "a verified walk left the source without a volume identity"
         );
+    }
+
+    fn configured_source(library: &Library, root: &Path) -> crate::domain::Source {
+        let source = library.add_source(root, None).unwrap();
+        assert!(
+            !source.folders_configured,
+            "a new source is whole-root until the folders are chosen"
+        );
+        assert_eq!(source.folder_count, 0);
+        source
+    }
+
+    fn scanner(library: &Library) -> LibraryScanner<'_> {
+        LibraryScanner::new(library).with_limits(10_000, 32, Duration::from_secs(15))
+    }
+
+    fn media_tree(directory: &TempDir) -> PathBuf {
+        let root = directory.path().join("media");
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn a_configured_source_imports_only_the_selected_folders() {
+        let directory = TempDir::new().unwrap();
+        let root = media_tree(&directory);
+        write_settled(&root.join("Movies/Film.2020.mkv"), b"film");
+        write_settled(&root.join("Shows/Show.S01E01.mkv"), b"episode");
+        write_settled(&root.join("Extras/Extra.2020.mkv"), b"extra");
+
+        let library = Library::open_in_memory().unwrap();
+        let source = configured_source(&library, &root);
+        library
+            .configure_source_folders(&source.id, &["Movies".to_string()])
+            .unwrap();
+
+        let summary = scanner(&library)
+            .scan(&source.id, &ScanToken::new(), |_| {})
+            .unwrap();
+
+        assert_eq!(summary.imported, 1, "issues: {:?}", summary.issues);
+        assert!(summary.complete, "issues: {:?}", summary.issues);
+        let items = library.items(&LibraryQuery::page(10)).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].filename, "Film.2020.mkv");
+        assert!(
+            items[0].relative_path.starts_with("Movies/"),
+            "the stored path must stay relative to the source root"
+        );
+        assert_eq!(library.available_media_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn an_unselected_sibling_folder_is_not_imported() {
+        let directory = TempDir::new().unwrap();
+        let root = media_tree(&directory);
+        write_settled(&root.join("Keep/Kept.2020.mkv"), b"kept");
+        write_settled(&root.join("Skip/Skipped.2020.mkv"), b"skipped");
+
+        let library = Library::open_in_memory().unwrap();
+        let source = configured_source(&library, &root);
+        library
+            .configure_source_folders(&source.id, &["Keep".to_string()])
+            .unwrap();
+
+        scanner(&library)
+            .scan(&source.id, &ScanToken::new(), |_| {})
+            .unwrap();
+
+        let items = library.items(&LibraryQuery::page(10)).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].filename, "Kept.2020.mkv");
+        assert!(
+            items.iter().all(|item| item.filename != "Skipped.2020.mkv"),
+            "a sibling that was not selected reached the library"
+        );
+    }
+
+    #[test]
+    fn a_nested_selection_scans_only_its_own_subtree() {
+        let directory = TempDir::new().unwrap();
+        let root = media_tree(&directory);
+        write_settled(&root.join("Shows/Season 1/Show.S01E01.mkv"), b"one");
+        write_settled(&root.join("Shows/Season 1/Show.S01E02.mkv"), b"two");
+        write_settled(&root.join("Shows/Season 2/Show.S02E01.mkv"), b"three");
+
+        let library = Library::open_in_memory().unwrap();
+        let source = configured_source(&library, &root);
+        library
+            .configure_source_folders(&source.id, &["Shows/Season 1".to_string()])
+            .unwrap();
+
+        let summary = scanner(&library)
+            .scan(&source.id, &ScanToken::new(), |_| {})
+            .unwrap();
+
+        assert_eq!(summary.imported, 2, "issues: {:?}", summary.issues);
+        let items = library.items(&LibraryQuery::page(10)).unwrap();
+        assert!(
+            items
+                .iter()
+                .all(|item| item.relative_path.starts_with("Shows/Season 1/")),
+            "a nested selection leaked a file from outside its subtree"
+        );
+    }
+
+    #[test]
+    fn selecting_the_root_scans_the_whole_source() {
+        let directory = TempDir::new().unwrap();
+        let root = media_tree(&directory);
+        write_settled(&root.join("A/Alpha.2020.mkv"), b"alpha");
+        write_settled(&root.join("B/Beta.2020.mkv"), b"beta");
+
+        let library = Library::open_in_memory().unwrap();
+        let source = configured_source(&library, &root);
+        library
+            .configure_source_folders(&source.id, &[String::new()])
+            .unwrap();
+
+        let summary = scanner(&library)
+            .scan(&source.id, &ScanToken::new(), |_| {})
+            .unwrap();
+
+        assert_eq!(summary.imported, 2, "issues: {:?}", summary.issues);
+        assert!(summary.complete, "issues: {:?}", summary.issues);
+    }
+
+    #[test]
+    fn narrowing_the_selection_withdraws_only_the_files_that_left_it() {
+        let directory = TempDir::new().unwrap();
+        let root = media_tree(&directory);
+        write_settled(&root.join("Keep/Kept.2020.mkv"), b"kept");
+        write_settled(&root.join("Later/Left.2020.mkv"), b"left");
+
+        let library = Library::open_in_memory().unwrap();
+        let source = configured_source(&library, &root);
+        scanner(&library)
+            .scan(&source.id, &ScanToken::new(), |_| {})
+            .unwrap();
+        assert_eq!(library.available_media_count().unwrap(), 2);
+
+        library
+            .configure_source_folders(&source.id, &["Keep".to_string()])
+            .unwrap();
+        let summary = scanner(&library)
+            .scan(&source.id, &ScanToken::new(), |_| {})
+            .unwrap();
+
+        assert!(summary.complete, "issues: {:?}", summary.issues);
+        assert_eq!(library.count(&LibraryQuery::default()).unwrap(), 2);
+        let items = library.items(&LibraryQuery::page(10)).unwrap();
+        let kept = items
+            .iter()
+            .find(|item| item.filename == "Kept.2020.mkv")
+            .unwrap();
+        assert!(kept.available);
+        let left = items
+            .iter()
+            .find(|item| item.filename == "Left.2020.mkv")
+            .unwrap();
+        assert!(
+            !left.available,
+            "a file outside the new selection stayed available"
+        );
+        assert!(
+            root.join("Later/Left.2020.mkv").exists(),
+            "the withdrawal touched the file on disk"
+        );
+    }
+
+    #[test]
+    fn a_missing_selected_folder_leaves_the_other_folders_available() {
+        let directory = TempDir::new().unwrap();
+        let root = media_tree(&directory);
+        write_settled(&root.join("Alpha/Alpha.2020.mkv"), b"alpha");
+        write_settled(&root.join("Beta/Beta.2020.mkv"), b"beta");
+
+        let library = Library::open_in_memory().unwrap();
+        let source = configured_source(&library, &root);
+        library
+            .configure_source_folders(&source.id, &["Alpha".to_string(), "Beta".to_string()])
+            .unwrap();
+        scanner(&library)
+            .scan(&source.id, &ScanToken::new(), |_| {})
+            .unwrap();
+
+        fs::remove_dir_all(root.join("Alpha")).unwrap();
+        let summary = scanner(&library)
+            .scan(&source.id, &ScanToken::new(), |_| {})
+            .unwrap();
+
+        assert!(
+            summary
+                .issues
+                .iter()
+                .any(|issue| issue.code == "folder_missing"),
+            "the walk did not report the vanished selection: {:?}",
+            summary.issues
+        );
+        assert!(!summary.complete);
+
+        let items = library.items(&LibraryQuery::page(10)).unwrap();
+        let alpha = items
+            .iter()
+            .find(|item| item.filename == "Alpha.2020.mkv")
+            .unwrap();
+        assert!(!alpha.available, "the vanished folder kept its file");
+        let beta = items
+            .iter()
+            .find(|item| item.filename == "Beta.2020.mkv")
+            .unwrap();
+        assert!(
+            beta.available,
+            "a partial scan withdrew a folder that was still there"
+        );
+        assert_eq!(
+            library.source(&source.id).unwrap().state,
+            SourceState::Available,
+            "one missing selection must not disconnect the whole source"
+        );
+    }
+
+    #[test]
+    fn a_configured_source_with_nothing_selected_imports_nothing() {
+        let directory = TempDir::new().unwrap();
+        let root = media_tree(&directory);
+        write_settled(&root.join("Movies/Film.2020.mkv"), b"film");
+
+        let library = Library::open_in_memory().unwrap();
+        let source = configured_source(&library, &root);
+        scanner(&library)
+            .scan(&source.id, &ScanToken::new(), |_| {})
+            .unwrap();
+        assert_eq!(library.available_media_count().unwrap(), 1);
+
+        library.configure_source_folders(&source.id, &[]).unwrap();
+        let summary = scanner(&library)
+            .scan(&source.id, &ScanToken::new(), |_| {})
+            .unwrap();
+
+        assert_eq!(summary.imported, 0, "issues: {:?}", summary.issues);
+        assert_eq!(library.available_media_count().unwrap(), 0);
+        assert!(
+            root.join("Movies/Film.2020.mkv").exists(),
+            "deselecting a folder deleted the file on disk"
+        );
+    }
+
+    #[test]
+    fn a_legacy_source_without_a_configuration_still_scans_its_whole_root() {
+        let directory = TempDir::new().unwrap();
+        let root = media_tree(&directory);
+        write_settled(&root.join("Alpha/Alpha.2020.mkv"), b"alpha");
+        write_settled(&root.join("Beta/Beta.2020.mkv"), b"beta");
+
+        let library = Library::open_in_memory().unwrap();
+        let source = configured_source(&library, &root);
+        let summary = scanner(&library)
+            .scan(&source.id, &ScanToken::new(), |_| {})
+            .unwrap();
+
+        assert_eq!(summary.imported, 2, "issues: {:?}", summary.issues);
+        assert!(summary.complete, "issues: {:?}", summary.issues);
+        assert_eq!(library.available_media_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn watch_ingest_ignores_paths_outside_the_selected_folders() {
+        let directory = TempDir::new().unwrap();
+        let root = media_tree(&directory);
+        write_settled(&root.join("Keep/Kept.2020.mkv"), b"kept");
+        write_settled(&root.join("Skip/Skipped.2020.mkv"), b"skipped");
+
+        let library = Library::open_in_memory().unwrap();
+        let source = configured_source(&library, &root);
+        library
+            .configure_source_folders(&source.id, &["Keep".to_string()])
+            .unwrap();
+        let stored = PathBuf::from(library.source(&source.id).unwrap().root_path);
+        let mut watcher =
+            LibraryScanner::new(&library).with_limits(10_000, 32, Duration::from_secs(15));
+
+        let summary = watcher
+            .scan_paths(
+                &stored,
+                &[
+                    stored.join("Keep/Kept.2020.mkv"),
+                    stored.join("Skip/Skipped.2020.mkv"),
+                ],
+                &ScanToken::new(),
+                |_| {},
+            )
+            .unwrap();
+
+        assert_eq!(summary.imported, 1, "issues: {:?}", summary.issues);
+        let items = library.items(&LibraryQuery::page(10)).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].filename, "Kept.2020.mkv");
     }
 }

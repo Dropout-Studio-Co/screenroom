@@ -16,6 +16,7 @@ mod provider_tls;
 mod provider_tmdb;
 mod recommend;
 mod settings;
+mod source_folders;
 mod sources;
 mod subtitles;
 
@@ -73,6 +74,7 @@ pub use provider_tmdb::{
     ProviderCapability, ProviderConfig, ProviderImage, TMDB_PROVIDER, TmdbProvider,
 };
 pub use settings::Preferences;
+pub(crate) use source_folders::selection_covers;
 pub use subtitles::{SUBTITLE_EXTENSIONS, StoredSubtitle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -236,6 +238,21 @@ fn add_volume_identity(tx: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn add_source_folders(tx: &Connection) -> Result<()> {
+    let columns = {
+        let mut statement = tx.prepare("PRAGMA table_info(sources)")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    if !columns.iter().any(|name| name == "folders_configured") {
+        tx.execute(schema::MIGRATE_10_TO_11[0], [])?;
+    }
+    tx.execute(schema::SOURCE_FOLDERS, [])?;
+    tx.execute(schema::SOURCE_FOLDERS_SOURCE, [])?;
+    Ok(())
+}
+
 impl Library {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -329,6 +346,7 @@ impl Library {
                 add_subtitles_table(&tx)?;
                 add_enrichment_queue(&tx)?;
                 add_volume_identity(&tx)?;
+                add_source_folders(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -345,6 +363,7 @@ impl Library {
                 add_subtitles_table(&tx)?;
                 add_enrichment_queue(&tx)?;
                 add_volume_identity(&tx)?;
+                add_source_folders(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -358,6 +377,7 @@ impl Library {
                 add_subtitles_table(&tx)?;
                 add_enrichment_queue(&tx)?;
                 add_volume_identity(&tx)?;
+                add_source_folders(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -368,6 +388,7 @@ impl Library {
                 add_subtitles_table(&tx)?;
                 add_enrichment_queue(&tx)?;
                 add_volume_identity(&tx)?;
+                add_source_folders(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -377,6 +398,7 @@ impl Library {
                 add_subtitles_table(&tx)?;
                 add_enrichment_queue(&tx)?;
                 add_volume_identity(&tx)?;
+                add_source_folders(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -385,6 +407,7 @@ impl Library {
                 add_subtitles_table(&tx)?;
                 add_enrichment_queue(&tx)?;
                 add_volume_identity(&tx)?;
+                add_source_folders(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -392,12 +415,20 @@ impl Library {
                 let tx = connection.transaction()?;
                 add_enrichment_queue(&tx)?;
                 add_volume_identity(&tx)?;
+                add_source_folders(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
             9 => {
                 let tx = connection.transaction()?;
                 add_volume_identity(&tx)?;
+                add_source_folders(&tx)?;
+                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+                tx.commit()?;
+            }
+            10 => {
+                let tx = connection.transaction()?;
+                add_source_folders(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 tx.commit()?;
             }
@@ -708,6 +739,73 @@ mod tests {
         assert!(
             columns.iter().any(|name| name == "volume_identity"),
             "the volume column is missing after the migration: {columns:?}"
+        );
+    }
+
+    #[test]
+    fn a_schema_ten_library_gains_the_folder_column_and_table_and_keeps_its_sources() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("library.db");
+        {
+            let connection = rusqlite::Connection::open(&path).expect("open");
+            for statement in schema::CREATE {
+                connection.execute(statement, []).expect("schema");
+            }
+            connection
+                .execute("INSERT INTO profiles(id, name) VALUES('p', 'Me')", [])
+                .expect("profile");
+            connection
+                .execute(
+                    "INSERT INTO sources(id, label, root_path, state)
+                     VALUES('s', 'Drive', '/mnt/Drive', 'available')",
+                    [],
+                )
+                .expect("source");
+            connection
+                .execute("ALTER TABLE sources DROP COLUMN folders_configured", [])
+                .expect("drop column");
+            connection
+                .execute("DROP TABLE source_folders", [])
+                .expect("drop table");
+            connection
+                .pragma_update(None, "user_version", 10)
+                .expect("version");
+        }
+
+        let library = Library::open(&path).expect("migrated");
+        let version: i64 = library
+            .connection()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("version");
+        assert_eq!(version, SCHEMA_VERSION);
+
+        let source = library.source("s").expect("source");
+        assert_eq!(source.label, "Drive");
+        assert!(!source.folders_configured, "an old source is whole-root");
+        assert_eq!(source.folder_count, 0);
+
+        let connection = library.connection();
+        let mut statement = connection
+            .prepare("PRAGMA table_info(sources)")
+            .expect("columns");
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("columns")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("columns");
+        assert!(
+            columns.iter().any(|name| name == "folders_configured"),
+            "the folder column is missing after the migration: {columns:?}"
+        );
+        drop(statement);
+        drop(connection);
+
+        library
+            .configure_source_folders("s", &["Movies".to_string()])
+            .expect("configure");
+        assert_eq!(
+            library.source_folders("s").expect("folders"),
+            vec!["Movies".to_string()]
         );
     }
 

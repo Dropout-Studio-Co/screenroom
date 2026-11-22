@@ -76,6 +76,26 @@ pub struct Source {
     pub state: SourceState,
 
     pub last_scan_ms: Option<i64>,
+
+    pub folders_configured: bool,
+
+    pub folder_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceFolder {
+    pub source_id: String,
+
+    pub relative_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceMedia {
+    pub source_id: String,
+
+    pub available: i64,
+
+    pub total: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

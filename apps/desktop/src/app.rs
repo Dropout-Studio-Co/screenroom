@@ -636,6 +636,8 @@ pub struct App {
 
     source_totals: HashMap<String, (usize, usize)>,
 
+    folder_counts: HashMap<String, i64>,
+
     manager_source: Option<String>,
 
     folder_current: String,
@@ -647,8 +649,6 @@ pub struct App {
     folder_unreadable: Option<String>,
 
     source_selection: Vec<String>,
-
-    source_selection_configured: bool,
 
     sources_pane: SourcesPane,
 
@@ -1454,13 +1454,13 @@ impl App {
             media_total: 0,
             source_folders: HashMap::new(),
             source_totals: HashMap::new(),
+            folder_counts: HashMap::new(),
             manager_source: None,
             folder_current: String::new(),
             folder_entries: Vec::new(),
             folder_media_here: 0,
             folder_unreadable: None,
             source_selection: Vec::new(),
-            source_selection_configured: false,
             sources_pane: SourcesPane::Sources,
             folder_focus: 0,
             sources_editing: false,
@@ -1620,10 +1620,37 @@ impl App {
             Ok(sources) => self.sources = sources,
             Err(error) => self.report(&error),
         }
-        match self.library.count(&LibraryQuery {
-            available_only: true,
-            ..LibraryQuery::default()
-        }) {
+        match self.library.all_source_folders() {
+            Ok(rows) => {
+                let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
+                for row in rows {
+                    grouped
+                        .entry(row.source_id)
+                        .or_default()
+                        .push(row.relative_path);
+                }
+                for folders in grouped.values_mut() {
+                    folders.sort();
+                }
+                self.source_folders = grouped;
+            }
+            Err(error) => self.report(&error),
+        }
+        match self.library.source_media() {
+            Ok(rows) => {
+                self.source_totals = rows
+                    .into_iter()
+                    .map(|row| {
+                        (
+                            row.source_id,
+                            (row.available.max(0) as usize, row.total.max(0) as usize),
+                        )
+                    })
+                    .collect();
+            }
+            Err(error) => self.report(&error),
+        }
+        match self.library.available_media_count() {
             Ok(total) => self.media_total = total.max(0) as usize,
             Err(error) => self.report(&error),
         }
@@ -3802,6 +3829,9 @@ impl App {
             return self.report(&error);
         }
         self.reload_administration();
+        if self.manager_source.as_deref() == Some(source_id.as_str()) {
+            self.manage_source(source_id.clone());
+        }
         self.start_scan(source_id);
     }
 
@@ -3819,8 +3849,11 @@ impl App {
             return self.report(&error);
         }
         self.relink_path.clear();
-        self.status = Some("Folder relinked — rescanning.".to_string());
+        self.status = Some("Location relinked — rescanning.".to_string());
         self.reload_administration();
+        if self.manager_source.as_deref() == Some(source_id.as_str()) {
+            self.manage_source(source_id.clone());
+        }
         self.start_scan(source_id);
     }
 
@@ -3877,7 +3910,10 @@ impl App {
             .get(&source.id)
             .cloned()
             .unwrap_or_default();
-        self.source_selection_configured = false;
+        match self.library.folder_media_counts(&source.id) {
+            Ok(counts) => self.folder_counts = counts.into_iter().collect(),
+            Err(error) => self.report(&error),
+        }
         self.load_folder_view();
     }
 
@@ -3934,11 +3970,22 @@ impl App {
                 format!("{}/{}", self.folder_current, name)
             };
             if file_type.is_dir() {
+                let nested = entry
+                    .path()
+                    .read_dir()
+                    .map(|children| {
+                        children
+                            .take(400)
+                            .filter_map(Result::ok)
+                            .filter(|child| child.file_type().is_ok_and(|kind| kind.is_dir()))
+                            .count()
+                    })
+                    .unwrap_or(0);
                 folders.push(ui::screens::sources::FolderEntry {
-                    relative_path: relative,
+                    relative_path: relative.clone(),
                     name,
-                    media: 0,
-                    subfolders: 0,
+                    media: self.media_under(&relative),
+                    subfolders: nested,
                     issue: ui::screens::sources::FolderIssue::Available,
                 });
             } else if file_type.is_file() && media_name(&name) {
@@ -3947,6 +3994,20 @@ impl App {
         }
         folders.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
         self.folder_entries = folders;
+        self.folder_media_here = self.media_under(&self.folder_current);
+    }
+
+    fn media_under(&self, relative: &str) -> usize {
+        self.folder_counts
+            .iter()
+            .filter(|(directory, _)| {
+                relative.is_empty()
+                    || directory.as_str() == relative
+                    || directory.starts_with(&format!("{relative}/"))
+            })
+            .map(|(_, count)| *count)
+            .sum::<i64>()
+            .max(0) as usize
     }
 
     fn find_source_by_root(&self, root: &Path) -> Option<Source> {
@@ -4008,15 +4069,21 @@ impl App {
                 Some("Choose at least one folder before scanning this location.".to_string());
             return;
         }
-        self.source_folders
-            .insert(source_id.clone(), self.source_selection.clone());
-        self.source_selection_configured = true;
+        if let Err(error) = self
+            .library
+            .configure_source_folders(&source_id, &self.source_selection)
+        {
+            return self.report(&error);
+        }
         self.error = None;
-        self.status = Some(if self.source_selection.is_empty() {
-            "No folders selected, so this location will not add any media.".to_string()
-        } else {
-            "Saved the folder selection. Scanning now…".to_string()
-        });
+        self.status = Some("Saved the folder selection. Scanning now…".to_string());
+        self.reload_administration();
+        self.source_selection = self
+            .source_folders
+            .get(&source_id)
+            .cloned()
+            .unwrap_or_default();
+        self.load_folder_view();
         self.start_scan(source_id);
     }
 
@@ -4750,29 +4817,26 @@ impl App {
             self.error = Some("Choose an absolute folder path.".to_string());
             return;
         }
-        let source = match self.library.sources().map(|sources| {
-            sources
-                .into_iter()
-                .find(|source| source.root_path == root.to_string_lossy())
-        }) {
-            Ok(Some(source)) => Ok(source),
-            Ok(None) => self.library.add_source(&root, None),
-            Err(error) => Err(error),
+        let existing = self.find_source_by_root(&root);
+        let created = existing.is_none();
+        let source = match existing {
+            Some(source) => Ok(source),
+            None => self.library.add_source(&root, None),
         };
         let source = match source {
             Ok(source) => source,
             Err(error) => return self.report(&error),
         };
+        if created && let Err(error) = self.library.configure_source_folders(&source.id, &[]) {
+            return self.report(&error);
+        }
         self.new_root.clear();
         self.error = None;
         self.reload_administration();
         self.navigate(Screen::Sources);
         self.focus_card(0);
         self.manage_source(source.id.clone());
-        if self.source_selection.is_empty() {
-            self.source_selection.push(String::new());
-            self.source_selection_configured = false;
-        }
+        self.source_selection.clear();
         self.status = Some(
             "Choose the folders to include, then scan. Nothing is read until you scan.".to_string(),
         );
@@ -4843,7 +4907,9 @@ impl App {
             return;
         }
 
-        let source = match self.find_source_by_root(&root) {
+        let existing = self.find_source_by_root(&root);
+        let created = existing.is_none();
+        let source = match existing {
             Some(source) => Ok(source),
             None => self.library.add_source(&root, None),
         };
@@ -4851,9 +4917,18 @@ impl App {
             Ok(source) => source,
             Err(error) => return self.report(&error),
         };
+        if (created || !source.folders_configured)
+            && let Err(error) = self
+                .library
+                .configure_source_folders(&source.id, &[String::new()])
+        {
+            return self.report(&error);
+        }
 
         self.new_root.clear();
         self.error = None;
+        self.reload_administration();
+        self.manage_source(source.id.clone());
         self.start_scan(source.id);
     }
 
@@ -5055,7 +5130,14 @@ impl App {
             self.scan_token = None;
             self.scan_started_ms = None;
             self.scan_quiet = false;
+            let onboarding = self.media_total == 0;
             self.reload();
+            if onboarding && self.media_total > 0 && self.screen != Screen::Settings {
+                self.sources_editing = false;
+                self.navigate(Screen::Home);
+                self.focus_card(0);
+                self.reload_home();
+            }
 
             self.start_durations();
             if let Some(crate::watch::Job::Ingest { source, root, .. }) = finished_job {
@@ -5182,39 +5264,71 @@ impl App {
     }
 
     fn stored_paths(&self, root: &Path, stored_root: &Path, paths: &[PathBuf]) -> Vec<PathBuf> {
+        let watched = root
+            .strip_prefix(stored_root)
+            .ok()
+            .map(Path::to_path_buf)
+            .or_else(|| {
+                let root = std::fs::canonicalize(root).ok()?;
+                let stored = std::fs::canonicalize(stored_root).ok()?;
+                root.strip_prefix(&stored).ok().map(Path::to_path_buf)
+            })
+            .unwrap_or_default();
         paths
             .iter()
             .map(|path| match path.strip_prefix(root) {
-                Ok(relative) => stored_root.join(relative),
+                Ok(relative) => stored_root.join(&watched).join(relative),
                 Err(_) => path.clone(),
             })
             .collect()
     }
 
     fn source_for_root(&self, root: &Path) -> Option<(String, PathBuf)> {
-        if let Some(source) = self
-            .sources
-            .iter()
-            .find(|source| Path::new(&source.root_path) == root)
-        {
-            return Some((source.id.clone(), PathBuf::from(&source.root_path)));
+        let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        let mut matched: Option<(String, PathBuf, usize)> = None;
+        for source in &self.sources {
+            let stored = PathBuf::from(&source.root_path);
+            let Ok(stored_canonical) = std::fs::canonicalize(&stored) else {
+                continue;
+            };
+            if canonical == stored_canonical || canonical.starts_with(&stored_canonical) {
+                let depth = stored_canonical.components().count();
+                if matched
+                    .as_ref()
+                    .is_none_or(|(_, _, current)| depth > *current)
+                {
+                    matched = Some((source.id.clone(), stored, depth));
+                }
+            }
         }
-        let canonical = std::fs::canonicalize(root).ok()?;
-        self.sources
-            .iter()
-            .find(|source| {
-                std::fs::canonicalize(&source.root_path).is_ok_and(|stored| stored == canonical)
-            })
-            .map(|source| (source.id.clone(), PathBuf::from(&source.root_path)))
+        matched.map(|(id, stored, _)| (id, stored))
     }
 
     fn arm_watchers(&mut self) -> Vec<PathBuf> {
-        let roots: Vec<PathBuf> = self
-            .sources
-            .iter()
-            .map(|source| PathBuf::from(&source.root_path))
-            .filter(|root| root.is_dir())
-            .collect();
+        let mut roots: Vec<PathBuf> = Vec::new();
+        for source in &self.sources {
+            let root = PathBuf::from(&source.root_path);
+            if !root.is_dir() {
+                continue;
+            }
+            if !source.folders_configured {
+                roots.push(root);
+                continue;
+            }
+            let Some(folders) = self.source_folders.get(&source.id) else {
+                continue;
+            };
+            if folders.iter().any(|folder| folder.is_empty()) {
+                roots.push(root);
+                continue;
+            }
+            for folder in folders {
+                let path = root.join(folder);
+                if path.is_dir() {
+                    roots.push(path);
+                }
+            }
+        }
         self.watchers.sync(&roots)
     }
 
@@ -6533,11 +6647,6 @@ impl App {
     fn folder_browser_view(&self) -> Option<ui::screens::sources::FolderBrowser> {
         let source_id = self.manager_source.as_deref()?;
         let source = self.sources.iter().find(|source| source.id == source_id)?;
-        let configured = self
-            .source_folders
-            .get(source_id)
-            .is_some_and(|folders| !folders.is_empty())
-            || self.source_selection_configured;
         Some(ui::screens::sources::FolderBrowser {
             source_id: source.id.clone(),
             source_label: source.label.clone(),
@@ -6548,7 +6657,7 @@ impl App {
             entries: self.folder_entries.clone(),
             media_here: self.folder_media_here,
             selected: self.source_selection.clone(),
-            folders_configured: configured,
+            folders_configured: source.folders_configured,
             relink_path: self.relink_path.clone(),
             unreadable: self.folder_unreadable.clone(),
         })
@@ -6560,10 +6669,7 @@ impl App {
             .get(&source.id)
             .cloned()
             .unwrap_or_default();
-        let configured = self.source_folders.contains_key(&source.id)
-            || (self.manager_source.as_deref() == Some(source.id.as_str())
-                && self.source_selection_configured);
-        if !configured {
+        if !source.folders_configured {
             return "This whole location is indexed until you choose folders.".to_string();
         }
         if folders.is_empty() {
@@ -6607,7 +6713,7 @@ impl App {
                     label: source.label.clone(),
                     root_path: source.root_path.clone(),
                     state: source.state,
-                    folders_configured: !folders.is_empty(),
+                    folders_configured: source.folders_configured,
                     folders,
                     indexed,
                     total,
@@ -10130,6 +10236,30 @@ mod tests {
         assert!(app.scan_queue.running().is_none());
     }
 
+    fn key_pressed(name: &str) -> iced::keyboard::Event {
+        use iced::keyboard::Key;
+        use iced::keyboard::Modifiers;
+        use iced::keyboard::key::{Code, Named, Physical};
+        let named = match name {
+            "up" => Named::ArrowUp,
+            "down" => Named::ArrowDown,
+            "left" => Named::ArrowLeft,
+            "right" => Named::ArrowRight,
+            "enter" => Named::Enter,
+            "escape" => Named::Escape,
+            _ => Named::Space,
+        };
+        iced::keyboard::Event::KeyPressed {
+            key: Key::Named(named),
+            modified_key: Key::Unidentified,
+            physical_key: Physical::Code(Code::Space),
+            location: iced::keyboard::Location::Standard,
+            modifiers: Modifiers::empty(),
+            text: None,
+            repeat: false,
+        }
+    }
+
     fn add_folder(app: &mut App, root: &std::path::Path) {
         app.new_root = root.to_string_lossy().to_string();
         let _ = app.update(Message::AddFolder);
@@ -10533,7 +10663,11 @@ mod tests {
             app.manager_source.as_deref(),
             Some(app.sources[0].id.as_str())
         );
-        assert_eq!(app.source_selection, vec![String::new()]);
+        assert!(app.source_selection.is_empty());
+        assert!(
+            app.sources[0].folders_configured,
+            "a staged location must not be rescanned as a whole drive"
+        );
         assert!(
             app.folder_entries.iter().any(|entry| entry.name == "Show"),
             "the chosen location's folders are offered"
@@ -10558,6 +10692,53 @@ mod tests {
 
         assert!(app.media_total > 0, "the selected folder was indexed");
         assert!(!app.onboarding_holds(), "media releases the main interface");
+        assert_eq!(
+            app.screen,
+            Screen::Home,
+            "the first scan hands the viewer to the library"
+        );
+    }
+
+    #[test]
+    fn the_sources_keyboard_walks_locations_and_then_their_folders() {
+        let first = tempfile::TempDir::new().expect("first");
+        let second = tempfile::TempDir::new().expect("second");
+        write_settled(&first.path().join("Films/Film.mkv"), b"not really a video");
+        write_settled(&second.path().join("Shows/Show.mkv"), b"not really a video");
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+        app.stage_location(first.path().to_path_buf());
+        app.stage_location(second.path().to_path_buf());
+
+        let _ = app.update(Message::GoSources);
+        assert_eq!(app.sources_pane, SourcesPane::Sources);
+        let first_id = app.sources[0].id.clone();
+        let second_id = app.sources[1].id.clone();
+        app.manager_source = Some(first_id.clone());
+        app.folder_current.clear();
+        app.load_folder_view();
+        let first_entry = app.folder_entries[0].relative_path.clone();
+
+        let _ = app.update(Message::Keyboard(key_pressed("down")));
+        assert_eq!(app.manager_source.as_deref(), Some(second_id.as_str()));
+        let _ = app.update(Message::Keyboard(key_pressed("up")));
+        assert_eq!(app.manager_source.as_deref(), Some(first_id.as_str()));
+
+        app.manager_source = Some(first_id);
+        app.folder_current.clear();
+        app.load_folder_view();
+        let _ = app.update(Message::Keyboard(key_pressed("right")));
+        assert_eq!(app.sources_pane, SourcesPane::Folders);
+        assert_eq!(app.folder_focus, 0);
+        let _ = app.update(Message::Keyboard(key_pressed("down")));
+        assert_eq!(app.folder_focus, 1);
+        let _ = app.update(Message::Keyboard(key_pressed("enter")));
+        assert!(
+            app.source_selection
+                .iter()
+                .any(|entry| entry == &first_entry),
+            "Enter ticks the highlighted folder"
+        );
     }
 
     #[test]

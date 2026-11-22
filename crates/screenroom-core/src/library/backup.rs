@@ -27,6 +27,7 @@ const STALE_PARTIAL_AGE: Duration = Duration::from_secs(3_600);
 
 const TABLES: &[&str] = &[
     "sources",
+    "source_folders",
     "works",
     "seasons",
     "episodes",
@@ -859,6 +860,9 @@ mod tests {
         let path = directory.path().join("library.db");
         let library = Library::open(&path).unwrap();
         let source = library.add_source(&media, None).unwrap();
+        library
+            .configure_source_folders(&source.id, &[String::new()])
+            .unwrap();
         let name = "Heat (1995).mkv";
         std::fs::write(media.join(name), b"not really a video").unwrap();
         let parsed = parse_filename(name, None);

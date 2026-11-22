@@ -12,7 +12,7 @@ pub mod watch;
 
 pub use domain::{
     BackgroundJob, LibraryItem, MediaKind, PlaybackSession, Profile, Recommendation, SegmentMarker,
-    Source, SourceState,
+    Source, SourceFolder, SourceMedia, SourceState,
 };
 pub use error::{CoreError, Result};
 pub use filename::{ParsedName, parse_filename};
@@ -43,6 +43,6 @@ pub use scanner::{
 pub use volume::VolumeIdentity;
 pub use watch::{MAX_PLAN_ENTRIES, MediaChange, Plan};
 
-pub const SCHEMA_VERSION: i64 = 10;
+pub const SCHEMA_VERSION: i64 = 11;
 
 pub const BACKUP_FORMAT_VERSION: i64 = 2;

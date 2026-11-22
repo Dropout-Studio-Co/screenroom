@@ -2,7 +2,8 @@ pub const CONVERSION_JOBS: &str = "CREATE TABLE IF NOT EXISTS conversion_jobs(id
 
 pub const CREATE: &[&str] = &[
     "CREATE TABLE sources(id TEXT PRIMARY KEY,label TEXT NOT NULL,root_path TEXT NOT NULL DEFAULT '',
-      state TEXT NOT NULL DEFAULT 'disconnected',last_scan_ms INTEGER,volume_identity TEXT)",
+      state TEXT NOT NULL DEFAULT 'disconnected',last_scan_ms INTEGER,volume_identity TEXT,
+      folders_configured INTEGER NOT NULL DEFAULT 0 CHECK(folders_configured IN (0,1)))",
     "CREATE TABLE works(id TEXT PRIMARY KEY,identity_key TEXT NOT NULL,title TEXT NOT NULL,
       kind TEXT NOT NULL CHECK(kind IN ('movie','series','unknown')),year INTEGER,
       overview TEXT NOT NULL DEFAULT '',genres TEXT NOT NULL DEFAULT '[]',poster_path TEXT,
@@ -80,6 +81,10 @@ pub const CREATE: &[&str] = &[
 
     SOURCE_BOOKMARKS,
 
+    SOURCE_FOLDERS,
+
+    SOURCE_FOLDERS_SOURCE,
+
     SUBTITLES,
 
     ENRICHMENT_QUEUE,
@@ -119,6 +124,18 @@ pub const MIGRATE_5_TO_6: &[&str] =
 pub const SOURCE_BOOKMARKS: &str = "CREATE TABLE IF NOT EXISTS source_bookmarks(id TEXT PRIMARY KEY,\n      label TEXT NOT NULL,address TEXT NOT NULL,protocol TEXT NOT NULL,\n      access TEXT NOT NULL DEFAULT '',provenance TEXT NOT NULL DEFAULT '',\n      added_ms INTEGER NOT NULL,UNIQUE(address))";
 
 pub const MIGRATE_6_TO_7: &[&str] = &[SOURCE_BOOKMARKS];
+
+pub const SOURCE_FOLDERS: &str = "CREATE TABLE IF NOT EXISTS source_folders(source_id TEXT NOT NULL\n      REFERENCES sources(id),relative_path TEXT NOT NULL,added_ms INTEGER NOT NULL,\n      PRIMARY KEY(source_id, relative_path))";
+
+pub const SOURCE_FOLDERS_SOURCE: &str =
+    "CREATE INDEX IF NOT EXISTS source_folders_source ON source_folders(source_id, relative_path)";
+
+pub const MIGRATE_10_TO_11: &[&str] = &[
+    "ALTER TABLE sources ADD COLUMN folders_configured INTEGER NOT NULL DEFAULT 0
+      CHECK(folders_configured IN (0,1))",
+    SOURCE_FOLDERS,
+    SOURCE_FOLDERS_SOURCE,
+];
 
 pub const SUBTITLES: &str = "CREATE TABLE IF NOT EXISTS subtitles(id TEXT PRIMARY KEY,\n      file_id TEXT NOT NULL REFERENCES files(id),label TEXT NOT NULL,language TEXT NOT NULL,\n      format TEXT NOT NULL,provenance TEXT NOT NULL,bytes BLOB NOT NULL,\n      created_ms INTEGER NOT NULL)";
 

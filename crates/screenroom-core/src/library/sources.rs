@@ -10,19 +10,21 @@ use crate::volume::VolumeIdentity;
 impl Library {
     pub fn sources(&self) -> Result<Vec<Source>> {
         let connection = self.connection();
-        let mut statement = connection.prepare(
-            "SELECT id, label, root_path, state, last_scan_ms FROM sources
-             WHERE state != 'removed' ORDER BY label COLLATE NOCASE",
-        )?;
+        let mut statement = connection.prepare(&format!(
+            "SELECT {} FROM sources s
+             WHERE s.state != 'removed' ORDER BY s.label COLLATE NOCASE",
+            SOURCE_COLUMNS
+        ))?;
         let rows = statement.query_map([], source_from_row)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     pub fn source(&self, id: &str) -> Result<Source> {
         let connection = self.connection();
-        let mut statement = connection.prepare(
-            "SELECT id, label, root_path, state, last_scan_ms FROM sources WHERE id = ?1",
-        )?;
+        let mut statement = connection.prepare(&format!(
+            "SELECT {} FROM sources s WHERE s.id = ?1",
+            SOURCE_COLUMNS
+        ))?;
         statement
             .query_row([id], source_from_row)
             .map_err(|error| match error {
@@ -73,6 +75,8 @@ impl Library {
             root_path,
             state: SourceState::Available,
             last_scan_ms: None,
+            folders_configured: false,
+            folder_count: 0,
         };
         connection.execute(
             "INSERT INTO sources(id, label, root_path, state, volume_identity)
@@ -218,6 +222,10 @@ fn volume_identity_storage(root: &Path) -> Option<String> {
     VolumeIdentity::probe(root).map(|identity| identity.encode())
 }
 
+const SOURCE_COLUMNS: &str =
+    "s.id, s.label, s.root_path, s.state, s.last_scan_ms, s.folders_configured,
+    (SELECT COUNT(*) FROM source_folders f WHERE f.source_id = s.id) folder_count";
+
 fn source_from_row(row: &Row<'_>) -> rusqlite::Result<Source> {
     let state: String = row.get(3)?;
     Ok(Source {
@@ -235,6 +243,8 @@ fn source_from_row(row: &Row<'_>) -> rusqlite::Result<Source> {
             )
         })?,
         last_scan_ms: row.get(4)?,
+        folders_configured: row.get::<_, i64>(5)? == 1,
+        folder_count: usize::try_from(row.get::<_, i64>(6)?).unwrap_or_default(),
     })
 }
 
