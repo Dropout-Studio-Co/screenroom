@@ -654,6 +654,8 @@ pub struct App {
 
     folder_focus: usize,
 
+    sources_editing: bool,
+
     new_profile: String,
 
     relink_target: Option<String>,
@@ -1461,6 +1463,7 @@ impl App {
             source_selection_configured: false,
             sources_pane: SourcesPane::Sources,
             folder_focus: 0,
+            sources_editing: false,
             new_profile: String::new(),
             relink_target: None,
             relink_path: String::new(),
@@ -3837,6 +3840,7 @@ impl App {
         self.reload_administration();
         self.navigate(Screen::Sources);
         self.focus_card(0);
+        self.sources_editing = false;
         let chosen = self
             .manager_source
             .clone()
@@ -3865,6 +3869,7 @@ impl App {
             return;
         };
         self.manager_source = Some(source.id.clone());
+        self.sources_editing = true;
         self.relink_target = Some(source.id.clone());
         self.folder_current = String::new();
         self.source_selection = self
@@ -3944,6 +3949,14 @@ impl App {
         self.folder_entries = folders;
     }
 
+    fn find_source_by_root(&self, root: &Path) -> Option<Source> {
+        let key = self.library.path_key(root);
+        self.sources
+            .iter()
+            .find(|source| self.library.path_key(Path::new(&source.root_path)) == key)
+            .cloned()
+    }
+
     fn selected_source(&self) -> Option<Source> {
         let id = self.manager_source.as_ref()?;
         self.sources.iter().find(|source| &source.id == id).cloned()
@@ -3990,6 +4003,11 @@ impl App {
         let Some(source_id) = self.manager_source.clone() else {
             return;
         };
+        if self.source_selection.is_empty() {
+            self.error =
+                Some("Choose at least one folder before scanning this location.".to_string());
+            return;
+        }
         self.source_folders
             .insert(source_id.clone(), self.source_selection.clone());
         self.source_selection_configured = true;
@@ -4825,14 +4843,9 @@ impl App {
             return;
         }
 
-        let source = match self
-            .library
-            .sources()
-            .map(|sources| sources.into_iter().find(|source| source.root_path == raw))
-        {
-            Ok(Some(source)) => Ok(source),
-            Ok(None) => self.library.add_source(&root, None),
-            Err(error) => Err(error),
+        let source = match self.find_source_by_root(&root) {
+            Some(source) => Ok(source),
+            None => self.library.add_source(&root, None),
         };
         let source = match source {
             Ok(source) => source,
@@ -6093,6 +6106,10 @@ impl App {
             }
             Screen::Browse | Screen::Settings => self.navigate(Screen::Home),
             Screen::Sources => {
+                if self.sources_editing && self.media_total == 0 {
+                    self.sources_editing = false;
+                    return;
+                }
                 if self.media_total > 0 {
                     self.navigate(Screen::Home);
                 }
@@ -6486,16 +6503,17 @@ impl App {
     }
 
     fn sources_screen(&self) -> Element<'_, Message> {
+        if self.sources.is_empty() {
+            return ui::screens::sources::welcome(ui::screens::sources::Welcome {
+                width: self.window_width,
+                path: &self.new_root,
+                busy: self.scan_token.is_some(),
+                error: self.error.as_deref(),
+            });
+        }
+
         let cards = self.source_cards();
-        if self.media_total == 0 {
-            if self.sources.is_empty() {
-                return ui::screens::sources::welcome(ui::screens::sources::Welcome {
-                    width: self.window_width,
-                    path: &self.new_root,
-                    busy: self.scan_token.is_some(),
-                    error: self.error.as_deref(),
-                });
-            }
+        if self.media_total == 0 && !self.sources_editing {
             return ui::screens::sources::empty_library(ui::screens::sources::EmptyLibrary {
                 cards,
                 width: self.window_width,
