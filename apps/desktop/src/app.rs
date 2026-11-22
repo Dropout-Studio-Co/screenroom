@@ -222,6 +222,27 @@ fn default_conversion_folder() -> String {
         .to_string()
 }
 
+fn summarise_folders(configured: bool, folders: &[String]) -> String {
+    if !configured {
+        return "This whole location is read until folders are chosen.".to_string();
+    }
+    if folders.is_empty() {
+        return "No folders selected, so this location adds no media.".to_string();
+    }
+    if folders.iter().any(|folder| folder.is_empty()) {
+        return "Everything in this location is selected.".to_string();
+    }
+    format!(
+        "{} selected folder(s): {}",
+        folders.len(),
+        folders
+            .iter()
+            .map(|folder| ui::screens::sources::folder_label(folder))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
 fn media_name(name: &str) -> bool {
     let lower = name.to_lowercase();
     screenroom_core::MEDIA_EXTENSIONS
@@ -637,6 +658,8 @@ pub struct App {
     source_totals: HashMap<String, (usize, usize)>,
 
     folder_counts: HashMap<String, i64>,
+
+    source_summaries: HashMap<String, String>,
 
     manager_source: Option<String>,
 
@@ -1455,6 +1478,7 @@ impl App {
             source_folders: HashMap::new(),
             source_totals: HashMap::new(),
             folder_counts: HashMap::new(),
+            source_summaries: HashMap::new(),
             manager_source: None,
             folder_current: String::new(),
             folder_entries: Vec::new(),
@@ -1636,6 +1660,25 @@ impl App {
             }
             Err(error) => self.report(&error),
         }
+        self.source_summaries = self
+            .sources
+            .iter()
+            .map(|source| {
+                let folders = self
+                    .source_folders
+                    .get(&source.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                (
+                    source.id.clone(),
+                    format!(
+                        "{} · {}",
+                        source_state_label(source.state),
+                        summarise_folders(source.folders_configured, folders)
+                    ),
+                )
+            })
+            .collect();
         match self.library.source_media() {
             Ok(rows) => {
                 self.source_totals = rows
@@ -6762,32 +6805,6 @@ impl App {
         })
     }
 
-    fn source_folder_summary(&self, source: &Source) -> String {
-        let folders = self
-            .source_folders
-            .get(&source.id)
-            .cloned()
-            .unwrap_or_default();
-        if !source.folders_configured {
-            return "This whole location is indexed until you choose folders.".to_string();
-        }
-        if folders.is_empty() {
-            return "No folders selected, so this location adds no media.".to_string();
-        }
-        if folders.iter().any(|folder| folder.is_empty()) {
-            return "Everything in this location is selected.".to_string();
-        }
-        format!(
-            "{} selected folder(s): {}",
-            folders.len(),
-            folders
-                .iter()
-                .map(|folder| ui::screens::sources::folder_label(folder))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    }
-
     fn source_cards(&self) -> Vec<ui::screens::sources::SourceCard> {
         self.sources
             .iter()
@@ -7419,16 +7436,11 @@ impl App {
                 for source in &self.sources {
                     rows.push(Row::Value {
                         label: source.label.as_str(),
-                        value: format!(
-                            "{}\n{}\n{}",
-                            source.root_path,
-                            self.source_folder_summary(source),
-                            source_state_label(source.state)
-                        ),
+                        value: source.root_path.clone(),
                     });
                     rows.push(Row::Action {
                         label: source.label.as_str(),
-                        hint: Some("Only the folders you tick are indexed."),
+                        hint: self.source_summaries.get(&source.id).map(String::as_str),
                         action: "Choose folders",
                         on_press: Some(Message::SourceChosen(source.id.clone())),
                     });
@@ -10742,6 +10754,16 @@ mod tests {
             "another profile can be chosen"
         );
     }
+    #[test]
+    fn a_location_summary_states_exactly_what_is_selected() {
+        assert!(summarise_folders(false, &[]).contains("whole location"));
+        assert!(summarise_folders(true, &[]).contains("no media"));
+        assert!(summarise_folders(true, &[String::new()]).contains("Everything"));
+        let siblings = summarise_folders(true, &["Films".to_string(), "Shows".to_string()]);
+        assert!(siblings.contains("Films") && siblings.contains("Shows"));
+        assert!(siblings.contains('2'));
+    }
+
     #[test]
     fn a_new_location_opens_folder_selection_without_reading_the_disk() {
         let directory = tempfile::TempDir::new().expect("temp dir");
