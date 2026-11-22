@@ -382,7 +382,10 @@ fn media_phrase(media: usize) -> String {
     }
 }
 
-fn scan_intent(selected: &[String]) -> String {
+fn scan_intent(selected: &[String], configured: bool) -> String {
+    if !configured {
+        return "This whole location is read until you save a folder selection.".to_string();
+    }
     if selected.iter().any(|entry| entry.is_empty()) {
         return "A scan will read everything in this location.".to_string();
     }
@@ -2429,7 +2432,7 @@ fn relink_block(browser: &FolderBrowser, panel: f32) -> Element<'static, Message
 
 fn selection_summary(browser: &FolderBrowser, panel: f32) -> Element<'static, Message> {
     let tokens = design::tokens();
-    let intent = scan_intent(&browser.selected);
+    let intent = scan_intent(&browser.selected, browser.folders_configured);
     let mut block = column![
         text("WHAT A SCAN WILL READ")
             .size(tokens.type_scale.micro)
@@ -2676,11 +2679,17 @@ mod tests {
         assert_eq!(folders_phrase(&two, true), "2 folders included");
         assert_eq!(folders_short(&one), "1 folder");
 
-        assert!(scan_intent(&none).contains("Nothing selected yet"));
-        assert!(scan_intent(&none).contains("will not add any media"));
-        assert_eq!(scan_intent(&one), "A scan will read 1 selected folder.");
-        assert_eq!(scan_intent(&two), "A scan will read 2 selected folders.");
-        assert!(!scan_intent(&one).contains("everything"));
+        assert!(scan_intent(&none, true).contains("Nothing selected yet"));
+        assert!(scan_intent(&none, true).contains("will not add any media"));
+        assert_eq!(
+            scan_intent(&one, true),
+            "A scan will read 1 selected folder."
+        );
+        assert_eq!(
+            scan_intent(&two, true),
+            "A scan will read 2 selected folders."
+        );
+        assert!(!scan_intent(&one, true).contains("everything"));
     }
 
     #[test]
@@ -2891,9 +2900,15 @@ mod tests {
     fn a_source_with_no_selection_says_nothing_is_selected() {
         let mut page = browser();
         page.selected = Vec::new();
-        page.folders_configured = false;
-        assert!(scan_intent(&page.selected).contains("Nothing selected yet"));
+        page.folders_configured = true;
+        assert!(
+            scan_intent(&page.selected, page.folders_configured).contains("Nothing selected yet")
+        );
         assert!(selection_note(&page.selected, page.folders_configured).is_some());
+        assert!(
+            scan_intent(&page.selected, false).contains("whole location"),
+            "a legacy source is read in full until a selection is saved"
+        );
         let _ = manager(Manager {
             cards: vec![card("films", "Films", 0, Vec::new())],
             selected: Some("films".to_string()),
@@ -2906,7 +2921,9 @@ mod tests {
     fn a_long_selection_is_summarised_without_growing_without_bound() {
         let mut page = browser();
         page.selected = (0..30).map(|index| format!("Folder {index}")).collect();
-        assert!(scan_intent(&page.selected).contains("30 selected folders"));
+        assert!(
+            scan_intent(&page.selected, page.folders_configured).contains("30 selected folders")
+        );
         let mut source = card("films", "Films", 90, Vec::new());
         source.folders = page.selected.clone();
         source.folders_configured = true;

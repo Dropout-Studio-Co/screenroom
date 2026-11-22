@@ -2494,8 +2494,11 @@ A source is a storage location, and the folders read from it are an explicit
 selection ([`ADR-020`](ADR-020_SOURCE_FOLDER_SELECTION.md)). Selected folders are
 stored as paths relative to the source root with `""` for the root itself, siblings
 and nested folders combine, a selected parent covers its descendants, and the set is
-normalised before it is written. A new source starts unconfigured — the legacy
-whole-root walk — and configuring it sets `sources.folders_configured = 1` and scans
+normalised before it is written. At the core layer a new source starts unconfigured
+(the legacy whole-root walk) so old libraries are unchanged; the desktop stages a
+picked location as configured with an empty selection so nothing is read until the
+owner chooses folders, and saves a typed path as an explicit whole-location
+selection. Configuring sets `sources.folders_configured = 1`, and a scan then reads
 only the selected subtrees. Schema 11 adds `source_folders` and that column
 additively, so an existing version 10 library migrates forward without a rewritten
 source, a re-indexed item or a read file, and behaves exactly as it did.

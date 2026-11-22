@@ -54,9 +54,13 @@ two selections that describe the same subtrees are the same row set.
 
 ### 3. New sources start unconfigured; existing libraries are unchanged
 
-A new source carries `folders_configured = 0`, which means the legacy behaviour: a
-scan reads the whole root. That is what keeps every existing library working
-without a migration decision.
+At the core layer a source created by `add_source` carries `folders_configured = 0`,
+which means the legacy behaviour: a scan reads the whole root. That is what keeps
+every existing library working without a migration decision. The desktop does not
+leave a newly picked location in that state: it writes a configured-but-empty
+selection immediately, so no scan — including the automatic reconcile — reads the
+location before the owner has chosen folders. A typed path is an explicit
+whole-location choice and is saved as a configured root selection (`""`).
 
 Configuring the source writes its selection and sets `folders_configured = 1`. From
 then on a scan reads only the selected subtrees. A configured source with an empty
@@ -114,7 +118,7 @@ folder keeps its works, progress, lists and posters.
 The screen is a source rail beside a folder browser. The rail lists each source with
 its label, its state and its location, plus **Add a location**. The browser shows
 the current folder's breadcrumb, an **Everything in this folder** row for the
-current folder itself, and each subfolder with its direct media count and the
+current folder itself, and each subfolder with its indexed media count and the
 inclusion state it holds: selected, included by a selected parent, or excluded. It
 carries **Scan selected folders**, **Clear selection**, **Rescan**, and the
 per-source **Remove** and **Relink** actions, with add available from the rail.

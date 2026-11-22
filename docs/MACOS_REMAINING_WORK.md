@@ -202,7 +202,7 @@ to 11 with the additive `source_folders` table and that column.
 
 The screen manages one source at a time: a rail with each source's label and state,
 and a browser with breadcrumbs, an *Everything in this folder* row, per-subfolder
-direct media counts and the selected / included-by-parent / excluded distinction,
+indexed media counts and the selected / included-by-parent / excluded distinction,
 then *Scan selected folders*, *Clear selection*, *Rescan*, and per-source *Remove*
 and *Relink*. A missing selected subfolder reads as a folder condition, not as a
 disconnected drive, and it does not withdraw files in the other selected folders.
