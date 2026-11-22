@@ -36,7 +36,7 @@ pub struct Destination {
     pub message: Message,
 }
 
-pub const DESTINATIONS: [Destination; 3] = [
+pub const DESTINATIONS: [Destination; 4] = [
     Destination {
         screen: Screen::Home,
         label: "Home",
@@ -50,12 +50,27 @@ pub const DESTINATIONS: [Destination; 3] = [
         message: Message::GoBrowse,
     },
     Destination {
+        screen: Screen::Sources,
+        label: "Sources",
+        icon: Icon::Folder,
+        message: Message::GoSources,
+    },
+    Destination {
         screen: Screen::Settings,
         label: "Settings",
         icon: Icon::Settings,
         message: Message::GoSettings,
     },
 ];
+
+pub fn destinations(has_media: bool) -> Vec<&'static Destination> {
+    DESTINATIONS
+        .iter()
+        .filter(|destination| {
+            has_media || matches!(destination.screen, Screen::Sources | Screen::Settings)
+        })
+        .collect()
+}
 
 pub fn nav_labels(breakpoint: Breakpoint) -> NavLabels {
     match breakpoint {
@@ -113,7 +128,17 @@ fn nav_item<'a>(
         .into()
 }
 
-pub fn nav_bar<'a>(active: Option<Screen>, width: f32) -> Element<'a, Message> {
+fn search_shortcut<'a>(has_media: bool) -> Option<Element<'a, Message>> {
+    has_media.then(|| {
+        button(icons::icon(Icon::Search, 16.0, theme::muted()))
+            .on_press(Message::GoBrowse)
+            .padding(6.0)
+            .style(quiet_button)
+            .into()
+    })
+}
+
+pub fn nav_bar<'a>(active: Option<Screen>, width: f32, has_media: bool) -> Element<'a, Message> {
     let tokens = design::tokens();
     let breakpoint = Breakpoint::at(width);
     let labels = nav_labels(breakpoint);
@@ -122,14 +147,9 @@ pub fn nav_bar<'a>(active: Option<Screen>, width: f32) -> Element<'a, Message> {
         .spacing(theme::gap(Gap::Section))
         .align_y(Alignment::Center);
 
-    for destination in &DESTINATIONS {
+    for destination in destinations(has_media) {
         links = links.push(nav_item(destination, active, labels));
     }
-
-    let search = button(icons::icon(Icon::Search, 16.0, theme::muted()))
-        .on_press(Message::GoBrowse)
-        .padding(6.0)
-        .style(quiet_button);
 
     let refresh = button(
         text("Refresh")
@@ -141,7 +161,7 @@ pub fn nav_bar<'a>(active: Option<Screen>, width: f32) -> Element<'a, Message> {
     .padding(6.0)
     .style(quiet_button);
 
-    row![
+    let mut bar = row![
         text(wordmark(breakpoint))
             .size(tokens.type_scale.caption)
             .font(theme::semibold())
@@ -149,13 +169,16 @@ pub fn nav_bar<'a>(active: Option<Screen>, width: f32) -> Element<'a, Message> {
         links,
         Space::new().width(Length::Fill),
         refresh,
-        search,
-        profile(),
     ]
     .spacing(theme::gap(Gap::Rail))
     .align_y(Alignment::Center)
-    .width(Length::Fill)
-    .into()
+    .width(Length::Fill);
+
+    if let Some(search) = search_shortcut(has_media) {
+        bar = bar.push(search);
+    }
+
+    bar.push(profile()).into()
 }
 
 pub fn status_bar<'a>(
@@ -201,6 +224,7 @@ pub fn frame<'a>(
     status: Option<&'a str>,
     error: Option<&'a str>,
     width: f32,
+    has_media: bool,
 ) -> Element<'a, Message> {
     if active == Some(Screen::Player) {
         return body;
@@ -219,7 +243,7 @@ pub fn frame<'a>(
         })
     };
 
-    let bar = container(nav_bar(active, width))
+    let bar = container(nav_bar(active, width, has_media))
         .width(Length::Fill)
         .height(Length::Fixed(BAR_HEIGHT))
         .padding(Padding {
@@ -480,12 +504,21 @@ mod tests {
 
     #[test]
     fn every_destination_keeps_its_name_and_its_own_glyph_when_the_bar_collapses() {
+        let all = shell::destinations(true);
+
         assert_eq!(
-            shell::DESTINATIONS.map(|destination| destination.screen),
-            [Screen::Home, Screen::Browse, Screen::Settings]
+            all.iter()
+                .map(|destination| destination.screen)
+                .collect::<Vec<_>>(),
+            [
+                Screen::Home,
+                Screen::Browse,
+                Screen::Sources,
+                Screen::Settings
+            ]
         );
 
-        for (index, destination) in shell::DESTINATIONS.iter().enumerate() {
+        for (index, destination) in all.iter().enumerate() {
             let full = shell::destination_label(destination, NavLabels::Full);
             let compact = shell::destination_label(destination, NavLabels::Compact);
 
@@ -495,7 +528,7 @@ mod tests {
                 "{full} must keep its name when the bar collapses"
             );
             assert!(
-                !shell::DESTINATIONS[..index]
+                !all[..index]
                     .iter()
                     .any(|earlier| earlier.icon == destination.icon),
                 "{:?} is drawn for more than one destination",
@@ -504,13 +537,80 @@ mod tests {
         }
 
         assert_eq!(
-            shell::DESTINATIONS.map(|destination| destination.label),
-            ["Home", "Library", "Settings"]
+            all.iter()
+                .map(|destination| destination.label)
+                .collect::<Vec<_>>(),
+            ["Home", "Library", "Sources", "Settings"]
         );
         assert_eq!(
-            shell::DESTINATIONS.map(|destination| destination.icon),
-            [Icon::Home, Icon::Library, Icon::Settings]
+            all.iter()
+                .map(|destination| destination.icon)
+                .collect::<Vec<_>>(),
+            [Icon::Home, Icon::Library, Icon::Folder, Icon::Settings]
         );
+    }
+
+    #[test]
+    fn a_library_without_media_offers_only_the_way_to_sources_and_settings() {
+        let without: Vec<Screen> = shell::destinations(false)
+            .iter()
+            .map(|destination| destination.screen)
+            .collect();
+
+        assert_eq!(without, [Screen::Sources, Screen::Settings]);
+
+        for absent in [Screen::Home, Screen::Browse] {
+            assert!(
+                !without.contains(&absent),
+                "{absent:?} must stay unreachable before any media is indexed"
+            );
+        }
+
+        let with: Vec<Screen> = shell::destinations(true)
+            .iter()
+            .map(|destination| destination.screen)
+            .collect();
+
+        assert_eq!(with.len(), 4);
+        assert!(with.contains(&Screen::Sources));
+        assert!(with.contains(&Screen::Settings));
+        assert!(with.contains(&Screen::Home));
+        assert!(with.contains(&Screen::Browse));
+
+        assert_eq!(
+            shell::destinations(false)
+                .iter()
+                .map(|destination| destination.label)
+                .collect::<Vec<_>>(),
+            ["Sources", "Settings"]
+        );
+    }
+
+    #[test]
+    fn the_search_shortcut_only_exists_once_there_is_something_to_search() {
+        assert!(shell::search_shortcut(true).is_some());
+        assert!(shell::search_shortcut(false).is_none());
+    }
+
+    #[test]
+    fn sources_never_takes_the_full_bleed_hero() {
+        assert!(!shell::owns_full_bleed_hero(Some(Screen::Sources)));
+
+        for screen in [
+            Screen::Browse,
+            Screen::Settings,
+            Screen::Player,
+            Screen::Sources,
+        ] {
+            assert!(
+                !shell::owns_full_bleed_hero(Some(screen)),
+                "{screen:?} must keep the framed body"
+            );
+        }
+
+        assert!(shell::owns_full_bleed_hero(Some(Screen::Home)));
+        assert!(shell::owns_full_bleed_hero(Some(Screen::Detail)));
+        assert!(!shell::owns_full_bleed_hero(None));
     }
 
     fn alpha_stops(gradient: iced::Gradient) -> Vec<(f32, f32)> {
@@ -559,8 +659,11 @@ mod tests {
     #[test]
     fn the_bar_composes_at_every_breakpoint_including_unknown_widths() {
         for width in [0.0, 600.0, 900.0, 1099.0, 1440.0, 3440.0, f32::NAN] {
-            let _ = shell::nav_bar(Some(Screen::Home), width);
-            let _ = shell::nav_bar(None, width);
+            for has_media in [true, false] {
+                let _ = shell::nav_bar(Some(Screen::Home), width, has_media);
+                let _ = shell::nav_bar(None, width, has_media);
+                let _ = shell::nav_bar(Some(Screen::Sources), width, has_media);
+            }
         }
     }
 }

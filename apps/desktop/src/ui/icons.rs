@@ -33,6 +33,8 @@ pub enum Icon {
 
     Library,
 
+    Folder,
+
     Settings,
 }
 
@@ -51,6 +53,7 @@ impl Icon {
         Icon::Check,
         Icon::Home,
         Icon::Library,
+        Icon::Folder,
         Icon::Settings,
     ];
 
@@ -70,6 +73,7 @@ impl Icon {
             Icon::Home => 11,
             Icon::Library => 12,
             Icon::Settings => 13,
+            Icon::Folder => 14,
         }
     }
 }
@@ -88,7 +92,7 @@ fn shape(points: &[(f32, f32)]) -> Segment {
     )
 }
 
-fn build() -> [Vec<Segment>; 14] {
+fn build() -> [Vec<Segment>; 15] {
     let search_ring = [
         (15.5, 10.5),
         (14.83, 13.0),
@@ -172,10 +176,18 @@ fn build() -> [Vec<Segment>; 14] {
             line(&[(4.0, 17.0), (20.0, 17.0)]),
             line(&[(11.0, 14.5), (11.0, 19.5)]),
         ],
+        vec![shape(&[
+            (3.5, 7.0),
+            (9.5, 7.0),
+            (11.5, 9.5),
+            (20.5, 9.5),
+            (20.5, 19.0),
+            (3.5, 19.0),
+        ])],
     ]
 }
 
-static PATHS: LazyLock<[Vec<Segment>; 14]> = LazyLock::new(build);
+static PATHS: LazyLock<[Vec<Segment>; 15]> = LazyLock::new(build);
 
 pub fn path(icon: Icon) -> &'static [Segment] {
     &PATHS[icon.index()]
@@ -272,12 +284,12 @@ mod tests {
 
     #[test]
     fn the_icon_set_covers_every_glyph_the_ui_draws() {
-        assert_eq!(Icon::ALL.len(), 14);
+        assert_eq!(Icon::ALL.len(), 15);
     }
 
     #[test]
     fn the_navigation_glyphs_are_distinct_and_fit_the_set_weight() {
-        let navigation = [Icon::Home, Icon::Library, Icon::Settings];
+        let navigation = [Icon::Home, Icon::Library, Icon::Folder, Icon::Settings];
 
         for (index, icon) in navigation.iter().enumerate() {
             assert_ne!(

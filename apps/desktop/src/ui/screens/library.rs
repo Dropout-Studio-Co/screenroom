@@ -202,6 +202,8 @@ pub struct Library<'a> {
 
     pub source_line: String,
 
+    pub action: Option<(&'static str, Message)>,
+
     pub nav: &'a Nav,
 
     pub genres: &'a [String],
@@ -508,9 +510,10 @@ impl<'a> Library<'a> {
         let tokens = design::tokens();
         let narrowed =
             !self.query.trim().is_empty() || self.filters.narrowed() || self.genre.is_some();
-        let (headline, detail) = empty_copy(narrowed);
+        let has_sources = self.action.is_some();
+        let (headline, detail) = empty_copy_for(has_sources, narrowed);
 
-        column![
+        let mut empty = column![
             text(headline)
                 .size(tokens.type_scale.body_lg)
                 .font(theme::medium())
@@ -521,8 +524,23 @@ impl<'a> Library<'a> {
                 .color(theme::muted()),
         ]
         .spacing(theme::gap(Gap::Card))
-        .width(Length::Fill)
-        .into()
+        .width(Length::Fill);
+
+        if let Some((label, message)) = &self.action {
+            empty = empty.push(
+                button(
+                    text(*label)
+                        .size(tokens.type_scale.label)
+                        .font(theme::medium())
+                        .color(theme::ground()),
+                )
+                .on_press(message.clone())
+                .padding([theme::gap(Gap::Card), theme::gap(Gap::Group)])
+                .style(chip_style(true)),
+            );
+        }
+
+        empty.into()
     }
 
     fn pager(&self) -> Element<'a, Message> {
@@ -664,18 +682,28 @@ pub fn source_placement(width: f32) -> SourcePlacement {
     }
 }
 
-pub fn empty_copy(narrowed: bool) -> (&'static str, &'static str) {
+pub fn empty_copy_for(has_sources: bool, narrowed: bool) -> (&'static str, &'static str) {
     if narrowed {
         (
             "Nothing matches these filters.",
             "Clear the search and switch the other filters off to see the whole library.",
         )
+    } else if has_sources {
+        (
+            "No media indexed from your folders yet.",
+            "Review the selected folders in Sources and scan them again; Screenroom only \
+             lists what sits inside them.",
+        )
     } else {
         (
             "No films or episodes yet.",
-            "Add a folder in Settings and Screenroom reads it in place.",
+            "Add a folder in Sources and Screenroom reads it in place.",
         )
     }
+}
+
+pub fn empty_copy(narrowed: bool) -> (&'static str, &'static str) {
+    empty_copy_for(false, narrowed)
 }
 
 pub fn count_line(total: usize) -> String {
@@ -1030,10 +1058,10 @@ mod tests {
 
     use super::{
         Chip, ChipRows, FilterChips, HeaderLayout, Library, PAGE_TILES, SortChoice,
-        SourcePlacement, capped_window, chip_rows, header_layout, label_size, source_line,
-        source_placement, tile_title, tile_width, visible_tiles,
+        SourcePlacement, capped_window, chip_rows, empty_copy, empty_copy_for, header_layout,
+        label_size, source_line, source_placement, tile_title, tile_width, visible_tiles,
     };
-    use crate::app::{KindFilter, Screen, WatchFilter};
+    use crate::app::{KindFilter, Message, Screen, WatchFilter};
     use crate::ui::components::poster::{
         CARD_GAP, CARD_WIDTH, card_columns, text_inset, text_room,
     };
@@ -1190,6 +1218,7 @@ mod tests {
             filters: FilterChips::none(),
             sort: SortChoice::Title,
             source_line: source_line(0, 0, None),
+            action: None,
             nav: &nav,
             genres: &genres,
             genre: None,
@@ -1199,6 +1228,76 @@ mod tests {
             width: 1440.0,
         };
 
+        let _ = library.view();
+    }
+
+    #[test]
+    fn an_empty_library_names_which_of_the_three_situations_it_is_in() {
+        let first_run = empty_copy_for(false, false);
+        assert!(first_run.0.contains("No media") || first_run.0.contains("No films"));
+        assert!(first_run.1.contains("Add a folder"));
+        assert!(first_run.1.contains("Sources"));
+        assert!(!first_run.1.contains("filters"));
+
+        let no_media = empty_copy_for(true, false);
+        assert!(no_media.1.contains("folders"));
+        assert!(no_media.1.contains("Sources"));
+        assert!(
+            !no_media.1.to_lowercase().contains("rescan"),
+            "reviewing the folders comes before any rescan: {}",
+            no_media.1
+        );
+
+        let narrowed = empty_copy_for(true, true);
+        assert!(narrowed.0.contains("filters"));
+        assert!(narrowed.1.contains("Clear the search"));
+
+        assert_eq!(empty_copy(false), first_run);
+        assert_eq!(empty_copy(true), narrowed);
+        assert_eq!(empty_copy_for(false, true), narrowed);
+
+        for (headline, detail) in [first_run, no_media, narrowed] {
+            assert!(!headline.is_empty() && !detail.is_empty());
+            assert!(detail.ends_with('.'), "copy should be a sentence: {detail}");
+
+            let copy = format!("{headline} {detail}").to_lowercase();
+            assert!(
+                !copy.contains("your files") && !copy.contains("files are"),
+                "an empty library may not claim files exist: {copy}"
+            );
+            assert!(
+                !copy.contains("available"),
+                "an empty library may not claim anything is available: {copy}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_library_with_a_source_action_still_builds() {
+        let nav = Nav::new(Screen::Browse);
+        let art = HashMap::new();
+        let genres: Vec<String> = Vec::new();
+
+        let library = Library {
+            items: &[],
+            total: 0,
+            page: 0,
+            pages: 1,
+            query: "",
+            filters: FilterChips::none(),
+            sort: SortChoice::Title,
+            source_line: source_line(1, 0, Some("2 hours ago")),
+            action: Some(("Review folders", Message::GoSources)),
+            nav: &nav,
+            genres: &genres,
+            genre: None,
+            art: &art,
+            failed: &HashSet::new(),
+            motion: &MotionState::default(),
+            width: 1440.0,
+        };
+
+        assert!(library.action.is_some());
         let _ = library.view();
     }
 
@@ -1270,6 +1369,7 @@ mod tests {
             },
             sort: SortChoice::Added,
             source_line: source_line(2, 10_000, Some("2 hours ago")),
+            action: None,
             nav: &nav,
             genres: &genres,
             genre: Some("Drama"),

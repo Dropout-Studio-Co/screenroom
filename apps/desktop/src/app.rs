@@ -152,6 +152,7 @@ fn start_screen_from(requested: Option<&str>) -> Screen {
     match requested.map(str::trim) {
         Some(value) if value.eq_ignore_ascii_case("library") => Screen::Browse,
         Some(value) if value.eq_ignore_ascii_case("settings") => Screen::Settings,
+        Some(value) if value.eq_ignore_ascii_case("sources") => Screen::Sources,
         _ => Screen::Home,
     }
 }
@@ -6144,6 +6145,9 @@ impl App {
                 Key::Character(ref character) if character.as_str() == "3" => {
                     let _ = self.update(Message::GoSettings);
                 }
+                Key::Character(ref character) if character.as_str() == "4" => {
+                    let _ = self.update(Message::GoSources);
+                }
                 _ => {}
             }
             return Task::none();
@@ -6403,6 +6407,7 @@ impl App {
             self.status.as_deref(),
             self.error.as_deref(),
             self.window_width,
+            self.media_total > 0,
         );
 
         self.stage(framed)
@@ -6612,6 +6617,11 @@ impl App {
                 self.last_scan_phrase().as_deref(),
             ),
             nav: &self.nav,
+            action: (!self.sources.is_empty()
+                && self.browse.text.trim().is_empty()
+                && !self.filter_chips().narrowed()
+                && self.browse.genre.is_none())
+            .then_some(("Review folders", Message::GoSources)),
             genres: &self.browse.genres,
             genre: self.browse.genre.as_deref(),
             art: &self.artwork,
@@ -8102,6 +8112,8 @@ mod tests {
         assert_eq!(start_screen_from(Some("library")), Screen::Browse);
         assert_eq!(start_screen_from(Some(" Library ")), Screen::Browse);
         assert_eq!(start_screen_from(Some("settings")), Screen::Settings);
+        assert_eq!(start_screen_from(Some("sources")), Screen::Sources);
+        assert_eq!(start_screen_from(Some(" Sources ")), Screen::Sources);
         assert_eq!(start_screen_from(Some("player")), Screen::Home);
         assert_eq!(start_screen_from(Some("")), Screen::Home);
         assert_eq!(start_screen_from(None), Screen::Home);
@@ -10482,5 +10494,63 @@ mod tests {
             )),
             "another profile can be chosen"
         );
+    }
+    #[test]
+    fn a_new_location_opens_folder_selection_without_reading_the_disk() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let root = directory.path().join("media");
+        write_settled(&root.join("Show/Show S01E01.mkv"), b"not really a video");
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+
+        assert!(app.onboarding_holds(), "an empty library holds onboarding");
+        assert_eq!(app.effective_screen(), Screen::Sources);
+
+        app.stage_location(root.clone());
+
+        assert_eq!(app.screen, Screen::Sources);
+        assert!(app.scan_token.is_none(), "staging must not read the disk");
+        assert_eq!(app.sources.len(), 1);
+        assert_eq!(
+            app.manager_source.as_deref(),
+            Some(app.sources[0].id.as_str())
+        );
+        assert_eq!(app.source_selection, vec![String::new()]);
+        assert!(
+            app.folder_entries.iter().any(|entry| entry.name == "Show"),
+            "the chosen location's folders are offered"
+        );
+        assert_eq!(app.media_total, 0, "nothing is indexed until a scan");
+    }
+
+    #[test]
+    fn the_main_interface_stays_gated_until_a_scan_indexes_something() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let root = directory.path().join("media");
+        write_settled(&root.join("Show/Show S01E01.mkv"), b"not really a video");
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+
+        app.stage_location(root);
+        let source_id = app.sources[0].id.clone();
+        app.manage_source(source_id);
+        app.toggle_folder("Show".to_string());
+        let _ = app.update(Message::SaveSourceFolders);
+        finish_scan(&mut app);
+
+        assert!(app.media_total > 0, "the selected folder was indexed");
+        assert!(!app.onboarding_holds(), "media releases the main interface");
+    }
+
+    #[test]
+    fn navigation_cannot_reach_the_main_interface_before_media_exists() {
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+
+        let _ = app.update(Message::GoHome);
+        assert_eq!(app.screen, Screen::Sources);
+        let _ = app.update(Message::GoBrowse);
+        assert_eq!(app.screen, Screen::Sources);
+        assert!(matches!(app.effective_screen(), Screen::Sources));
     }
 }

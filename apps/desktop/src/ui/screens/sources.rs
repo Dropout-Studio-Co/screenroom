@@ -76,19 +76,26 @@ pub fn inclusion(selected: &[String], relative: &str) -> Inclusion {
 }
 
 pub fn normalize(selected: &[String]) -> Vec<String> {
+    let mut cleaned: Vec<String> = selected
+        .iter()
+        .map(|entry| entry.trim_matches('/').to_string())
+        .collect();
+    if cleaned.iter().any(String::is_empty) {
+        return vec![String::new()];
+    }
+    cleaned.sort();
+    cleaned.dedup();
     let mut kept: Vec<String> = Vec::new();
-    for entry in selected {
-        let trimmed = entry.trim_matches('/').to_string();
-        if kept.iter().any(|done| {
-            done.is_empty() || trimmed == *done || trimmed.starts_with(&format!("{done}/"))
-        }) {
+    for entry in cleaned {
+        if kept
+            .iter()
+            .any(|done| entry == *done || entry.starts_with(&format!("{done}/")))
+        {
             continue;
         }
-        kept.retain(|done| !done.starts_with(&format!("{trimmed}/")));
-        kept.push(trimmed);
+        kept.retain(|done| !done.starts_with(&format!("{entry}/")));
+        kept.push(entry);
     }
-    kept.sort();
-    kept.dedup();
     kept
 }
 
