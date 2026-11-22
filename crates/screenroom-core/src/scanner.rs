@@ -462,8 +462,9 @@ impl<'a> LibraryScanner<'a> {
                 issues.push_at(path, &root, "outside_root");
                 continue;
             };
+            let selection_key = relative.replace('\\', "/");
             if source.folders_configured
-                && !crate::library::selection_covers(&selections, &relative)
+                && !crate::library::selection_covers(&selections, &selection_key)
             {
                 continue;
             }

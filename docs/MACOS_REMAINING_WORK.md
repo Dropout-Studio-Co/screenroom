@@ -215,7 +215,10 @@ row count above is unchanged.
 round-trip and its normalisation, the subtree walk and withdrawal that stays inside
 the scanned subtree; the desktop suite covers the folder browser's inclusion states,
 the three application states and the navigation gating, and `cargo test
---workspace` runs both. **What is not evidenced:** no owner has looked at the
+--workspace` runs both. A hidden-window launch of the built binary
+(`SCREENROOM_WINDOW=hidden`) stayed up for six seconds on each of the three states —
+fresh library, a source holding no playable media, and a two-title library — with no
+output and no failure; that exercises construction, not visual quality. **What is not evidenced:** no owner has looked at the
 Sources screen, the welcome or empty states, or the withheld navigation, and no
 window capture of them is recorded in the repository. Those stay `PENDING` — a test
 proves a row and a message exist, not that the screen reads clearly. No device

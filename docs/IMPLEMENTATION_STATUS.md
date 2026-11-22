@@ -2517,6 +2517,11 @@ round-trip and normalisation, the subtree walk and withdrawal scoped to the scan
 subtree; the desktop suite covers the folder browser's inclusion states, the three
 states and the withheld navigation. `cargo test --workspace` runs both.
 
+**Hidden-window smoke:** the built binary, launched with `SCREENROOM_WINDOW=hidden`
+against a fresh library, a source holding no playable media, and a two-title library,
+stayed up for six seconds on each state and wrote nothing to its log. This exercises
+the three states' construction; it is not a visual acceptance.
+
 **PENDING:** the owner has not looked at the Sources screen, the welcome or empty
 states, or the withheld navigation, and no window capture of them is recorded here.
 Visual acceptance is an owner judgement and is not claimed. No device result is

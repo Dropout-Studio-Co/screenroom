@@ -1656,7 +1656,12 @@ impl App {
         }
         if let Some(source_id) = self.manager_source.clone() {
             match self.library.folder_media_counts(&source_id) {
-                Ok(counts) => self.folder_counts = counts.into_iter().collect(),
+                Ok(counts) => {
+                    self.folder_counts = counts
+                        .into_iter()
+                        .map(|(directory, count)| (directory.replace('\\', "/"), count))
+                        .collect();
+                }
                 Err(_) => self.folder_counts.clear(),
             }
         }
@@ -3917,7 +3922,12 @@ impl App {
             .cloned()
             .unwrap_or_default();
         match self.library.folder_media_counts(&source.id) {
-            Ok(counts) => self.folder_counts = counts.into_iter().collect(),
+            Ok(counts) => {
+                self.folder_counts = counts
+                    .into_iter()
+                    .map(|(directory, count)| (directory.replace('\\', "/"), count))
+                    .collect();
+            }
             Err(error) => self.report(&error),
         }
         self.load_folder_view();
