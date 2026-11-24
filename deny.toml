@@ -1,0 +1,47 @@
+[graph]
+targets = ["aarch64-apple-darwin"]
+all-features = false
+no-default-features = false
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "warn"
+unmaintained = "all"
+unsound = "all"
+ignore = [
+  { id = "RUSTSEC-2026-0253", reason = "lru 0.16.4 is pinned by cryoglyph 0.1.0 inside iced 0.14.0; the fix is lru 0.18.2 outside that range, and the release profile sets panic = abort" },
+  { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15 is unmaintained with no newer release; metal 0.32.0 and wgpu-hal 27.0.4 both require paste ^1" },
+  { id = "RUSTSEC-2026-0192", reason = "ttf-parser 0.25.1 is unmaintained and is the newest release; fontdb 0.23.0 inside iced 0.14.0 requires ttf-parser ^0.25" },
+]
+
+[licenses]
+confidence-threshold = 0.93
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "CC0-1.0",
+  "Unicode-3.0",
+]
+exceptions = [{ crate = "webpki-roots", allow = ["CDLA-Permissive-2.0"] }]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+skip = [
+  { name = "screenroom-desktop", reason = "first-party workspace member whose path dependencies carry no registry version" },
+]
+deny = [
+  { crate = "openssl", use-instead = "rustls" },
+  { crate = "openssl-sys", use-instead = "rustls" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
