@@ -14,3 +14,21 @@ if [ "$status" -ne 0 ]; then
 	exit 1
 fi
 echo "pre-commit: no comments found"
+if ! command -v cargo >/dev/null 2>&1; then
+	if [ -n "${HOME:-}" ] && [ -x "$HOME/.cargo/bin/cargo" ]; then
+		PATH="$HOME/.cargo/bin:$PATH"
+		export PATH
+	fi
+fi
+if ! command -v cargo >/dev/null 2>&1; then
+	echo "pre-commit: cargo is unavailable; skipping cargo fmt --all --check" >&2
+	exit 0
+fi
+fmt_status=0
+cargo fmt --all --check || fmt_status=$?
+if [ "$fmt_status" -ne 0 ]; then
+	echo "pre-commit: rustfmt check failed (exit $fmt_status). Commit blocked." >&2
+	echo "pre-commit: run 'cargo fmt --all', inspect the diff, then stage again." >&2
+	exit 1
+fi
+echo "pre-commit: formatting clean"
