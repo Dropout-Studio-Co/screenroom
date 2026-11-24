@@ -1,5 +1,5 @@
 ---
-description: Update CLAUDE.md using session learnings and quality improvements
+description: Update AGENTS.md with session learnings and quality improvements
 allowed-tools: Read, Edit, Glob, Bash
 ---
 
@@ -11,42 +11,32 @@ allowed-tools: Read, Edit, Glob, Bash
 - Do not request review after each step — complete all 4 steps without interruption.
 - Edit files directly and immediately. If you find something to change, change it.
 
-Update `CLAUDE.md` to reflect the current codebase state. Follow this sequence:
+`AGENTS.md` is the single canonical repository agent-instruction file, and this command updates it in place. Never edit `CLAUDE.md`: it is a one-line import pointer, and this command never treats it as the source of instructions.
 
-## Step 1: Capture Session Learnings (revise-claude-md)
-
-Apply the `/revise-claude-md` workflow to `CLAUDE.md`:
+## Step 1: Capture Session Learnings
 
 - Reflect on this session — what context was missing or would have helped?
-- Check recent git history: `git log --oneline -20`
-- Draft concise additions: commands discovered, gotchas, patterns, warnings
-- One line per concept — CLAUDE.md is part of the prompt, brevity matters
-- Avoid verbose explanations, obvious info, or one-off fixes
+- Check recent git history: `git log --oneline -20`.
+- Draft concise, agent-agnostic, macOS-relevant additions for `AGENTS.md`: commands discovered, gotchas, invariants and warnings.
+- One line per concept; skip verbose explanations, obvious information and one-off fixes.
 
-## Step 2: Improve Overall Quality (claude-md-improver)
+## Step 2: Tighten and Verify AGENTS.md
 
-Apply the `claude-md-improver` skill to `CLAUDE.md`:
+Audit `AGENTS.md` directly against the live repository, never against another instruction file:
 
-- Remove outdated, inaccurate, or redundant content
-- Ensure structure and formatting conventions are consistent
-- Verify all file paths, commands, and versions match the actual codebase
-- Tighten language — cut anything derivable directly from the code
+- Validate commands, paths and versions against `Cargo.toml`, `Cargo.lock`, `scripts/` and `docs/`.
+- Remove stale, inaccurate or redundant prose; keep `AGENTS.md` concise, roughly 150-200 lines, and link `docs/` for deep or deferred material.
+- Never delete anything under `docs/`, and never delete a historical ADR — the archive is the audit trail.
+- Preserve every active hard rule, the `**Trail rebuilds are automatic.**` note outside the generated block, and the `<!-- trail:start -->` ... `<!-- trail:end -->` block verbatim.
 
-## Step 3: Sync AGENTS.md
+## Step 3: Preserve CLAUDE.md Pointer and Agent-Agnostic Wording
 
-After CLAUDE.md has been updated, propagate the same changes into AGENTS.md
-in the same directory:
+- Never edit `CLAUDE.md` to hold duplicated instructions; it must remain exactly `@AGENTS.md`.
+- Verify `CLAUDE.md` equals `@AGENTS.md` (11 bytes); restore `@AGENTS.md` only if it was corrupted.
+- Verify `AGENTS.md` contains no Claude- or Anthropic-specific wording; rewrite any such reference into agent-agnostic phrasing such as "the agent" or "the assistant".
 
-- Read the newly updated CLAUDE.md.
-- Update AGENTS.md so its commands, gotchas, patterns, and structure match
-  what CLAUDE.md now says.
-- Rewrite any Claude- or Anthropic-specific references into agent-agnostic
-  phrasing (e.g. "the AI coding agent" / "the assistant") — AGENTS.md must
-  never mention Claude or Anthropic by name.
-- Preserve AGENTS.md's own formatting conventions; only sync substance, not
-  Claude-specific wording.
-- If no AGENTS.md exists in this directory, skip this step and note it.
+## Step 4: Apply and Verify
 
-## Step 4: Apply Changes
-
-Edit files directly. Apply every change to both CLAUDE.md and AGENTS.md with the Edit tool — no previews, no summaries asking for confirmation, no pausing between files.
+- Apply every change directly to `AGENTS.md` with the Edit tool — no previews, no confirmation pauses, no summaries asking for approval.
+- Verify `CLAUDE.md` is still exactly `@AGENTS.md`.
+- Verify the `<!-- trail:start -->` ... `<!-- trail:end -->` block and the note outside it are intact and unmodified.
