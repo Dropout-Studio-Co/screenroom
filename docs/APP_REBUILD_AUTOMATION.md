@@ -7,7 +7,7 @@ by this automation; they keep their own, separately invoked commands.
 
 | Piece | Path | Role |
 | --- | --- | --- |
-| Hook set (tracked) | `scripts/git-hooks/` | `pre-commit` keeps the no-comments gate; `post-commit`, `post-merge` and `post-rewrite` start a rebuild |
+| Hook set (tracked) | `scripts/git-hooks/` | `pre-commit` enforces the no-comments and `cargo fmt --all --check` gates; `post-commit`, `post-merge` and `post-rewrite` start a rebuild |
 | Worker | `scripts/rebuild-app.sh` | Build, verify, install, record; one at a time |
 | Installer | `scripts/install-app-hooks.sh` | Points `core.hooksPath` at `scripts/git-hooks` and makes the hooks executable |
 | Build | `scripts/package-macos.sh` | The same release build and bundle it always produced |
