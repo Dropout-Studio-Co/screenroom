@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "trail": {
+      "type": "stdio",
+      "command": "trail",
+      "args": [
+        "mcp"
+      ]
+    },
+    "docsrs": {
+      "type": "stdio",
+      "command": "docsrs-mcp",
+      "args": []
+    }
+  }
+}

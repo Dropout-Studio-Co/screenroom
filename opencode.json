@@ -7,6 +7,13 @@
         "mcp"
       ],
       "enabled": true
+    },
+    "docsrs": {
+      "type": "local",
+      "command": [
+        "docsrs-mcp"
+      ],
+      "enabled": true
     }
   }
 }
