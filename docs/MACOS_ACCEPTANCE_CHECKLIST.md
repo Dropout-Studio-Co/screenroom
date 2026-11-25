@@ -28,7 +28,7 @@ every build.
 
 | # | Step | Pass when | Automated (2026-11-01) |
 | --- | --- | --- | --- |
-| 1 | First run: Settings › Add folder › choose the SSD's library folder | The scan row counts up, cards appear before it finishes, and it ends with "Scan finished". | **PASS** — 1,200 files: row counts up, cards on screen mid-walk, ends "Scan finished". OS permission prompt is the owner's. |
+| 1 | First run: Welcome › Add a media location › choose the SSD, select its library folders in Sources, and click Scan selected folders | The scan row counts up, cards appear before it finishes, and it ends with "Scan finished". | **PASS** — 1,200 files: row counts up, cards on screen mid-walk, ends "Scan finished". OS permission prompt is the owner's. |
 | 2 | Library grid after about two minutes | Cards show posters, cover art where a file has one, and runtimes. A series is **one** card. | **PARTIAL** — one card per series, years, runtimes and stored posters all asserted. Whether a poster *looks* right is yours. |
 | 3 | Open a series, use ↑/↓ to pick episode 3, press Enter | Episode 3 plays, not the episode the screen opened on. | **PASS** — and it failed when first run: ↓ could not reach episode 3. Fixed. |
 | 4 | Watch about a minute, press Space, then ←/→ | Pauses and resumes; arrows move ±10 s. **Listen**: speech is in sync with lips. | **PASS** for pause/resume/±10 s (measured). **Listen** is yours. |
@@ -80,8 +80,9 @@ and reports **zero** sockets held.
 Steps 9–11, 13 and 14 need nothing further. What is left is a single pass:
 
 1. Package, verify and open the app; answer Gatekeeper's one-time prompt.
-2. Add the SSD folder — watch the grid fill while the row counts up (1) and
-   whether posters match their titles (2).
+2. Add the SSD through Welcome › Add a media location, select its library folders
+   in Sources and click Scan selected folders — watch the grid fill while the row
+   counts up (1) and whether posters match their titles (2).
 3. Open a series, ↓ ↓ Enter, and listen for a few seconds (4).
 4. In that film: change audio and subtitle language (5); press `f`, check the
    picture fills the screen, leave it, confirm the header returns and one Escape
