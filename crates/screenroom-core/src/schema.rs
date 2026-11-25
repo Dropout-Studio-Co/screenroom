@@ -5,14 +5,14 @@ pub const CREATE: &[&str] = &[
       state TEXT NOT NULL DEFAULT 'disconnected',last_scan_ms INTEGER,volume_identity TEXT,
       folders_configured INTEGER NOT NULL DEFAULT 0 CHECK(folders_configured IN (0,1)))",
     "CREATE TABLE works(id TEXT PRIMARY KEY,identity_key TEXT NOT NULL,title TEXT NOT NULL,
-      kind TEXT NOT NULL CHECK(kind IN ('movie','series','unknown')),year INTEGER,
+      kind TEXT NOT NULL CHECK(kind IN ('movie','series','audio','unknown')),year INTEGER,
       overview TEXT NOT NULL DEFAULT '',genres TEXT NOT NULL DEFAULT '[]',poster_path TEXT,
       confidence REAL NOT NULL DEFAULT 0,
       manual_match INTEGER NOT NULL DEFAULT 0 CHECK(manual_match IN (0,1)),
       metadata_origin TEXT NOT NULL DEFAULT 'legacy',
       metadata_revision INTEGER NOT NULL DEFAULT 0)",
-    "CREATE INDEX works_identity ON works(identity_key)",
-    "CREATE INDEX works_title ON works(title COLLATE NOCASE,kind)",
+    WORKS_IDENTITY,
+    WORKS_TITLE,
     "CREATE TABLE seasons(id TEXT PRIMARY KEY,work_id TEXT NOT NULL REFERENCES works(id),
       number INTEGER NOT NULL,verified_order INTEGER NOT NULL DEFAULT 0,episode_count INTEGER,
       metadata_origin TEXT NOT NULL DEFAULT 'legacy',metadata_provider_id TEXT,
@@ -154,6 +154,29 @@ pub const MIGRATE_8_TO_9: &[&str] = &[
 ];
 
 pub const MIGRATE_9_TO_10: &[&str] = &["ALTER TABLE sources ADD COLUMN volume_identity TEXT"];
+
+pub const WORKS_IDENTITY: &str = "CREATE INDEX IF NOT EXISTS works_identity ON works(identity_key)";
+
+pub const WORKS_TITLE: &str =
+    "CREATE INDEX IF NOT EXISTS works_title ON works(title COLLATE NOCASE,kind)";
+
+pub const MIGRATE_11_TO_12: &[&str] = &[
+    "CREATE TABLE works_new(id TEXT PRIMARY KEY,identity_key TEXT NOT NULL,title TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('movie','series','audio','unknown')),year INTEGER,
+      overview TEXT NOT NULL DEFAULT '',genres TEXT NOT NULL DEFAULT '[]',poster_path TEXT,
+      confidence REAL NOT NULL DEFAULT 0,
+      manual_match INTEGER NOT NULL DEFAULT 0 CHECK(manual_match IN (0,1)),
+      metadata_origin TEXT NOT NULL DEFAULT 'legacy',
+      metadata_revision INTEGER NOT NULL DEFAULT 0)",
+    "INSERT INTO works_new(id, identity_key, title, kind, year, overview, genres, poster_path,
+      confidence, manual_match, metadata_origin, metadata_revision)
+     SELECT id, identity_key, title, kind, year, overview, genres, poster_path, confidence,
+      manual_match, metadata_origin, metadata_revision FROM works",
+    "DROP TABLE works",
+    "ALTER TABLE works_new RENAME TO works",
+    WORKS_IDENTITY,
+    WORKS_TITLE,
+];
 
 pub const MIGRATE_3_TO_4: &[&str] = &[
     EDITIONS_WORK,

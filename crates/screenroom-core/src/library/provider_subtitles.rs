@@ -580,6 +580,9 @@ impl TsdbProvider {
     }
 
     fn lookup_urls(&self, request: &SubtitleSearch, languages: &[String]) -> Vec<String> {
+        if request.kind == MediaKind::Audio {
+            return Vec::new();
+        }
         let mut urls = Vec::new();
         if let Some(tmdb_id) = request.tmdb_id.filter(|id| *id > 0) {
             match request.kind {
@@ -594,7 +597,7 @@ impl TsdbProvider {
                         ));
                     }
                 }
-                MediaKind::Unknown => {}
+                MediaKind::Audio | MediaKind::Unknown => {}
             }
         }
         if let Some(imdb_id) = request.imdb_id.as_deref().and_then(usable_identifier) {
@@ -742,7 +745,7 @@ impl TsdbProvider {
             (MediaKind::Series, _, _) => {
                 imdb_id.map(|imdb_id| self.lookup_url(&format!("/v1/by-imdb/{imdb_id}"), languages))
             }
-            (MediaKind::Unknown, _, _) => None,
+            (MediaKind::Audio, _, _) | (MediaKind::Unknown, _, _) => None,
         }
     }
 
@@ -874,7 +877,7 @@ fn kind_parameter(kind: MediaKind) -> Option<&'static str> {
     match kind {
         MediaKind::Movie => Some("movie"),
         MediaKind::Series => Some("tv"),
-        MediaKind::Unknown => None,
+        MediaKind::Audio | MediaKind::Unknown => None,
     }
 }
 
@@ -1268,5 +1271,39 @@ impl Library {
             ],
         )?;
         Ok(stored)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_audio_search_produces_no_lookup_urls() {
+        let provider = TsdbProvider::new(SubtitleProviderConfig::unconfigured());
+        let languages = vec!["en".to_string()];
+        let request = SubtitleSearch {
+            title: "A Track".to_string(),
+            year: None,
+            kind: MediaKind::Audio,
+            season: Some(1),
+            episode: Some(1),
+            language: "en".to_string(),
+            tmdb_id: Some(42),
+            imdb_id: Some("tt1234567".to_string()),
+            release_name: Some("A.Track.2020".to_string()),
+        };
+
+        assert!(provider.lookup_urls(&request, &languages).is_empty());
+        assert!(kind_parameter(MediaKind::Audio).is_none());
+        assert!(
+            provider
+                .result_lookup_url(
+                    &serde_json::json!({"tmdb_id": 42, "imdb": "tt1234567"}),
+                    &request,
+                    &languages,
+                )
+                .is_none()
+        );
     }
 }

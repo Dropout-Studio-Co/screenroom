@@ -662,6 +662,7 @@ pub fn eyebrow(kind: MediaKind) -> &'static str {
     match kind {
         MediaKind::Movie => "FILM",
         MediaKind::Series => "SERIES",
+        MediaKind::Audio => "AUDIO",
         MediaKind::Unknown => "TITLE",
     }
 }
@@ -966,6 +967,11 @@ mod tests {
             manual_match: false,
             metadata_origin: "nfo".to_string(),
         }
+    }
+
+    #[test]
+    fn an_audio_work_is_labelled_audio() {
+        assert_eq!(detail::eyebrow(MediaKind::Audio), "AUDIO");
     }
 
     #[test]

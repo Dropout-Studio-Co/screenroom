@@ -585,6 +585,7 @@ fn catalogue_match(row: &Value, requested: MediaKind) -> Option<CatalogueMatch> 
     let kind = match requested {
         MediaKind::Series => MediaKind::Series,
         MediaKind::Movie => MediaKind::Movie,
+        MediaKind::Audio => return None,
         MediaKind::Unknown => match media {
             "tv" => MediaKind::Series,
             "movie" => MediaKind::Movie,
@@ -723,9 +724,13 @@ impl CatalogueMetadataProvider for TmdbProvider {
     }
 
     fn search(&self, query: &MetadataQuery) -> Result<Vec<CatalogueMatch>, ProviderError> {
+        if query.kind == MediaKind::Audio {
+            return Ok(Vec::new());
+        }
         let path = match query.kind {
             MediaKind::Movie => "/search/movie",
             MediaKind::Series => "/search/tv",
+            MediaKind::Audio => return Ok(Vec::new()),
             MediaKind::Unknown => "/search/multi",
         };
         let mut params = vec![
@@ -745,6 +750,9 @@ impl CatalogueMetadataProvider for TmdbProvider {
     }
 
     fn work(&self, external_id: &str, kind: MediaKind) -> Result<CatalogueWork, ProviderError> {
+        if kind == MediaKind::Audio {
+            return Err(ProviderError::NotFound);
+        }
         if kind == MediaKind::Series {
             return self.series(external_id).map(|series| CatalogueWork {
                 external_id: series.external_id,
@@ -931,7 +939,62 @@ impl CatalogueMetadataProvider for TmdbProvider {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
+    use crate::library::{HttpResponse, TransportError};
+
+    struct CountingTransport {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl HttpTransport for CountingTransport {
+        fn send(&self, _request: &HttpRequest) -> Result<HttpResponse, TransportError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(TransportError::InvalidUrl)
+        }
+
+        fn supports_scheme(&self, scheme: &str) -> bool {
+            scheme.eq_ignore_ascii_case("https")
+        }
+    }
+
+    fn counting_provider(calls: &Arc<AtomicUsize>) -> TmdbProvider {
+        TmdbProvider::with_system_clock(
+            ProviderConfig::configured(ApiCredential::ApiKey(Secret::new("test-key"))),
+            Box::new(CountingTransport {
+                calls: Arc::clone(calls),
+            }),
+        )
+    }
+
+    #[test]
+    fn an_audio_query_never_reaches_tmdb() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = counting_provider(&calls);
+
+        let matches = provider
+            .search(&MetadataQuery {
+                title: "A Track".to_string(),
+                year: None,
+                kind: MediaKind::Audio,
+            })
+            .expect("an audio search is answered locally");
+        assert!(matches.is_empty());
+
+        let error = provider.work("42", MediaKind::Audio).unwrap_err();
+        assert!(matches!(error, ProviderError::NotFound));
+
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "audio made an HTTP call");
+        assert!(
+            catalogue_match(
+                &serde_json::json!({"id": 1, "title": "A Track", "media_type": "movie"}),
+                MediaKind::Audio,
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     fn a_key_file_supplies_the_credential_a_finder_launch_would_not_have() {
