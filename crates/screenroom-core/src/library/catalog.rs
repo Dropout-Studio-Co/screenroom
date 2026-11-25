@@ -755,7 +755,10 @@ fn ingest_in(tx: &rusqlite::Transaction<'_>, ingest: &Ingest<'_>) -> Result<Stri
         }
     }
 
-    if metadata_enabled(tx)? && (work_is_new || !work_is_protected(tx, &work_id)?) {
+    if parsed.kind != MediaKind::Audio
+        && metadata_enabled(tx)?
+        && (work_is_new || !work_is_protected(tx, &work_id)?)
+    {
         tx.execute(
                 "INSERT OR IGNORE INTO jobs(id, kind, target, status, priority, attempts, next_retry_ms)
                  VALUES(?1, 'metadata', ?2, 'queued', 0, 0, 0)",
@@ -909,6 +912,83 @@ mod tests {
                 counted.fetch_add(1, Ordering::SeqCst);
             }
         }
+    }
+
+    #[test]
+    fn an_audio_file_is_stored_without_seasons_episodes_or_a_metadata_job() {
+        let directory = tempfile::tempdir().unwrap();
+        let library = Library::open_in_memory().unwrap();
+        let source = library.add_source(directory.path(), None).unwrap();
+        library
+            .connection()
+            .execute(
+                "INSERT INTO settings(key, value) VALUES('metadataEnabled', 'true')",
+                [],
+            )
+            .unwrap();
+
+        let audio = parse_filename("Podcast.S01E02.mp3", None);
+        assert_eq!(audio.kind, MediaKind::Audio);
+        library
+            .ingest_file(Ingest {
+                source_id: &source.id,
+                relative_path: "Podcast.S01E02.mp3",
+                fingerprint: "podcast",
+                size: 5,
+                modified_ms: 1,
+                scan_id: "scan-1",
+                parsed: Some(&audio),
+                expected_root: Some(&source.root_path),
+            })
+            .unwrap();
+
+        let items = library
+            .items(&LibraryQuery {
+                kind: Some("audio".to_string()),
+                ..LibraryQuery::page(10)
+            })
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, MediaKind::Audio);
+        assert_eq!(items[0].title, "Podcast S01E02");
+        assert_eq!(items[0].season, None);
+        assert_eq!(items[0].episode, None);
+
+        let film = parse_filename("Film.2020.mkv", None);
+        library
+            .ingest_file(Ingest {
+                source_id: &source.id,
+                relative_path: "Film.2020.mkv",
+                fingerprint: "film",
+                size: 5,
+                modified_ms: 1,
+                scan_id: "scan-1",
+                parsed: Some(&film),
+                expected_root: Some(&source.root_path),
+            })
+            .unwrap();
+
+        let connection = library.connection();
+        for table in ["seasons", "episodes"] {
+            let count: i64 = connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, 0, "{table} must stay empty for an audio work");
+        }
+        let jobs: Vec<String> = {
+            let mut statement = connection
+                .prepare("SELECT target FROM jobs WHERE kind = 'metadata'")
+                .unwrap();
+            statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        assert_eq!(jobs.len(), 1, "only the film queues metadata: {jobs:?}");
+        assert_ne!(jobs[0], items[0].work_id);
     }
 
     #[test]

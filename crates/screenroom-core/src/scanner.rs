@@ -12,10 +12,26 @@ use crate::fingerprint::media_fingerprint;
 use crate::library::{Ingest, Library, StoredLocator};
 use crate::volume::VolumeIdentity;
 
+pub const VIDEO_EXTENSIONS: &[&str] = &[
+    "mkv", "mp4", "m4v", "avi", "mov", "webm", "mpeg", "mpg", "ts", "m2ts", "wmv", "flv", "ogv",
+    "3gp", "vob", "divx", "mts", "rmvb",
+];
+
+pub const AUDIO_EXTENSIONS: &[&str] = &[
+    "mp3", "flac", "m4a", "aac", "ogg", "oga", "opus", "wav", "aiff", "aif", "wma", "mka", "alac",
+];
+
 pub const MEDIA_EXTENSIONS: &[&str] = &[
     "mkv", "mp4", "m4v", "avi", "mov", "webm", "mpeg", "mpg", "ts", "m2ts", "wmv", "flv", "ogv",
-    "3gp",
+    "3gp", "vob", "divx", "mts", "rmvb", "mp3", "flac", "m4a", "aac", "ogg", "oga", "opus", "wav",
+    "aiff", "aif", "wma", "mka", "alac",
 ];
+
+pub fn is_audio_extension(extension: &str) -> bool {
+    AUDIO_EXTENSIONS
+        .iter()
+        .any(|ext| ext.eq_ignore_ascii_case(extension))
+}
 
 const DOWNLOAD_SUFFIXES: &[&str] = &[".part", ".crdownload", ".download", ".aria2", ".!qB"];
 
@@ -1150,6 +1166,73 @@ mod tests {
                 observed.fetch_add(1, Ordering::SeqCst);
             }
         })
+    }
+
+    #[test]
+    fn audio_and_extended_video_extensions_are_recognised_case_insensitively() {
+        assert_eq!(VIDEO_EXTENSIONS.len(), 18);
+        assert_eq!(AUDIO_EXTENSIONS.len(), 13);
+        assert_eq!(MEDIA_EXTENSIONS.len(), 31);
+
+        for extension in AUDIO_EXTENSIONS {
+            assert!(is_audio_extension(extension), "{extension} is audio");
+            assert!(
+                is_audio_extension(&extension.to_uppercase()),
+                "{extension} is audio in any case"
+            );
+            assert!(MEDIA_EXTENSIONS.contains(extension));
+            assert!(VIDEO_EXTENSIONS.iter().all(|video| video != extension));
+            assert!(
+                is_media(Path::new(&format!("Track.{extension}"))),
+                "Track.{extension} is media"
+            );
+            assert!(is_media(Path::new(&format!(
+                "Track.{}",
+                extension.to_uppercase()
+            ))));
+        }
+
+        for extension in ["vob", "divx", "mts", "rmvb"] {
+            assert!(VIDEO_EXTENSIONS.contains(&extension));
+            assert!(MEDIA_EXTENSIONS.contains(&extension));
+            assert!(!is_audio_extension(extension), "{extension} is not audio");
+            assert!(is_media(Path::new(&format!("Clip.{extension}"))));
+            assert!(is_media(Path::new(&format!(
+                "Clip.{}",
+                extension.to_uppercase()
+            ))));
+        }
+
+        for name in [
+            "Film",
+            "Film.mp",
+            "Film.mkvx",
+            "Film.mp3.part",
+            "Film.mkv.part",
+        ] {
+            assert!(!is_media(Path::new(name)), "{name} is not media");
+        }
+        assert!(!is_audio_extension(""));
+        assert!(!is_audio_extension("mp"));
+        assert!(!is_audio_extension("mkv"));
+    }
+
+    #[test]
+    fn the_watcher_accepts_audio_and_the_extended_video_extensions() {
+        for extension in AUDIO_EXTENSIONS {
+            assert!(
+                crate::watch::accept(Path::new(&format!("/media/Track.{extension}"))),
+                "the watcher refused {extension}"
+            );
+        }
+        for extension in ["vob", "divx", "mts", "rmvb"] {
+            assert!(
+                crate::watch::accept(Path::new(&format!("/media/Clip.{extension}"))),
+                "the watcher refused {extension}"
+            );
+        }
+        assert!(!crate::watch::accept(Path::new("/media/Track.mp3.part")));
+        assert!(!crate::watch::accept(Path::new("/media/Track.mp")));
     }
 
     #[test]

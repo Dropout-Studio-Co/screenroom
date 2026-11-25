@@ -43,6 +43,6 @@ pub use scanner::{
 pub use volume::VolumeIdentity;
 pub use watch::{MAX_PLAN_ENTRIES, MediaChange, Plan};
 
-pub const SCHEMA_VERSION: i64 = 11;
+pub const SCHEMA_VERSION: i64 = 12;
 
 pub const BACKUP_FORMAT_VERSION: i64 = 2;

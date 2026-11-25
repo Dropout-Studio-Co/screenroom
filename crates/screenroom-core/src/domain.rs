@@ -7,6 +7,8 @@ pub enum MediaKind {
 
     Series,
 
+    Audio,
+
     Unknown,
 }
 
@@ -15,6 +17,7 @@ impl MediaKind {
         match self {
             Self::Movie => "movie",
             Self::Series => "series",
+            Self::Audio => "audio",
             Self::Unknown => "unknown",
         }
     }
@@ -23,6 +26,7 @@ impl MediaKind {
         match value {
             "movie" => Some(Self::Movie),
             "series" => Some(Self::Series),
+            "audio" => Some(Self::Audio),
             "unknown" => Some(Self::Unknown),
             _ => None,
         }
@@ -265,9 +269,16 @@ mod tests {
 
     #[test]
     fn media_kind_round_trips_through_its_stored_spelling() {
-        for kind in [MediaKind::Movie, MediaKind::Series, MediaKind::Unknown] {
+        for kind in [
+            MediaKind::Movie,
+            MediaKind::Series,
+            MediaKind::Audio,
+            MediaKind::Unknown,
+        ] {
             assert_eq!(MediaKind::parse(kind.as_str()), Some(kind));
         }
+        assert_eq!(MediaKind::Audio.as_str(), "audio");
+        assert_eq!(MediaKind::parse("audio"), Some(MediaKind::Audio));
         assert_eq!(MediaKind::parse("series"), Some(MediaKind::Series));
         assert_eq!(MediaKind::parse("Series"), None);
         assert_eq!(MediaKind::parse(""), None);
@@ -312,6 +323,11 @@ mod tests {
             episode(MediaKind::Unknown, Some(1), Some(1)).episode_label(),
             "",
             "an unclassified file keeps the plain play label"
+        );
+        assert_eq!(
+            episode(MediaKind::Audio, Some(1), Some(1)).episode_label(),
+            "",
+            "an audio track has no episode to name"
         );
         assert_eq!(
             episode(MediaKind::Series, Some(1), None).episode_label(),

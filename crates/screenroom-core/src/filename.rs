@@ -61,19 +61,28 @@ pub fn parse_filename(filename: &str, folder: Option<&str>) -> ParsedName {
     let mut name = stem.replace('_', ".");
     name = RESOLUTION.replace_all(&name, " ").into_owned();
 
-    let episodic = EPISODIC_SE
-        .captures(&name)
-        .or_else(|| EPISODIC_AX.captures(&name))
-        .and_then(|captures| {
-            Some(Episodic {
-                start: captures.get(0)?.start(),
-                season: captures.get(1)?.as_str().parse().ok()?,
-                episode: captures.get(2)?.as_str().parse().ok()?,
-                end: captures
-                    .get(3)
-                    .and_then(|end| end.as_str().parse::<i64>().ok()),
+    let is_audio = Path::new(filename)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(crate::scanner::is_audio_extension);
+
+    let episodic = if is_audio {
+        None
+    } else {
+        EPISODIC_SE
+            .captures(&name)
+            .or_else(|| EPISODIC_AX.captures(&name))
+            .and_then(|captures| {
+                Some(Episodic {
+                    start: captures.get(0)?.start(),
+                    season: captures.get(1)?.as_str().parse().ok()?,
+                    episode: captures.get(2)?.as_str().parse().ok()?,
+                    end: captures
+                        .get(3)
+                        .and_then(|end| end.as_str().parse::<i64>().ok()),
+                })
             })
-        });
+    };
     let years: Vec<_> = YEAR
         .find_iter(&name)
         .filter(|matched| match &episodic {
@@ -148,7 +157,9 @@ pub fn parse_filename(filename: &str, folder: Option<&str>) -> ParsedName {
         (_, first) => first,
     };
 
-    let kind = if episodic.is_some() {
+    let kind = if is_audio {
+        MediaKind::Audio
+    } else if episodic.is_some() {
         MediaKind::Series
     } else if unknown {
         MediaKind::Unknown
@@ -221,6 +232,51 @@ impl FileNameStem for Path {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_files_never_read_as_episodes_or_films() {
+        for (filename, title) in [
+            ("Track 01.mp3", "Track 01"),
+            ("Song.flac", "Song"),
+            ("Song.M4A", "Song"),
+        ] {
+            let parsed = parse_filename(filename, None);
+            assert_eq!(parsed.kind, MediaKind::Audio, "{filename}");
+            assert_eq!(parsed.title, title);
+            assert_eq!(parsed.season, None);
+            assert_eq!(parsed.episode, None);
+            assert_eq!(parsed.episode_end, None);
+        }
+
+        for filename in ["Podcast.S01E02.mp3", "Mix.2x07.flac"] {
+            let parsed = parse_filename(filename, None);
+            assert_eq!(parsed.kind, MediaKind::Audio, "{filename}");
+            assert_eq!(parsed.season, None, "{filename}");
+            assert_eq!(parsed.episode, None, "{filename}");
+            assert_eq!(parsed.episode_end, None, "{filename}");
+        }
+    }
+
+    #[test]
+    fn a_numeric_audio_track_keeps_its_stem_as_an_audio_title() {
+        let parsed = parse_filename("01.mp3", None);
+        assert_eq!(parsed.kind, MediaKind::Audio);
+        assert_eq!(parsed.title, "01");
+        assert_eq!(parsed.confidence, 0.1);
+    }
+
+    #[test]
+    fn new_video_extensions_keep_their_film_and_series_classification() {
+        let film = parse_filename("Clip.2020.vob", None);
+        assert_eq!(film.kind, MediaKind::Movie);
+        assert_eq!(film.title, "Clip");
+        assert_eq!(film.year, Some(2020));
+
+        let episode = parse_filename("Show.S01E01.mts", None);
+        assert_eq!(episode.kind, MediaKind::Series);
+        assert_eq!(episode.season, Some(1));
+        assert_eq!(episode.episode, Some(1));
+    }
 
     #[test]
     fn reads_common_episode_names() {

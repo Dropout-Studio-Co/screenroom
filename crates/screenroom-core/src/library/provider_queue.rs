@@ -377,6 +377,7 @@ impl Library {
                         ELSE 0 END priority
                  FROM works w
                  WHERE w.manual_match = 0
+                   AND w.kind != 'audio'
                    AND EXISTS(SELECT 1 FROM editions e JOIN files f ON f.edition_id = e.id
                               JOIN sources s ON s.id = f.source_id
                               WHERE e.work_id = w.id AND s.state != 'removed')
@@ -696,6 +697,16 @@ impl Library {
         if work.manual_match {
             return Ok(());
         }
+        if work.kind == MediaKind::Audio {
+            return match task.target {
+                EnrichmentTarget::Work => Ok(()),
+                EnrichmentTarget::Season { .. } | EnrichmentTarget::Episode { .. } => {
+                    Err(EnrichmentFailure::Local(
+                        "That work is audio, so it has no seasons.".to_string(),
+                    ))
+                }
+            };
+        }
 
         let lookup_kind = if task.target == EnrichmentTarget::Work {
             work.kind
@@ -810,9 +821,203 @@ impl Library {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
-    use crate::library::MetadataOrigin;
+    use crate::library::{
+        CatalogueEpisode, CatalogueMatch, CatalogueSeason, MetadataOrigin, ProviderCapability,
+        ProviderImage,
+    };
     use crate::{SCHEMA_VERSION, schema};
+
+    struct CountingProvider {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl CountingProvider {
+        fn counted(&self) -> std::result::Result<(), ProviderError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(ProviderError::NotFound)
+        }
+    }
+
+    impl CatalogueMetadataProvider for CountingProvider {
+        fn provider_name(&self) -> &'static str {
+            "counting"
+        }
+
+        fn capability(&self) -> ProviderCapability {
+            ProviderCapability::configured("counting", "en-US")
+        }
+
+        fn search(
+            &self,
+            _query: &MetadataQuery,
+        ) -> std::result::Result<Vec<CatalogueMatch>, ProviderError> {
+            self.counted().map(|()| Vec::new())
+        }
+
+        fn work(
+            &self,
+            _external_id: &str,
+            _kind: MediaKind,
+        ) -> std::result::Result<CatalogueWork, ProviderError> {
+            self.counted().map(|()| unreachable!())
+        }
+
+        fn series(
+            &self,
+            _external_id: &str,
+        ) -> std::result::Result<CatalogueSeries, ProviderError> {
+            self.counted().map(|()| unreachable!())
+        }
+
+        fn season(
+            &self,
+            _external_id: &str,
+            _number: i64,
+        ) -> std::result::Result<CatalogueSeason, ProviderError> {
+            self.counted().map(|()| unreachable!())
+        }
+
+        fn episode(
+            &self,
+            _external_id: &str,
+            _season: i64,
+            _episode: i64,
+        ) -> std::result::Result<CatalogueEpisode, ProviderError> {
+            self.counted().map(|()| unreachable!())
+        }
+
+        fn image_url(&self, _path: &str, _size: ImageSize) -> Option<String> {
+            None
+        }
+
+        fn image(
+            &self,
+            _path: &str,
+            _size: ImageSize,
+        ) -> std::result::Result<ProviderImage, ProviderError> {
+            Err(ProviderError::NotFound)
+        }
+    }
+
+    fn audio_library(path: &std::path::Path) -> (Library, String) {
+        let library = Library::open_in_memory().expect("library");
+        let source = library.add_source(path, None).expect("source");
+        let parsed = crate::parse_filename("Podcast.S01E02.mp3", None);
+        library
+            .ingest_file(crate::library::Ingest {
+                source_id: &source.id,
+                relative_path: "Podcast.S01E02.mp3",
+                fingerprint: "podcast",
+                size: 5,
+                modified_ms: 1,
+                scan_id: "scan-1",
+                parsed: Some(&parsed),
+                expected_root: Some(&source.root_path),
+            })
+            .expect("ingest");
+        let work = library
+            .items(&super::super::LibraryQuery {
+                kind: Some("audio".to_string()),
+                ..super::super::LibraryQuery::page(10)
+            })
+            .expect("items")
+            .remove(0)
+            .work_id;
+        (library, work)
+    }
+
+    #[test]
+    fn audio_works_are_never_enqueued_whole_library_and_never_call_a_provider() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let (library, audio_work) = audio_library(directory.path());
+
+        assert_eq!(library.enqueue_whole_library("en-US").expect("enqueued"), 0);
+        assert_eq!(library.enrichment_queue_depth().expect("depth").queued, 0);
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = CountingProvider {
+            calls: Arc::clone(&calls),
+        };
+        let task = library
+            .enqueue_enrichment(&audio_work, EnrichmentTarget::Work, "en-US", 0)
+            .expect("task");
+        let report = library
+            .drain_enrichment_queue(&provider, 10, 1_000)
+            .expect("drained");
+        assert_eq!(report.succeeded, 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "audio called the provider");
+        assert_eq!(
+            library
+                .enrichment_task(&task)
+                .expect("lookup")
+                .expect("task")
+                .state,
+            EnrichmentState::Done
+        );
+
+        let season = library
+            .enqueue_enrichment(
+                &audio_work,
+                EnrichmentTarget::Season { season: 1 },
+                "en-US",
+                0,
+            )
+            .expect("season task");
+        let report = library
+            .drain_enrichment_queue(&provider, 10, 2_000)
+            .expect("drained");
+        assert_eq!(report.failed, 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(
+            library
+                .enrichment_task(&season)
+                .expect("lookup")
+                .expect("task")
+                .last_error
+                .unwrap_or_default()
+                .contains("no seasons")
+        );
+
+        let film = crate::parse_filename("Film.2020.mkv", None);
+        let source_id: String = library
+            .connection()
+            .query_row("SELECT id FROM sources LIMIT 1", [], |row| row.get(0))
+            .expect("source");
+        library
+            .ingest_file(crate::library::Ingest {
+                source_id: &source_id,
+                relative_path: "Film.2020.mkv",
+                fingerprint: "film",
+                size: 5,
+                modified_ms: 1,
+                scan_id: "scan-1",
+                parsed: Some(&film),
+                expected_root: None,
+            })
+            .expect("ingest");
+
+        assert_eq!(library.enqueue_whole_library("en-US").expect("enqueued"), 1);
+        let targets: Vec<String> = {
+            let connection = library.connection();
+            let mut statement = connection
+                .prepare(
+                    "SELECT work_id FROM enrichment_queue
+                     WHERE target_kind = 'work' AND state NOT IN ('done','cancelled')",
+                )
+                .expect("prepare");
+            statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .expect("rows")
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .expect("rows")
+        };
+        assert_eq!(targets.len(), 1);
+        assert_ne!(targets[0], audio_work);
+    }
 
     fn queue_is_present(library: &Library) -> bool {
         let found: i64 = library

@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use rusqlite::Connection;
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::Profile;
@@ -253,6 +254,203 @@ fn add_source_folders(tx: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn migrate_works_kind_check(tx: &Connection) -> Result<()> {
+    let sql: Option<String> = tx
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'works'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(sql) = sql else {
+        return Ok(());
+    };
+    if sql.contains("'audio'") {
+        return Ok(());
+    }
+    for statement in schema::MIGRATE_11_TO_12 {
+        tx.execute(statement, [])?;
+    }
+    let violation: Option<String> = {
+        let mut statement = tx.prepare("PRAGMA foreign_key_check")?;
+        let mut rows = statement.query([])?;
+        match rows.next()? {
+            Some(row) => Some(row.get::<_, String>(0)?),
+            None => None,
+        }
+    };
+    if let Some(table) = violation {
+        return Err(CoreError::library(
+            "corrupt_database",
+            format!("Rebuilding the work table would break a foreign key in {table}."),
+        ));
+    }
+    Ok(())
+}
+
+fn migrate(connection: &mut Connection, version: i64) -> Result<()> {
+    match version {
+        0 => {
+            let tx = connection.transaction()?;
+            tx.execute_batch("PRAGMA foreign_keys = ON;")?;
+            for statement in schema::CREATE {
+                tx.execute(statement, [])?;
+            }
+            tx.execute(
+                "INSERT INTO profiles(id, name) VALUES(?1, ?2)",
+                [new_id(), "Me".to_string()],
+            )?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.commit()?;
+        }
+        v if v == SCHEMA_VERSION => {}
+        2 => {
+            let tx = connection.transaction()?;
+            for statement in schema::MIGRATE_2_TO_3 {
+                tx.execute(statement, [])?;
+            }
+            for statement in schema::MIGRATE_3_TO_4 {
+                tx.execute(statement, [])?;
+            }
+            for statement in schema::MIGRATE_4_TO_5 {
+                tx.execute(statement, [])?;
+            }
+            add_metadata_origin(&tx)?;
+            add_bookmarks_table(&tx)?;
+            add_subtitles_table(&tx)?;
+            add_enrichment_queue(&tx)?;
+            add_volume_identity(&tx)?;
+            add_source_folders(&tx)?;
+            migrate_works_kind_check(&tx)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.commit()?;
+        }
+        3 => {
+            let tx = connection.transaction()?;
+            for statement in schema::MIGRATE_3_TO_4 {
+                tx.execute(statement, [])?;
+            }
+            for statement in schema::MIGRATE_4_TO_5 {
+                tx.execute(statement, [])?;
+            }
+            add_metadata_origin(&tx)?;
+            add_bookmarks_table(&tx)?;
+            add_subtitles_table(&tx)?;
+            add_enrichment_queue(&tx)?;
+            add_volume_identity(&tx)?;
+            add_source_folders(&tx)?;
+            migrate_works_kind_check(&tx)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.commit()?;
+        }
+        4 => {
+            let tx = connection.transaction()?;
+            for statement in schema::MIGRATE_4_TO_5 {
+                tx.execute(statement, [])?;
+            }
+            add_metadata_origin(&tx)?;
+            add_bookmarks_table(&tx)?;
+            add_subtitles_table(&tx)?;
+            add_enrichment_queue(&tx)?;
+            add_volume_identity(&tx)?;
+            add_source_folders(&tx)?;
+            migrate_works_kind_check(&tx)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.commit()?;
+        }
+        5 => {
+            let tx = connection.transaction()?;
+            add_metadata_origin(&tx)?;
+            add_bookmarks_table(&tx)?;
+            add_subtitles_table(&tx)?;
+            add_enrichment_queue(&tx)?;
+            add_volume_identity(&tx)?;
+            add_source_folders(&tx)?;
+            migrate_works_kind_check(&tx)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.commit()?;
+        }
+        6 => {
+            let tx = connection.transaction()?;
+            add_bookmarks_table(&tx)?;
+            add_subtitles_table(&tx)?;
+            add_enrichment_queue(&tx)?;
+            add_volume_identity(&tx)?;
+            add_source_folders(&tx)?;
+            migrate_works_kind_check(&tx)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.commit()?;
+        }
+        7 => {
+            let tx = connection.transaction()?;
+            add_subtitles_table(&tx)?;
+            add_enrichment_queue(&tx)?;
+            add_volume_identity(&tx)?;
+            add_source_folders(&tx)?;
+            migrate_works_kind_check(&tx)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.commit()?;
+        }
+        8 => {
+            let tx = connection.transaction()?;
+            add_enrichment_queue(&tx)?;
+            add_volume_identity(&tx)?;
+            add_source_folders(&tx)?;
+            migrate_works_kind_check(&tx)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.commit()?;
+        }
+        9 => {
+            let tx = connection.transaction()?;
+            add_volume_identity(&tx)?;
+            add_source_folders(&tx)?;
+            migrate_works_kind_check(&tx)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.commit()?;
+        }
+        10 => {
+            let tx = connection.transaction()?;
+            add_source_folders(&tx)?;
+            migrate_works_kind_check(&tx)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.commit()?;
+        }
+        11 => {
+            let tx = connection.transaction()?;
+            migrate_works_kind_check(&tx)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.commit()?;
+        }
+        1 => {
+            return Err(CoreError::library(
+                "migration_unavailable",
+                "This database needs an unsupported migration.",
+            ));
+        }
+        future => {
+            return Err(CoreError::library(
+                "future_database",
+                format!(
+                    "This library was written by a newer Screenroom (schema {future}). \
+                     Update the app instead of resetting your data."
+                ),
+            ));
+        }
+    }
+
+    if version != 0 && version != SCHEMA_VERSION {
+        let integrity: String =
+            connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        if integrity != "ok" {
+            return Err(CoreError::library(
+                "corrupt_database",
+                "The library failed its integrity check after migration. Restore a validated backup.",
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl Library {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -315,139 +513,14 @@ impl Library {
             Self::heal_missing_tables(&connection)?;
         }
 
-        match version {
-            0 => {
-                let tx = connection.transaction()?;
-                tx.execute_batch("PRAGMA foreign_keys = ON;")?;
-                for statement in schema::CREATE {
-                    tx.execute(statement, [])?;
-                }
-                tx.execute(
-                    "INSERT INTO profiles(id, name) VALUES(?1, ?2)",
-                    [new_id(), "Me".to_string()],
-                )?;
-                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-                tx.commit()?;
-            }
-            v if v == SCHEMA_VERSION => {}
-            2 => {
-                let tx = connection.transaction()?;
-                for statement in schema::MIGRATE_2_TO_3 {
-                    tx.execute(statement, [])?;
-                }
-                for statement in schema::MIGRATE_3_TO_4 {
-                    tx.execute(statement, [])?;
-                }
-                for statement in schema::MIGRATE_4_TO_5 {
-                    tx.execute(statement, [])?;
-                }
-                add_metadata_origin(&tx)?;
-                add_bookmarks_table(&tx)?;
-                add_subtitles_table(&tx)?;
-                add_enrichment_queue(&tx)?;
-                add_volume_identity(&tx)?;
-                add_source_folders(&tx)?;
-                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-                tx.commit()?;
-            }
-            3 => {
-                let tx = connection.transaction()?;
-                for statement in schema::MIGRATE_3_TO_4 {
-                    tx.execute(statement, [])?;
-                }
-                for statement in schema::MIGRATE_4_TO_5 {
-                    tx.execute(statement, [])?;
-                }
-                add_metadata_origin(&tx)?;
-                add_bookmarks_table(&tx)?;
-                add_subtitles_table(&tx)?;
-                add_enrichment_queue(&tx)?;
-                add_volume_identity(&tx)?;
-                add_source_folders(&tx)?;
-                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-                tx.commit()?;
-            }
-            4 => {
-                let tx = connection.transaction()?;
-                for statement in schema::MIGRATE_4_TO_5 {
-                    tx.execute(statement, [])?;
-                }
-                add_metadata_origin(&tx)?;
-                add_bookmarks_table(&tx)?;
-                add_subtitles_table(&tx)?;
-                add_enrichment_queue(&tx)?;
-                add_volume_identity(&tx)?;
-                add_source_folders(&tx)?;
-                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-                tx.commit()?;
-            }
-            5 => {
-                let tx = connection.transaction()?;
-                add_metadata_origin(&tx)?;
-                add_bookmarks_table(&tx)?;
-                add_subtitles_table(&tx)?;
-                add_enrichment_queue(&tx)?;
-                add_volume_identity(&tx)?;
-                add_source_folders(&tx)?;
-                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-                tx.commit()?;
-            }
-            6 => {
-                let tx = connection.transaction()?;
-                add_bookmarks_table(&tx)?;
-                add_subtitles_table(&tx)?;
-                add_enrichment_queue(&tx)?;
-                add_volume_identity(&tx)?;
-                add_source_folders(&tx)?;
-                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-                tx.commit()?;
-            }
-            7 => {
-                let tx = connection.transaction()?;
-                add_subtitles_table(&tx)?;
-                add_enrichment_queue(&tx)?;
-                add_volume_identity(&tx)?;
-                add_source_folders(&tx)?;
-                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-                tx.commit()?;
-            }
-            8 => {
-                let tx = connection.transaction()?;
-                add_enrichment_queue(&tx)?;
-                add_volume_identity(&tx)?;
-                add_source_folders(&tx)?;
-                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-                tx.commit()?;
-            }
-            9 => {
-                let tx = connection.transaction()?;
-                add_volume_identity(&tx)?;
-                add_source_folders(&tx)?;
-                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-                tx.commit()?;
-            }
-            10 => {
-                let tx = connection.transaction()?;
-                add_source_folders(&tx)?;
-                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-                tx.commit()?;
-            }
-            1 => {
-                return Err(CoreError::library(
-                    "migration_unavailable",
-                    "This database needs an unsupported migration.",
-                ));
-            }
-            future => {
-                return Err(CoreError::library(
-                    "future_database",
-                    format!(
-                        "This library was written by a newer Screenroom (schema {future}). \
-                         Update the app instead of resetting your data."
-                    ),
-                ));
-            }
+        if (2..SCHEMA_VERSION).contains(&version) {
+            connection.pragma_update(None, "foreign_keys", false)?;
         }
+        let outcome = migrate(&mut connection, version);
+        if (2..SCHEMA_VERSION).contains(&version) {
+            connection.pragma_update(None, "foreign_keys", true)?;
+        }
+        outcome?;
 
         connection.execute("UPDATE sessions SET status = 'closed'", [])?;
         connection.execute(
@@ -627,6 +700,142 @@ pub(crate) fn new_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_schema_eleven_library_gains_audio_kind_and_keeps_all_rows_and_foreign_keys() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("library.db");
+        {
+            let connection = rusqlite::Connection::open(&path).expect("open");
+            for statement in schema::CREATE {
+                connection.execute(statement, []).expect("schema");
+            }
+            connection
+                .execute_batch(
+                    "CREATE TABLE works_v11(id TEXT PRIMARY KEY,identity_key TEXT NOT NULL,
+                       title TEXT NOT NULL,
+                       kind TEXT NOT NULL CHECK(kind IN ('movie','series','unknown')),year INTEGER,
+                       overview TEXT NOT NULL DEFAULT '',genres TEXT NOT NULL DEFAULT '[]',
+                       poster_path TEXT,confidence REAL NOT NULL DEFAULT 0,
+                       manual_match INTEGER NOT NULL DEFAULT 0 CHECK(manual_match IN (0,1)),
+                       metadata_origin TEXT NOT NULL DEFAULT 'legacy',
+                       metadata_revision INTEGER NOT NULL DEFAULT 0);
+                     INSERT INTO works_v11 SELECT id, identity_key, title, kind, year, overview,
+                       genres, poster_path, confidence, manual_match, metadata_origin,
+                       metadata_revision FROM works;
+                     DROP TABLE works;
+                     ALTER TABLE works_v11 RENAME TO works;
+                     CREATE INDEX works_identity ON works(identity_key);
+                     CREATE INDEX works_title ON works(title COLLATE NOCASE,kind);
+                     INSERT INTO profiles(id, name) VALUES('p', 'Me');
+                     INSERT INTO sources(id, label, root_path, state)
+                       VALUES('s', 'Drive', '/Volumes/Drive', 'available');
+                     INSERT INTO works(id, identity_key, title, kind, year)
+                       VALUES('w', 'kept', 'Kept', 'movie', 2020);
+                     INSERT INTO seasons(id, work_id, number) VALUES('se', 'w', 1);
+                     INSERT INTO episodes(id, season_id, number, title)
+                       VALUES('ep', 'se', 1, 'Pilot');
+                     INSERT INTO editions(id, work_id, label) VALUES('e', 'w', 'Main');
+                     INSERT INTO files(id, source_id, edition_id, relative_path, filename, size,
+                       modified_ms, fingerprint, available, added_ms)
+                       VALUES('f', 's', 'e', 'Kept.mkv', 'Kept.mkv', 5, 1, 'fp', 1, 1);
+                     INSERT INTO file_episodes(file_id, episode_id, sequence)
+                       VALUES('f', 'ep', 0);
+                     INSERT INTO watchlist(profile_id, work_id, favorite, watchlisted, created_ms)
+                       VALUES('p', 'w', 1, 1, 1);
+                     INSERT INTO overrides(work_id, field, value, updated_ms)
+                       VALUES('w', 'title', 'Kept', 1);
+                     INSERT INTO external_identities(work_id, provider, external_id, confidence)
+                       VALUES('w', 'tmdb', '42', 0.9);
+                     INSERT INTO artwork(work_id, file_id, width, height, sampled_at_ms,
+                       created_ms, bytes)
+                       VALUES('w', 'f', 2, 2, 1, 1, X'00');
+                     INSERT INTO enrichment_queue(id, work_id, target_kind, language, state,
+                       created_ms, updated_ms)
+                       VALUES('q', 'w', 'work', 'en-US', 'queued', 1, 1);",
+                )
+                .expect("v11 rows");
+            connection
+                .pragma_update(None, "user_version", 11)
+                .expect("version");
+        }
+
+        let library = Library::open(&path).expect("migrated");
+        let version: i64 = library
+            .connection()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("version");
+        assert_eq!(version, 12);
+        assert_eq!(version, SCHEMA_VERSION);
+
+        {
+            let connection = library.connection();
+            let integrity: String = connection
+                .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+                .expect("integrity");
+            assert_eq!(integrity, "ok");
+            let mut statement = connection
+                .prepare("PRAGMA foreign_key_check")
+                .expect("foreign keys");
+            let violations = statement
+                .query_map([], |_| Ok(()))
+                .expect("foreign keys")
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .expect("foreign keys");
+            assert!(violations.is_empty(), "foreign keys broke: {violations:?}");
+
+            for table in [
+                "works",
+                "seasons",
+                "episodes",
+                "editions",
+                "files",
+                "watchlist",
+                "overrides",
+                "external_identities",
+                "artwork",
+                "enrichment_queue",
+            ] {
+                let count: i64 = connection
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get(0)
+                    })
+                    .expect("count");
+                assert_eq!(count, 1, "{table} lost its row");
+            }
+
+            for index in ["works_identity", "works_title"] {
+                let found: i64 = connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?1",
+                        [index],
+                        |row| row.get(0),
+                    )
+                    .expect("index lookup");
+                assert_eq!(found, 1, "{index} is missing after the migration");
+            }
+
+            connection
+                .execute(
+                    "INSERT INTO works(id, identity_key, title, kind)
+                     VALUES('a', 'audio-key', 'Track', 'audio')",
+                    [],
+                )
+                .expect("an audio work is accepted");
+            assert!(
+                connection
+                    .execute(
+                        "INSERT INTO works(id, identity_key, title, kind)
+                         VALUES('bad', 'bad-key', 'Bad', 'invalid')",
+                        [],
+                    )
+                    .is_err(),
+                "the kind check still rejects an unknown kind"
+            );
+        }
+
+        assert_eq!(library.work_metadata("w").expect("kept work").title, "Kept");
+    }
 
     #[test]
     fn removing_the_default_profile_clears_its_preference_and_unknown_ids_fail() {

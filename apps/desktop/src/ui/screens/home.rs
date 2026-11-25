@@ -24,6 +24,8 @@ const FILMS: &str = "Films";
 
 const SERIES: &str = "Series";
 
+const AUDIO: &str = "Audio";
+
 const PROGRESS_HEIGHT: f32 = 2.0;
 
 const INVITATION_WIDTH: f32 = 560.0;
@@ -353,7 +355,11 @@ fn shelves<'a>(items: &[&'a LibraryItem]) -> Vec<(&'static str, Vec<&'a LibraryI
     recent.sort_by(|a, b| b.added_ms.cmp(&a.added_ms).then_with(|| a.id.cmp(&b.id)));
     push_shelf(&mut result, RECENT, recent);
 
-    for (kind, label) in [(MediaKind::Movie, FILMS), (MediaKind::Series, SERIES)] {
+    for (kind, label) in [
+        (MediaKind::Movie, FILMS),
+        (MediaKind::Series, SERIES),
+        (MediaKind::Audio, AUDIO),
+    ] {
         let cards: Vec<&'a LibraryItem> = everything
             .iter()
             .copied()
@@ -659,6 +665,7 @@ fn kind_label(kind: MediaKind) -> Option<&'static str> {
     match kind {
         MediaKind::Movie => Some("Film"),
         MediaKind::Series => Some("Series"),
+        MediaKind::Audio => Some(AUDIO),
         MediaKind::Unknown => None,
     }
 }
@@ -923,6 +930,28 @@ mod tests {
         assert_eq!(rails[0].0, "Continue watching");
         assert!(rails.iter().any(|(label, _)| *label == "Films"));
         assert!(rails.iter().all(|(_, cards)| !cards.is_empty()));
+    }
+
+    #[test]
+    fn audio_has_its_own_label_and_shelf_only_when_it_exists() {
+        assert_eq!(home::kind_label(MediaKind::Audio), Some("Audio"));
+
+        let audio = [item("track", "Track", MediaKind::Audio, 0, 0, 10)];
+        let cards: Vec<&LibraryItem> = audio.iter().collect();
+        let shelves = home::shelves(&cards);
+        assert!(
+            shelves
+                .iter()
+                .any(|(label, cards)| *label == "Audio" && cards.len() == 1)
+        );
+
+        let film = [item("film", "Film", MediaKind::Movie, 0, 0, 10)];
+        let cards: Vec<&LibraryItem> = film.iter().collect();
+        assert!(
+            home::shelves(&cards)
+                .iter()
+                .all(|(label, _)| *label != "Audio")
+        );
     }
 
     #[test]
