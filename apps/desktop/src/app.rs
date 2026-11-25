@@ -144,15 +144,13 @@ fn window_size_from(width: Option<&str>, height: Option<&str>) -> iced::Size {
     )
 }
 
-fn opening_screen() -> Screen {
-    start_screen_from(std::env::var("SCREENROOM_START_SCREEN").ok().as_deref())
-}
-
-fn start_screen_from(requested: Option<&str>) -> Screen {
+fn requested_open_screen(requested: Option<&str>) -> Screen {
     match requested.map(str::trim) {
         Some(value) if value.eq_ignore_ascii_case("library") => Screen::Browse,
-        Some(value) if value.eq_ignore_ascii_case("settings") => Screen::Settings,
         Some(value) if value.eq_ignore_ascii_case("sources") => Screen::Sources,
+        Some(value) if value.eq_ignore_ascii_case("settings") => Screen::Settings,
+        Some(value) if value.eq_ignore_ascii_case("detail") => Screen::Detail,
+        Some(value) if value.eq_ignore_ascii_case("player") => Screen::Player,
         _ => Screen::Home,
     }
 }
@@ -248,6 +246,108 @@ fn media_name(name: &str) -> bool {
     screenroom_core::MEDIA_EXTENSIONS
         .iter()
         .any(|extension| lower.ends_with(&format!(".{extension}")))
+}
+
+fn format_artwork_failures(count: usize) -> String {
+    match count {
+        0 => "None".to_string(),
+        1 => "1 poster could not be extracted".to_string(),
+        count => format!("{count} posters could not be extracted"),
+    }
+}
+
+fn exclude_included_folder(
+    root: &Path,
+    selected: &[String],
+    relative: &str,
+) -> Result<(Vec<String>, bool), String> {
+    use ui::screens::sources::normalize;
+
+    let target = relative.trim_matches('/');
+    let ancestor = selected
+        .iter()
+        .find(|entry| {
+            let entry = entry.trim_matches('/');
+            entry.is_empty() || target.starts_with(&format!("{entry}/"))
+        })
+        .cloned()
+        .ok_or_else(|| "No included folder covers this one.".to_string())?;
+    let ancestor = ancestor.trim_matches('/').to_string();
+
+    let mut next: Vec<String> = selected
+        .iter()
+        .filter(|entry| entry.trim_matches('/') != ancestor)
+        .cloned()
+        .collect();
+
+    let remainder = if ancestor.is_empty() {
+        target
+    } else {
+        target
+            .strip_prefix(&format!("{ancestor}/"))
+            .unwrap_or(target)
+    };
+    let segments: Vec<&str> = remainder
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
+    if segments.is_empty() {
+        return Err("This folder is the whole included selection.".to_string());
+    }
+
+    let mut directory = ancestor.clone();
+    let mut dropped_direct = false;
+    for (index, excluded) in segments.iter().enumerate() {
+        let path = if directory.is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(&directory)
+        };
+        let entries = std::fs::read_dir(&path).map_err(|error| {
+            format!(
+                "{} could not be read, so the selection was left alone: {error}",
+                if directory.is_empty() {
+                    path.display().to_string()
+                } else {
+                    directory.clone()
+                }
+            )
+        })?;
+        for entry in entries.take(2_000).flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_symlink() {
+                continue;
+            }
+            if kind.is_file() && media_name(&name) {
+                dropped_direct = true;
+                continue;
+            }
+            if !kind.is_dir() || name.as_str() == *excluded {
+                continue;
+            }
+            next.push(if directory.is_empty() {
+                name
+            } else {
+                format!("{directory}/{name}")
+            });
+        }
+        if index + 1 == segments.len() {
+            break;
+        }
+        directory = if directory.is_empty() {
+            (*excluded).to_string()
+        } else {
+            format!("{directory}/{excluded}")
+        };
+    }
+
+    Ok((normalize(&next), dropped_direct))
 }
 
 fn file_modified_ms(metadata: &std::fs::Metadata) -> Option<i64> {
@@ -1163,6 +1263,16 @@ fn ticks(
     })
 }
 
+pub fn keyboard_event(event: iced::Event, status: iced::event::Status) -> Option<Message> {
+    if status != iced::event::Status::Ignored {
+        return None;
+    }
+    match event {
+        iced::Event::Keyboard(key) => Some(Message::Keyboard(key)),
+        _ => None,
+    }
+}
+
 pub fn pointer_event(event: &iced::Event) -> Option<Message> {
     match event {
         iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::WindowUnfocused),
@@ -1411,7 +1521,7 @@ impl App {
             .clone()
             .unwrap_or_else(default_conversion_folder);
         let profile_id = opening_profile(&library, &preferences);
-        let screen = opening_screen();
+        let screen = Screen::Home;
         let mut nav = Nav::new(Screen::Home);
         nav.set(screen);
         let mut app = Self {
@@ -1568,27 +1678,26 @@ impl App {
     }
 
     fn open_requested_screen(&mut self) {
-        let Some(requested) = std::env::var_os("SCREENROOM_OPEN_SCREEN") else {
-            return;
-        };
-        match requested.to_string_lossy().as_ref() {
-            "library" => self.navigate(Screen::Browse),
-            "settings" => {
+        let requested = std::env::var("SCREENROOM_OPEN_SCREEN").ok();
+        match requested_open_screen(requested.as_deref()) {
+            Screen::Browse => self.navigate(Screen::Browse),
+            Screen::Sources => self.open_sources(),
+            Screen::Settings => {
                 self.navigate(Screen::Settings);
                 self.apply_requested_settings_focus();
             }
-            "detail" => {
+            Screen::Detail => {
                 if let Some(file_id) = self.browse.items.first().map(|item| item.id.clone()) {
                     self.open_detail(&file_id);
                 }
             }
-            "player" => {
+            Screen::Player => {
                 if let Some(file_id) = self.browse.items.first().map(|item| item.id.clone()) {
                     self.open_detail(&file_id);
                     self.open_player(&file_id, true);
                 }
             }
-            _ => {}
+            Screen::Home => {}
         }
     }
 
@@ -4005,6 +4114,7 @@ impl App {
     }
 
     fn load_folder_view(&mut self) {
+        use ui::screens::sources::{FolderEntry, FolderIssue, parent_of};
         self.folder_entries.clear();
         self.folder_media_here = 0;
         self.folder_unreadable = None;
@@ -4017,7 +4127,7 @@ impl App {
             return;
         }
         let directory = if self.folder_current.is_empty() {
-            root
+            root.clone()
         } else {
             root.join(&self.folder_current)
         };
@@ -4036,7 +4146,10 @@ impl App {
                 return;
             }
         };
-        let mut folders: Vec<ui::screens::sources::FolderEntry> = Vec::new();
+        let canonical_root = std::fs::canonicalize(&root).ok();
+        let mut folders: Vec<FolderEntry> = Vec::new();
+        let mut on_disk_here = 0_usize;
+        let mut child_on_disk_media = 0_usize;
         for entry in entries.take(2_000) {
             let Ok(entry) = entry else {
                 continue;
@@ -4057,31 +4170,92 @@ impl App {
                 format!("{}/{}", self.folder_current, name)
             };
             if file_type.is_dir() {
-                let nested = entry
-                    .path()
-                    .read_dir()
-                    .map(|children| {
-                        children
-                            .take(400)
-                            .filter_map(Result::ok)
-                            .filter(|child| child.file_type().is_ok_and(|kind| kind.is_dir()))
-                            .count()
-                    })
-                    .unwrap_or(0);
-                folders.push(ui::screens::sources::FolderEntry {
+                let mut subfolders = 0_usize;
+                let mut direct_media = 0_usize;
+                let mut issue = FolderIssue::Available;
+                match entry.path().read_dir() {
+                    Ok(children) => {
+                        for child in children.take(400).flatten() {
+                            let child_name = child.file_name().to_string_lossy().to_string();
+                            if child_name.starts_with('.') {
+                                continue;
+                            }
+                            let Ok(kind) = child.file_type() else {
+                                continue;
+                            };
+                            if kind.is_symlink() {
+                                continue;
+                            }
+                            if kind.is_dir() {
+                                subfolders += 1;
+                            } else if kind.is_file() && media_name(&child_name) {
+                                direct_media += 1;
+                            }
+                        }
+                        if let Some(canonical_root) = &canonical_root
+                            && std::fs::canonicalize(entry.path())
+                                .is_ok_and(|path| !path.starts_with(canonical_root))
+                        {
+                            issue = FolderIssue::Unsafe;
+                        }
+                    }
+                    Err(error) => {
+                        issue = match error.kind() {
+                            std::io::ErrorKind::NotFound => FolderIssue::Missing,
+                            std::io::ErrorKind::PermissionDenied => FolderIssue::PermissionLost,
+                            _ => FolderIssue::PermissionLost,
+                        };
+                    }
+                }
+                child_on_disk_media += direct_media;
+                folders.push(FolderEntry {
                     relative_path: relative.clone(),
                     name,
-                    media: self.media_under(&relative),
-                    subfolders: nested,
-                    issue: ui::screens::sources::FolderIssue::Available,
+                    media: direct_media.max(self.media_under(&relative)),
+                    subfolders,
+                    issue,
                 });
             } else if file_type.is_file() && media_name(&name) {
-                self.folder_media_here += 1;
+                on_disk_here += 1;
             }
+        }
+        for selected in self.source_selection.clone() {
+            if selected.is_empty() || parent_of(&selected) != self.folder_current {
+                continue;
+            }
+            if folders.iter().any(|entry| entry.relative_path == selected) {
+                continue;
+            }
+            let path = root.join(&selected);
+            let issue = match std::fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.file_type().is_symlink() => FolderIssue::Unsafe,
+                Ok(metadata) if !metadata.is_dir() => FolderIssue::Missing,
+                Ok(_) => match &canonical_root {
+                    Some(canonical_root)
+                        if std::fs::canonicalize(&path)
+                            .is_ok_and(|path| !path.starts_with(canonical_root)) =>
+                    {
+                        FolderIssue::Unsafe
+                    }
+                    _ => FolderIssue::Available,
+                },
+                Err(error) => match error.kind() {
+                    std::io::ErrorKind::PermissionDenied => FolderIssue::PermissionLost,
+                    _ => FolderIssue::Missing,
+                },
+            };
+            folders.push(FolderEntry {
+                relative_path: selected.clone(),
+                name: ui::screens::sources::folder_label(&selected),
+                media: self.media_under(&selected),
+                subfolders: 0,
+                issue,
+            });
         }
         folders.sort_by_key(|left| left.name.to_lowercase());
         self.folder_entries = folders;
-        self.folder_media_here = self.media_under(&self.folder_current);
+        self.folder_media_here =
+            (on_disk_here + child_on_disk_media).max(self.media_under(&self.folder_current));
     }
 
     fn media_under(&self, relative: &str) -> usize {
@@ -4154,10 +4328,34 @@ impl App {
                 self.source_selection.retain(|entry| entry != &relative);
             }
             Inclusion::Included => {
-                self.status = Some(format!(
-                    "{} is already included by a folder above it.",
-                    ui::screens::sources::folder_label(&relative)
-                ));
+                let Some(source) = self.selected_source() else {
+                    self.error = Some("That location is no longer in the library.".to_string());
+                    return;
+                };
+                match exclude_included_folder(
+                    Path::new(&source.root_path),
+                    &self.source_selection,
+                    &relative,
+                ) {
+                    Ok((next, dropped_direct)) => {
+                        self.source_selection = next;
+                        self.status = Some(if dropped_direct {
+                            format!(
+                                "{} is excluded. Files sitting directly in a parent folder are \
+                                 no longer included; include that folder to scan them.",
+                                ui::screens::sources::folder_label(&relative)
+                            )
+                        } else {
+                            format!(
+                                "{} is excluded.",
+                                ui::screens::sources::folder_label(&relative)
+                            )
+                        });
+                    }
+                    Err(message) => {
+                        self.error = Some(message);
+                    }
+                }
                 return;
             }
             Inclusion::Excluded => {
@@ -4191,10 +4389,21 @@ impl App {
         let Some(source_id) = self.manager_source.clone() else {
             return;
         };
-        if self.source_selection.is_empty() {
-            self.error =
-                Some("Choose at least one folder before scanning this location.".to_string());
-            return;
+        let stored = self
+            .sources
+            .iter()
+            .find(|source| source.id == source_id)
+            .map(|source| source.state);
+        if stored != Some(SourceState::Available)
+            && self
+                .library
+                .probe_source(&source_id)
+                .is_ok_and(|state| state == SourceState::Available)
+            && let Err(error) = self
+                .library
+                .set_source_state(&source_id, SourceState::Available)
+        {
+            return self.report(&error);
         }
         if let Err(error) = self
             .library
@@ -4203,7 +4412,14 @@ impl App {
             return self.report(&error);
         }
         self.error = None;
-        self.status = Some("Saved the folder selection. Scanning now…".to_string());
+        if self.source_selection.is_empty() {
+            self.status = Some(
+                "Saved an empty folder selection. Indexed files are withdrawn, not deleted."
+                    .to_string(),
+            );
+        } else {
+            self.status = Some("Saved the folder selection. Scanning now…".to_string());
+        }
         self.reload_administration();
         self.source_selection = self
             .source_folders
@@ -4215,12 +4431,7 @@ impl App {
     }
 
     fn scan_all_sources(&mut self) {
-        let sources: Vec<String> = self
-            .sources
-            .iter()
-            .filter(|source| source.state == SourceState::Available)
-            .map(|source| source.id.clone())
-            .collect();
+        let sources = self.probe_sources();
         if sources.is_empty() {
             self.status = Some(
                 "No readable location right now. Reconnect or relink one, then scan.".to_string(),
@@ -5033,46 +5244,7 @@ impl App {
 
     fn add_folder(&mut self) {
         let raw = self.new_root.trim().to_string();
-        if raw.is_empty() {
-            self.error = Some("Type or paste an absolute folder path first.".to_string());
-            return;
-        }
-        self.add_root(raw);
-    }
-
-    fn add_root(&mut self, raw: String) {
-        let root = PathBuf::from(&raw);
-        if !root.is_absolute() {
-            self.error = Some("Choose an absolute folder path.".to_string());
-            return;
-        }
-
-        if self.route_to_containing_source(&root) {
-            return;
-        }
-        let existing = self.find_source_by_root(&root);
-        let created = existing.is_none();
-        let source = match existing {
-            Some(source) => Ok(source),
-            None => self.library.add_source(&root, None),
-        };
-        let source = match source {
-            Ok(source) => source,
-            Err(error) => return self.report(&error),
-        };
-        if (created || !source.folders_configured)
-            && let Err(error) = self
-                .library
-                .configure_source_folders(&source.id, &[String::new()])
-        {
-            return self.report(&error);
-        }
-
-        self.new_root.clear();
-        self.error = None;
-        self.reload_administration();
-        self.manage_source(source.id.clone());
-        self.start_scan(source.id);
+        self.stage_location(PathBuf::from(raw));
     }
 
     fn start_scan(&mut self, source_id: String) {
@@ -5989,7 +6161,7 @@ impl App {
             Message::FolderClearSelection => {
                 self.source_selection.clear();
                 self.status =
-                    Some("No folders selected. Pick at least one, then scan.".to_string());
+                    Some("No folders selected. Save to withdraw indexed files, or pick folders and scan.".to_string());
             }
             Message::SaveSourceFolders => self.save_source_folders(),
             Message::ScanAllSources => self.scan_all_sources(),
@@ -6455,10 +6627,10 @@ impl App {
                     let _ = self.update(Message::GoBrowse);
                 }
                 Key::Character(ref character) if character.as_str() == "3" => {
-                    let _ = self.update(Message::GoSettings);
+                    let _ = self.update(Message::GoSources);
                 }
                 Key::Character(ref character) if character.as_str() == "4" => {
-                    let _ = self.update(Message::GoSources);
+                    let _ = self.update(Message::GoSettings);
                 }
                 _ => {}
             }
@@ -6550,13 +6722,13 @@ impl App {
                         self.remove_source(source);
                     }
                 }
-                Key::Character(character) => match character.as_str() {
+                Key::Character(character) if !self.sources.is_empty() => match character.as_str() {
                     "s" => self.save_source_folders(),
                     "a" => self.select_all_folders(),
                     "c" => {
                         self.source_selection.clear();
                         self.status =
-                            Some("No folders selected. Pick at least one, then scan.".to_string());
+                            Some("No folders selected. Save to withdraw indexed files, or pick folders and scan.".to_string());
                     }
                     "r" => {
                         if let Some(source) = self.manager_source.clone() {
@@ -6670,7 +6842,7 @@ impl App {
 
     fn subscription(&self) -> Subscription<Message> {
         let mut subscriptions = vec![
-            iced::keyboard::listen().map(Message::Keyboard),
+            iced::event::listen_with(|event, status, _id| keyboard_event(event, status)),
             iced::window::close_requests().map(|_| Message::Close),
             iced::window::resize_events().map(|(_id, size)| Message::Resized(size)),
             iced::event::listen_with(|event, _status, _id| crate::app::pointer_event(&event)),
@@ -7332,7 +7504,7 @@ impl App {
                         .style(design::input_style())
                         .padding(tokens.spacing.field_y)
                         .width(Length::Fill),
-                    button(text("Add and scan").size(tokens.type_scale.label))
+                    button(text("Add folder").size(tokens.type_scale.label))
                         .on_press(Message::AddFolder)
                         .style(design::quiet_style(false))
                         .padding([tokens.spacing.field_y, tokens.spacing.field_x]),
@@ -7341,8 +7513,8 @@ impl App {
                 .align_y(Alignment::Center),
                 text(
                     "A location can be a folder, an external drive or another connected \
-                     volume. A typed path is indexed in full; choosing a location lets you \
-                     tick the folders you want first."
+                     volume. A typed path is staged for you to choose the folders inside it \
+                     before anything is scanned."
                 )
                 .size(tokens.type_scale.micro)
                 .color(tokens.palette.ink_muted),
@@ -7548,6 +7720,10 @@ impl App {
                     hint: Some("A manual match is never overwritten."),
                     action: "Enrich",
                     on_press: Some(Message::EnrichmentNow),
+                });
+                rows.push(Row::Value {
+                    label: "Poster extraction failures",
+                    value: format_artwork_failures(self.artwork_failures),
                 });
             }
             ui::screens::settings::Section::Subtitles => {
@@ -8412,15 +8588,57 @@ mod tests {
     }
 
     #[test]
-    fn a_requested_start_screen_opens_there_and_an_unknown_one_opens_at_home() {
-        assert_eq!(start_screen_from(Some("library")), Screen::Browse);
-        assert_eq!(start_screen_from(Some(" Library ")), Screen::Browse);
-        assert_eq!(start_screen_from(Some("settings")), Screen::Settings);
-        assert_eq!(start_screen_from(Some("sources")), Screen::Sources);
-        assert_eq!(start_screen_from(Some(" Sources ")), Screen::Sources);
-        assert_eq!(start_screen_from(Some("player")), Screen::Home);
-        assert_eq!(start_screen_from(Some("")), Screen::Home);
-        assert_eq!(start_screen_from(None), Screen::Home);
+    fn requested_open_screen_parses_all_supported_screens() {
+        assert_eq!(requested_open_screen(Some("library")), Screen::Browse);
+        assert_eq!(requested_open_screen(Some(" Library ")), Screen::Browse);
+        assert_eq!(requested_open_screen(Some("sources")), Screen::Sources);
+        assert_eq!(requested_open_screen(Some(" Sources ")), Screen::Sources);
+        assert_eq!(requested_open_screen(Some("settings")), Screen::Settings);
+        assert_eq!(requested_open_screen(Some("SETTINGS")), Screen::Settings);
+        assert_eq!(requested_open_screen(Some("detail")), Screen::Detail);
+        assert_eq!(requested_open_screen(Some("Player")), Screen::Player);
+        assert_eq!(requested_open_screen(Some("player")), Screen::Player);
+        assert_eq!(requested_open_screen(Some("")), Screen::Home);
+        assert_eq!(requested_open_screen(Some("  ")), Screen::Home);
+        assert_eq!(requested_open_screen(Some("home")), Screen::Home);
+        assert_eq!(requested_open_screen(Some("unknown")), Screen::Home);
+        assert_eq!(requested_open_screen(None), Screen::Home);
+    }
+
+    #[test]
+    fn command_shortcuts_match_navigation_bar_order() {
+        use iced::keyboard::Key;
+        use iced::keyboard::Modifiers;
+        use iced::keyboard::key::{Code, Physical};
+
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+        let command = |character: &str| iced::keyboard::Event::KeyPressed {
+            key: Key::Character(character.to_string().into()),
+            modified_key: Key::Unidentified,
+            physical_key: Physical::Code(Code::Escape),
+            location: iced::keyboard::Location::Standard,
+            modifiers: Modifiers::COMMAND,
+            text: None,
+            repeat: false,
+        };
+
+        let _ = app.handle_key(command("3"));
+        assert_eq!(app.screen, Screen::Sources, "⌘3 is the third destination");
+        let _ = app.handle_key(command("4"));
+        assert_eq!(app.screen, Screen::Settings, "⌘4 is the fourth destination");
+        assert_eq!(
+            crate::ui::shell::DESTINATIONS
+                .iter()
+                .map(|destination| destination.screen)
+                .collect::<Vec<_>>(),
+            vec![
+                Screen::Home,
+                Screen::Browse,
+                Screen::Sources,
+                Screen::Settings
+            ]
+        );
     }
 
     #[test]
@@ -10297,9 +10515,14 @@ mod tests {
         let mut app = App::with_library(library, None, "test".into());
         app.new_root = directory.path().join("a").to_string_lossy().to_string();
         let _ = app.update(Message::AddFolder);
+        assert!(app.scan_token.is_none());
+        let _ = app.update(Message::FolderToggle(String::new()));
+        let _ = app.update(Message::SaveSourceFolders);
         assert!(app.scan_token.is_some());
         app.new_root = directory.path().join("b").to_string_lossy().to_string();
         let _ = app.update(Message::AddFolder);
+        let _ = app.update(Message::FolderToggle(String::new()));
+        let _ = app.update(Message::SaveSourceFolders);
 
         assert_eq!(app.scan_queue.queued(), 1, "the second scan is queued");
         assert!(app.scan_token.is_some());
@@ -10471,10 +10694,40 @@ mod tests {
         app.new_root = root.to_string_lossy().to_string();
         let _ = app.update(Message::AddFolder);
         assert!(
+            app.scan_token.is_none(),
+            "adding a folder stages it before any scan"
+        );
+        let _ = app.update(Message::FolderToggle(String::new()));
+        let _ = app.update(Message::SaveSourceFolders);
+        assert!(
             app.scan_token.is_some(),
-            "adding a folder must start its scan"
+            "saving the staged folder must start its scan"
         );
         finish_scan(app);
+    }
+
+    #[test]
+    fn keyboard_event_drops_captured_keys_and_forwards_ignored_keys() {
+        let captured = iced::Event::Keyboard(key_pressed("down"));
+        assert!(
+            keyboard_event(captured, iced::event::Status::Captured).is_none(),
+            "a key a text field captured must not reach the screen shortcuts"
+        );
+
+        let ignored = iced::Event::Keyboard(key_pressed("down"));
+        assert!(
+            matches!(
+                keyboard_event(ignored, iced::event::Status::Ignored),
+                Some(Message::Keyboard(_))
+            ),
+            "an ignored key must be forwarded to the screen handlers"
+        );
+
+        let other = iced::Event::Window(iced::window::Event::Unfocused);
+        assert!(
+            keyboard_event(other, iced::event::Status::Ignored).is_none(),
+            "a non-keyboard event is not a keyboard message"
+        );
     }
 
     fn write_settled(path: &std::path::Path, contents: &[u8]) {
@@ -10789,6 +11042,33 @@ mod tests {
     }
 
     #[test]
+    fn settings_online_displays_artwork_failure_count() {
+        use ui::screens::settings::{Row, Section};
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+        app.settings_section = Section::Online;
+
+        let shown = |app: &App| -> String {
+            app.settings_rows()
+                .into_iter()
+                .find_map(|row| match row {
+                    Row::Value {
+                        label: "Poster extraction failures",
+                        value,
+                    } => Some(value.to_string()),
+                    _ => None,
+                })
+                .expect("the Online section states poster extraction failures")
+        };
+
+        assert_eq!(shown(&app), "None");
+        app.artwork_failures = 1;
+        assert_eq!(shown(&app), "1 poster could not be extracted");
+        app.artwork_failures = 4;
+        assert_eq!(shown(&app), "4 posters could not be extracted");
+    }
+
+    #[test]
     fn casting_and_profiles_are_populated_from_what_the_app_already_holds() {
         use ui::screens::settings::{Row, Section};
 
@@ -11037,6 +11317,319 @@ mod tests {
         assert!(app.onboarding_holds());
         assert!(app.home.is_empty());
         assert!(app.browse.items.is_empty());
+    }
+
+    #[test]
+    fn typed_path_stages_location_without_scanning() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let root = directory.path().join("media");
+        write_settled(&root.join("Show/Show S01E01.mkv"), b"not really a video");
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+
+        app.new_root = root.to_string_lossy().to_string();
+        let _ = app.update(Message::AddFolder);
+
+        assert_eq!(app.screen, Screen::Sources);
+        assert!(app.scan_token.is_none(), "a typed path must not scan");
+        assert_eq!(app.sources.len(), 1);
+        assert!(app.sources[0].folders_configured);
+        assert!(app.source_selection.is_empty());
+        assert_eq!(app.media_total, 0, "nothing is indexed before a scan");
+        assert!(
+            app.folder_entries.iter().any(|entry| entry.name == "Show"),
+            "the typed path's folders are offered for selection"
+        );
+    }
+
+    #[test]
+    fn scan_all_sources_probes_and_rescans_reconnected_drive() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let root = directory.path().join("media");
+        write_settled(&root.join("Film.2020.mkv"), b"not really a video");
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+        add_folder(&mut app, &root);
+        let source_id = app.sources[0].id.clone();
+
+        let moved = directory.path().join("media-moved");
+        std::fs::rename(&root, &moved).expect("move the drive away");
+        let _ = app.probe_sources();
+        assert_eq!(
+            app.sources[0].state,
+            SourceState::Missing,
+            "an unplugged drive is classified as missing"
+        );
+
+        std::fs::rename(&moved, &root).expect("plug the drive back in");
+        let _ = app.update(Message::ScanAllSources);
+
+        assert!(
+            app.scan_token.is_some(),
+            "scanning all must probe and rescan a reconnected drive"
+        );
+        finish_scan(&mut app);
+
+        let source = app
+            .sources
+            .iter()
+            .find(|source| source.id == source_id)
+            .expect("the source is still in the library");
+        assert_eq!(
+            source.state,
+            SourceState::Available,
+            "the reconnected drive is available again"
+        );
+        assert_eq!(app.error, None);
+    }
+
+    #[test]
+    fn reconnected_drive_can_be_rescanned_from_sources_manager() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let root = directory.path().join("media");
+        write_settled(&root.join("Film.2020.mkv"), b"not really a video");
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+        add_folder(&mut app, &root);
+        let source_id = app.sources[0].id.clone();
+
+        let moved = directory.path().join("media-moved");
+        std::fs::rename(&root, &moved).expect("move the drive away");
+        let _ = app.probe_sources();
+        assert_eq!(app.sources[0].state, SourceState::Missing);
+
+        std::fs::rename(&moved, &root).expect("plug the drive back in");
+        let _ = app.update(Message::RescanSource(source_id.clone()));
+
+        assert!(
+            app.scan_token.is_some(),
+            "Rescan must probe and start a scan for a reconnected drive"
+        );
+        finish_scan(&mut app);
+
+        let source = app
+            .sources
+            .iter()
+            .find(|source| source.id == source_id)
+            .expect("the source is still in the library");
+        assert_eq!(source.state, SourceState::Available);
+        assert_eq!(app.error, None, "Rescan must not need a relink");
+    }
+
+    #[test]
+    fn folder_view_preserves_on_disk_counts_before_any_scan() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let root = directory.path().join("media");
+        write_settled(&root.join("Loose.2020.mkv"), b"not really a video");
+        write_settled(&root.join("Films/Film.2020.mkv"), b"not really a video");
+        write_settled(&root.join("Series/Show.S01E01.mkv"), b"not really a video");
+        write_settled(&root.join("Series/Nested/More.mkv"), b"not really a video");
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+
+        app.stage_location(root);
+
+        assert_eq!(app.media_total, 0, "nothing has been indexed yet");
+        assert_eq!(
+            app.folder_media_here, 3,
+            "the direct file and both child folders' media are counted on disk"
+        );
+        let films = app
+            .folder_entries
+            .iter()
+            .find(|entry| entry.name == "Films")
+            .expect("Films is offered");
+        assert_eq!(
+            films.media, 1,
+            "an unindexed folder still reports its media"
+        );
+        let series = app
+            .folder_entries
+            .iter()
+            .find(|entry| entry.name == "Series")
+            .expect("Series is offered");
+        assert_eq!(series.media, 1);
+        assert_eq!(series.subfolders, 1, "the nested folder is counted");
+    }
+
+    #[test]
+    fn folder_view_surfaces_missing_and_unsafe_selected_folders() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let root = directory.path().join("media");
+        std::fs::create_dir_all(root.join("Present")).expect("present");
+        let outside = directory.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("outside");
+        std::os::unix::fs::symlink(&outside, root.join("Link")).expect("symlink");
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+        app.stage_location(root);
+
+        app.source_selection = vec!["Gone".to_string(), "Link".to_string()];
+        app.load_folder_view();
+
+        let issue = |name: &str| {
+            app.folder_entries
+                .iter()
+                .find(|entry| entry.name == name)
+                .map(|entry| entry.issue)
+        };
+        assert_eq!(
+            issue("Gone"),
+            Some(ui::screens::sources::FolderIssue::Missing)
+        );
+        assert_eq!(
+            issue("Link"),
+            Some(ui::screens::sources::FolderIssue::Unsafe)
+        );
+        assert_eq!(
+            issue("Present"),
+            Some(ui::screens::sources::FolderIssue::Available)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn folder_view_surfaces_permission_lost_without_losing_other_folders() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let root = directory.path().join("media");
+        let locked = root.join("Locked");
+        std::fs::create_dir_all(&locked).expect("locked");
+        std::fs::create_dir_all(root.join("Open")).expect("open");
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+        app.stage_location(root.clone());
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
+            .expect("lock the folder");
+        app.load_folder_view();
+        let reported = app
+            .folder_entries
+            .iter()
+            .find(|entry| entry.name == "Locked")
+            .map(|entry| entry.issue);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
+            .expect("restore the folder");
+
+        assert_eq!(
+            reported,
+            Some(ui::screens::sources::FolderIssue::PermissionLost)
+        );
+        assert!(app.folder_entries.iter().any(|entry| entry.name == "Open"));
+    }
+
+    #[test]
+    fn saving_empty_selection_withdraws_files_without_removing_source() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let root = directory.path().join("media");
+        write_settled(&root.join("Film.2020.mkv"), b"not really a video");
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+        add_folder(&mut app, &root);
+        let source_id = app.sources[0].id.clone();
+        let file_id = app
+            .library
+            .items(&LibraryQuery::page(10))
+            .expect("items")
+            .into_iter()
+            .next()
+            .expect("the film was indexed")
+            .id;
+        assert!(
+            app.library
+                .item(&file_id, Some(&app.profile_id))
+                .expect("item")
+                .expect("row")
+                .available
+        );
+
+        app.manage_source(source_id.clone());
+        app.source_selection.clear();
+        let _ = app.update(Message::SaveSourceFolders);
+        assert!(app.scan_token.is_some(), "an empty save still scans");
+        finish_scan(&mut app);
+
+        assert_eq!(app.error, None);
+        assert_eq!(app.sources.len(), 1, "the source row is not removed");
+        assert_eq!(app.sources[0].id, source_id);
+        assert_eq!(
+            app.library.source_folders(&source_id).expect("folders"),
+            Vec::<String>::new()
+        );
+        assert!(
+            !app.library
+                .item(&file_id, Some(&app.profile_id))
+                .expect("item")
+                .expect("row")
+                .available,
+            "the indexed file is withdrawn, not deleted"
+        );
+        assert_eq!(
+            app.library.count(&LibraryQuery::default()).expect("count"),
+            1,
+            "the metadata row survives"
+        );
+    }
+
+    #[test]
+    fn excluding_subfolder_inside_included_parent_expands_siblings() {
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let root = directory.path().join("media");
+        write_settled(&root.join("Films/Keep/Film.mkv"), b"not really a video");
+        write_settled(&root.join("Films/Extras/Extra.mkv"), b"not really a video");
+        write_settled(&root.join("Films/2024/New.mkv"), b"not really a video");
+        write_settled(&root.join("Films/direct.mkv"), b"not really a video");
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+        app.stage_location(root);
+        app.source_selection = vec!["Films".to_string()];
+
+        app.toggle_folder("Films/2024".to_string());
+
+        assert_eq!(
+            app.source_selection,
+            vec!["Films/Extras".to_string(), "Films/Keep".to_string()],
+            "the parent is replaced by every remaining sibling"
+        );
+        assert!(
+            !app.source_selection
+                .iter()
+                .any(|entry| entry == "Films" || entry == "Films/2024"),
+            "nothing above the exclusion covers it again"
+        );
+        assert!(
+            app.status
+                .as_deref()
+                .is_some_and(|status| status.contains("directly")),
+            "dropping direct files in a parent must be said plainly: {:?}",
+            app.status
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn excluding_from_an_unreadable_parent_leaves_the_selection_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::TempDir::new().expect("temp dir");
+        let root = directory.path().join("media");
+        std::fs::create_dir_all(root.join("Shut/Locked/Inside")).expect("folders");
+        let library = Library::open_in_memory().expect("library");
+        let mut app = App::with_library(library, None, "test".into());
+        app.stage_location(root.clone());
+        app.source_selection = vec!["Shut".to_string()];
+
+        let locked = root.join("Shut");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
+            .expect("lock the parent");
+        app.toggle_folder("Shut/Locked/Inside".to_string());
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
+            .expect("restore the parent");
+
+        assert_eq!(app.source_selection, vec!["Shut".to_string()]);
+        assert!(
+            app.error.is_some(),
+            "an unreadable parent must be reported, not silently accepted"
+        );
     }
 
     #[test]

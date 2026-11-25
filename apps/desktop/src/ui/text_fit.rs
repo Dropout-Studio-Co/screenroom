@@ -121,6 +121,51 @@ pub fn fit_measured(text: &str, room: f32, size: f32, font: Font) -> String {
     format!("{kept}{tail}")
 }
 
+pub fn fit_middle_measured(text: &str, room: f32, size: f32, font: Font) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+
+    let Some(room) = ellipsis_room(room) else {
+        return String::new();
+    };
+
+    if room.is_infinite() || measured_width(text, size, font) <= room {
+        return text.to_string();
+    }
+
+    let ellipsis = ELLIPSIS.to_string();
+
+    if measured_width(&ellipsis, size, font) > room {
+        return String::new();
+    }
+
+    let characters: Vec<char> = text.chars().collect();
+    let candidate = |keep: usize| -> String {
+        let head = keep.div_ceil(2);
+        let tail = keep - head;
+        let mut kept: String = characters.iter().take(head).collect();
+        kept.push(ELLIPSIS);
+        kept.extend(characters.iter().skip(characters.len() - tail));
+        kept
+    };
+
+    let mut low = 0;
+    let mut high = characters.len() - 1;
+
+    while low < high {
+        let middle = low + (high - low).div_ceil(2);
+
+        if measured_width(&candidate(middle), size, font) <= room {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+
+    candidate(low)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,6 +254,68 @@ mod tests {
             assert!(!fitted.contains('\u{FFFD}'));
             assert!(measured_width(&fitted, 12.0, regular) <= room);
         }
+    }
+
+    #[test]
+    fn a_middle_fitted_label_keeps_both_ends_and_fits_its_room() {
+        let regular = theme::regular();
+        let label = "Parasite.2019.1080p.AMZN.WEB-DL.Dual.Audio.HEVC.DDP.5.1";
+        let room = 140.0;
+        let fitted = fit_middle_measured(label, room, 12.0, regular);
+
+        assert!(fitted.contains(ELLIPSIS), "{fitted}");
+        assert!(fitted.starts_with("Par"), "{fitted}");
+        assert!(fitted.ends_with("5.1"), "{fitted}");
+        let width = measured_width(&fitted, 12.0, regular);
+        assert!(width <= room, "{width} exceeds {room}");
+    }
+
+    #[test]
+    fn a_middle_label_that_already_fits_is_returned_untouched() {
+        let regular = theme::regular();
+
+        assert_eq!(fit_middle_measured("Short", 400.0, 12.0, regular), "Short");
+        assert_eq!(
+            fit_middle_measured("Short", f32::INFINITY, 12.0, regular),
+            "Short"
+        );
+    }
+
+    #[test]
+    fn middle_truncation_never_splits_a_multi_byte_character() {
+        let regular = theme::regular();
+        let label = "映画の字幕ファイル名がとても長い場合のテスト用ラベルです";
+
+        for room in [10.0_f32, 15.0, 20.0, 40.0, 80.0, 160.0] {
+            let fitted = fit_middle_measured(label, room, 12.0, regular);
+            let width = measured_width(&fitted, 12.0, regular);
+            assert!(width <= room, "{fitted} measured {width} over {room}");
+            assert!(!fitted.contains('\u{FFFD}'));
+            assert!(
+                fitted
+                    .chars()
+                    .all(|character| label.contains(character) || character == ELLIPSIS)
+            );
+        }
+    }
+
+    #[test]
+    fn a_middle_room_with_no_space_yields_no_label() {
+        let regular = theme::regular();
+        let ellipsis = measured_width(&ELLIPSIS.to_string(), 12.0, regular);
+
+        assert_eq!(fit_middle_measured("Parasite", 0.0, 12.0, regular), "");
+        assert_eq!(fit_middle_measured("Parasite", -20.0, 12.0, regular), "");
+        assert_eq!(fit_middle_measured("Parasite", f32::NAN, 12.0, regular), "");
+        assert_eq!(fit_middle_measured("", 120.0, 12.0, regular), "");
+        assert_eq!(
+            fit_middle_measured("Parasite", ellipsis - 0.5, 12.0, regular),
+            ""
+        );
+        assert_eq!(
+            fit_middle_measured("Parasite", ellipsis, 12.0, regular),
+            ELLIPSIS.to_string()
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@ use crate::app::Message;
 use crate::design;
 use crate::ui::icons::{self, Icon};
 use crate::ui::motion;
+use crate::ui::text_fit;
 use crate::ui::theme::{self, Breakpoint, Gap, Radius};
 use iced::border::Radius as CornerRadius;
 use iced::widget::canvas::gradient::Linear;
@@ -9,8 +10,8 @@ use iced::widget::canvas::{self, Canvas, Program};
 use iced::widget::text::Wrapping;
 use iced::widget::{Space, button, column, container, row, scrollable, stack, text, text_input};
 use iced::{
-    Alignment, Background, Border, Color, Element, Length, Padding, Point, Rectangle, Renderer,
-    Shadow, Size, Theme, mouse,
+    Alignment, Background, Border, Color, Element, Font, Length, Padding, Point, Rectangle,
+    Renderer, Shadow, Size, Theme, mouse,
 };
 use screenroom_core::SourceState;
 
@@ -30,7 +31,11 @@ pub const VISIBLE_FOLDERS: usize = 200;
 
 const HAIRLINE: f32 = 1.0;
 
-const ELLIPSIS: &str = "…";
+const WELCOME_HEADLINE: &str = "Your films and series, where they already live.";
+
+const WELCOME_LEAD: &str = "Point Screenroom at the folders and drives your films and series \
+                            already sit in. It reads them in place: nothing is moved, renamed or \
+                            uploaded, and nothing leaves this machine.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FolderIssue {
@@ -240,12 +245,8 @@ fn span(width: f32) -> f32 {
     }
 }
 
-fn page_pad(width: f32) -> f32 {
-    theme::content_inset(span(width))
-}
-
 fn inner_width(width: f32) -> f32 {
-    (span(width) - 2.0 * page_pad(width)).max(0.0)
+    (span(width) - 2.0 * theme::PAD).max(0.0)
 }
 
 fn welcome_measure(width: f32) -> f32 {
@@ -264,65 +265,39 @@ fn display_size(width: f32) -> f32 {
     (base * factor).min(96.0)
 }
 
-fn char_budget(room: f32, size: f32) -> usize {
-    if !room.is_finite() || room <= 0.0 || !size.is_finite() || size <= 0.0 {
-        return 0;
+fn folder_facts(media: usize, subfolders: usize) -> String {
+    let media_part = if media == 0 && subfolders > 0 {
+        None
+    } else {
+        Some(media_phrase(media))
+    };
+    let folder_part = match subfolders {
+        0 => None,
+        1 => Some("1 subfolder".to_string()),
+        count => Some(format!("{count} subfolders")),
+    };
+    match (media_part, folder_part) {
+        (Some(media), Some(folders)) => format!("{media}  ·  {folders}"),
+        (Some(media), None) => media,
+        (None, Some(folders)) => folders,
+        (None, None) => media_phrase(0),
     }
-    ((room / (size * 0.58)).floor() as usize).max(4)
 }
 
-fn end_ellipsis(value: &str, max_chars: usize) -> String {
-    let count = value.chars().count();
-    if count <= max_chars {
-        return value.to_string();
-    }
-    if max_chars == 0 {
-        return String::new();
-    }
-    if max_chars == 1 {
-        return ELLIPSIS.to_string();
-    }
-    let mut kept: String = value.chars().take(max_chars - 1).collect();
-    kept.push_str(ELLIPSIS);
-    kept
+fn welcome_can_choose(busy: bool) -> bool {
+    !busy
 }
 
-fn middle_ellipsis(value: &str, max_chars: usize) -> String {
-    let count = value.chars().count();
-    if count <= max_chars {
-        return value.to_string();
-    }
-    if max_chars == 0 {
-        return String::new();
-    }
-    if max_chars == 1 {
-        return ELLIPSIS.to_string();
-    }
-    let keep = max_chars - 1;
-    let head = keep.div_ceil(2);
-    let tail = keep - head;
-    let mut kept: String = value.chars().take(head).collect();
-    kept.push_str(ELLIPSIS);
-    if tail > 0 {
-        kept.extend(value.chars().skip(count - tail));
-    }
-    kept
+fn welcome_can_add(busy: bool, path: &str) -> bool {
+    !busy && !path.trim().is_empty()
 }
 
-fn fit(value: &str, room: f32, size: f32) -> String {
-    let budget = char_budget(room, size);
-    if budget == 0 {
-        return String::new();
-    }
-    end_ellipsis(value, budget)
+fn fit(value: &str, room: f32, size: f32, font: Font) -> String {
+    text_fit::fit_measured(value, room, size, font)
 }
 
-fn fit_path(value: &str, room: f32, size: f32) -> String {
-    let budget = char_budget(room, size);
-    if budget == 0 {
-        return String::new();
-    }
-    middle_ellipsis(value, budget)
+fn fit_path(value: &str, room: f32, size: f32, font: Font) -> String {
+    text_fit::fit_middle_measured(value, room, size, font)
 }
 
 fn indexed_phrase(indexed: usize) -> String {
@@ -418,7 +393,7 @@ fn inclusion_label(state: Inclusion) -> &'static str {
 fn inclusion_action(state: Inclusion) -> &'static str {
     match state {
         Inclusion::Selected => "Exclude",
-        Inclusion::Included => "Included above",
+        Inclusion::Included => "Exclude",
         Inclusion::Excluded => "Include",
     }
 }
@@ -426,7 +401,7 @@ fn inclusion_action(state: Inclusion) -> &'static str {
 fn toggle_hint(state: Inclusion) -> &'static str {
     match state {
         Inclusion::Selected => "Press to exclude this folder",
-        Inclusion::Included => "Included by a folder above",
+        Inclusion::Included => "Press to exclude this folder",
         Inclusion::Excluded => "Press to include this folder",
     }
 }
@@ -1038,27 +1013,26 @@ pub fn welcome<'a>(view: Welcome<'a>) -> Element<'a, Message> {
 
     let intro = column![
         wordmark,
-        text("Your films, where they already live.")
+        text(WELCOME_HEADLINE)
             .size(display_size(width))
             .font(theme::semibold())
             .color(theme::ink())
             .width(Length::Fill),
-        text(
-            "Point Screenroom at the folders and drives your films already sit in. It \
-             reads them in place: nothing is moved, renamed or uploaded, and nothing \
-             leaves this machine."
-        )
-        .size(tokens.type_scale.lead)
-        .font(theme::regular())
-        .color(theme::muted())
-        .width(Length::Fixed(prose)),
+        text(WELCOME_LEAD)
+            .size(tokens.type_scale.lead)
+            .font(theme::regular())
+            .color(theme::muted())
+            .width(Length::Fixed(prose)),
     ]
     .spacing(theme::gap(Gap::Rail))
     .width(Length::Fill);
 
+    let can_choose = welcome_can_choose(view.busy);
+    let can_add = welcome_can_add(view.busy, view.path);
+
     let input = text_input("…or type an absolute path", view.path)
         .on_input(Message::NewRootChanged)
-        .on_submit(Message::AddFolder)
+        .on_submit_maybe(can_add.then_some(Message::AddFolder))
         .style(design::input_style())
         .padding(tokens.spacing.field_y)
         .width(Length::Fill);
@@ -1073,7 +1047,7 @@ pub fn welcome<'a>(view: Welcome<'a>) -> Element<'a, Message> {
             action(
                 "Add this folder",
                 None,
-                Some(Message::AddFolder),
+                can_add.then_some(Message::AddFolder),
                 Weight::Secondary
             ),
         ]
@@ -1087,7 +1061,7 @@ pub fn welcome<'a>(view: Welcome<'a>) -> Element<'a, Message> {
         action(
             "Add a media location",
             Some(Icon::Plus),
-            Some(Message::ChooseFolder),
+            can_choose.then_some(Message::ChooseFolder),
             Weight::Primary
         ),
         typed,
@@ -1299,7 +1273,12 @@ pub fn empty_library(view: EmptyLibrary) -> Element<'static, Message> {
         match first {
             Some(card) => format!(
                 "Review folders in {}",
-                fit(&card.label, measure * 0.4, tokens.type_scale.label)
+                fit(
+                    &card.label,
+                    measure * 0.4,
+                    tokens.type_scale.label,
+                    theme::medium()
+                )
             ),
             None => "Review folders".to_string(),
         },
@@ -1427,8 +1406,18 @@ fn empty_state_copy(cards: &[SourceCard], scanning: bool) -> (String, String) {
 fn empty_card(card: &SourceCard, measure: f32) -> Element<'static, Message> {
     let tokens = design::tokens();
     let line_room = (measure - 210.0).max(140.0);
-    let title = fit(&card.label, line_room, tokens.type_scale.body_lg);
-    let path = fit_path(&card.root_path, line_room, tokens.type_scale.caption);
+    let title = fit(
+        &card.label,
+        line_room,
+        tokens.type_scale.body_lg,
+        theme::semibold(),
+    );
+    let path = fit_path(
+        &card.root_path,
+        line_room,
+        tokens.type_scale.caption,
+        theme::regular(),
+    );
 
     let facts = row![
         text(indexed_phrase(card.indexed))
@@ -1564,7 +1553,8 @@ pub fn manager(view: Manager) -> Element<'static, Message> {
         text(fit(
             "Reads in place  ·  Nothing uploaded  ·  Nothing moved",
             inner * 0.5,
-            tokens.type_scale.micro
+            tokens.type_scale.micro,
+            theme::regular()
         ))
         .size(tokens.type_scale.micro)
         .font(theme::regular())
@@ -1580,8 +1570,8 @@ pub fn manager(view: Manager) -> Element<'static, Message> {
     let content = container(body).width(Length::Fill).padding(Padding {
         top: theme::gap(Gap::Section),
         bottom: theme::gap(Gap::Section),
-        left: page_pad(page),
-        right: page_pad(page),
+        left: 0.0,
+        right: 0.0,
     });
 
     scrollable(content)
@@ -1705,8 +1695,13 @@ fn marker(active: bool) -> Element<'static, Message> {
 fn rail_card(card: &SourceCard, active: bool, width: f32) -> Element<'static, Message> {
     let tokens = design::tokens();
     let room = (width - 110.0).max(90.0);
-    let label = fit(&card.label, room, tokens.type_scale.label);
-    let path = fit_path(&card.root_path, room, tokens.type_scale.micro);
+    let label = fit(&card.label, room, tokens.type_scale.label, theme::medium());
+    let path = fit_path(
+        &card.root_path,
+        room,
+        tokens.type_scale.micro,
+        theme::regular(),
+    );
     let state_colour = if card.state == SourceState::Available {
         theme::muted()
     } else {
@@ -1830,8 +1825,14 @@ fn folder_panel(
         &browser.source_label,
         title_room,
         tokens.type_scale.title_sm,
+        theme::semibold(),
     );
-    let path = fit_path(&browser.source_root, panel * 0.8, tokens.type_scale.caption);
+    let path = fit_path(
+        &browser.source_root,
+        panel * 0.8,
+        tokens.type_scale.caption,
+        theme::regular(),
+    );
 
     let facts = match &card {
         Some(card) => format!(
@@ -1943,7 +1944,8 @@ fn folder_panel(
     } else if browser.selected.is_empty() {
         notes.push(
             text(if browser.folders_configured {
-                "Include at least one folder to make a scan."
+                "This location is saved with no folders selected. Saving again withdraws its \
+                 indexed files without deleting anything on disk."
             } else {
                 "This whole location is read until you save a folder selection."
             })
@@ -2009,7 +2011,16 @@ fn breadcrumbs(browser: &FolderBrowser, panel: f32) -> Element<'static, Message>
 
     let last = trail.len().saturating_sub(1);
     for (index, (label, path)) in trail.iter().enumerate() {
-        let shown = fit(label, room, tokens.type_scale.caption);
+        let shown = fit(
+            label,
+            room,
+            tokens.type_scale.caption,
+            if index == last {
+                theme::medium()
+            } else {
+                theme::regular()
+            },
+        );
         if index == last {
             let here: Element<'static, Message> = text(shown)
                 .size(tokens.type_scale.caption)
@@ -2100,7 +2111,12 @@ fn everything_toggle(browser: &FolderBrowser, panel: f32) -> Element<'static, Me
     let state = inclusion(&browser.selected, &browser.current);
     let active = state != Inclusion::Excluded;
     let room = (panel - 220.0).max(120.0);
-    let title = fit("Everything in this folder", room, tokens.type_scale.label);
+    let title = fit(
+        "Everything in this folder",
+        room,
+        tokens.type_scale.label,
+        theme::medium(),
+    );
     let subtitle = format!(
         "{}  ·  {}",
         media_phrase(browser.media_here),
@@ -2128,7 +2144,8 @@ fn everything_toggle(browser: &FolderBrowser, panel: f32) -> Element<'static, Me
                     text(fit(
                         &subtitle,
                         (panel - 260.0).max(120.0),
-                        tokens.type_scale.caption
+                        tokens.type_scale.caption,
+                        theme::regular()
                     ))
                     .size(tokens.type_scale.caption)
                     .font(theme::regular())
@@ -2282,8 +2299,8 @@ fn folder_row(
     } else {
         (panel - 430.0).max(120.0)
     };
-    let name = fit(&entry.name, room, tokens.type_scale.label);
-    let facts = media_phrase(entry.media);
+    let name = fit(&entry.name, room, tokens.type_scale.label, theme::medium());
+    let facts = folder_facts(entry.media, entry.subfolders);
     let issue = issue_label(entry.issue);
 
     let mut identity = row![
@@ -2328,7 +2345,8 @@ fn folder_row(
     let open = micro_action(
         "Open",
         None,
-        Some(Message::FolderBrowseInto(entry.relative_path.clone())),
+        (entry.issue == FolderIssue::Available)
+            .then_some(Message::FolderBrowseInto(entry.relative_path.clone())),
         Weight::Quiet,
     );
 
@@ -2501,7 +2519,12 @@ fn selection_summary(browser: &FolderBrowser, panel: f32) -> Element<'static, Me
             .align_y(Alignment::Center);
         for entry in browser.selected.iter().take(4) {
             let label = format!("{} · Remove", folder_label(entry));
-            let shown = fit(&label, panel * 0.45, tokens.type_scale.caption);
+            let shown = fit(
+                &label,
+                panel * 0.45,
+                tokens.type_scale.caption,
+                theme::medium(),
+            );
             chips = chips.push(micro_action(
                 shown,
                 None,
@@ -2526,14 +2549,27 @@ fn selection_summary(browser: &FolderBrowser, panel: f32) -> Element<'static, Me
         .into()
 }
 
+fn rescan_enabled(browser: &FolderBrowser) -> bool {
+    browser.state != SourceState::Removed
+}
+
+fn save_folders_enabled(browser: &FolderBrowser, available: bool) -> bool {
+    let readable = available || browser.unreadable.is_none();
+    readable && (!browser.selected.is_empty() || browser.folders_configured)
+}
+
 fn panel_actions(
     browser: &FolderBrowser,
     available: bool,
     narrow: bool,
 ) -> Element<'static, Message> {
-    let scan_enabled = available && !browser.selected.is_empty();
+    let scan_enabled = save_folders_enabled(browser, available);
     let scan = action(
-        "Scan selected folders",
+        if browser.selected.is_empty() {
+            "Save empty selection"
+        } else {
+            "Scan selected folders"
+        },
         None,
         scan_enabled.then_some(Message::SaveSourceFolders),
         Weight::Primary,
@@ -2553,7 +2589,7 @@ fn panel_actions(
     let rescan = action(
         "Rescan",
         None,
-        available.then_some(Message::RescanSource(browser.source_id.clone())),
+        rescan_enabled(browser).then(|| Message::RescanSource(browser.source_id.clone())),
         Weight::Quiet,
     );
     let remove = action(
@@ -2759,42 +2795,139 @@ mod tests {
     }
 
     #[test]
-    fn truncation_helpers_stay_on_character_boundaries_and_inside_the_budget() {
+    fn measured_truncation_stays_inside_the_room_and_on_character_boundaries() {
+        let regular = theme::regular();
         let ascii = "Films from the 1970s restored in 4K with commentary and subtitles";
-        for budget in [0_usize, 1, 2, 5, 12, 40, 90] {
-            let cut = end_ellipsis(ascii, budget);
-            assert!(cut.chars().count() <= budget, "{cut} exceeds {budget}");
+        for room in [0.0_f32, 12.0, 40.0, 90.0, 180.0] {
+            let cut = fit(ascii, room, 12.0, regular);
+            assert!(
+                text_fit::measured_width(&cut, 12.0, regular) <= room,
+                "{cut} exceeds {room}"
+            );
             assert!(!cut.contains('\u{FFFD}'));
         }
         let cjk = "映画のフォルダがとても長い場合のテスト用ラベルです";
-        for budget in [1_usize, 3, 8, 20] {
-            let cut = middle_ellipsis(cjk, budget);
-            assert!(cut.chars().count() <= budget);
+        for room in [10.0_f32, 40.0, 80.0, 160.0] {
+            let cut = fit_path(cjk, room, 12.0, regular);
+            assert!(
+                text_fit::measured_width(&cut, 12.0, regular) <= room,
+                "{cut} exceeds {room}"
+            );
             assert!(!cut.contains('\u{FFFD}'));
         }
-        assert_eq!(end_ellipsis("Short", 40), "Short");
-        assert_eq!(middle_ellipsis("Short", 40), "Short");
-        assert_eq!(end_ellipsis("Short", 0), "");
-        assert_eq!(middle_ellipsis("Short", 0), "");
+        assert_eq!(fit("Short", 400.0, 12.0, regular), "Short");
+        assert_eq!(fit_path("Short", 400.0, 12.0, regular), "Short");
+        assert_eq!(fit("Short", 0.0, 12.0, regular), "");
+        assert_eq!(fit_path("Short", 0.0, 12.0, regular), "");
     }
 
     #[test]
     fn a_useless_width_never_produces_a_panic_or_a_negative_room() {
-        assert_eq!(char_budget(f32::NAN, 14.0), 0);
-        assert_eq!(char_budget(120.0, f32::NAN), 0);
-        assert_eq!(char_budget(-40.0, 14.0), 0);
-        assert!(char_budget(320.0, 14.0) > 0);
+        let regular = theme::regular();
+        assert_eq!(fit("Films", f32::NAN, 14.0, regular), "");
+        assert_eq!(fit("Films", 120.0, f32::NAN, regular), "Films");
+        assert_eq!(fit("Films", -40.0, 14.0, regular), "");
+        assert_eq!(fit_path("Films", f32::NAN, 14.0, regular), "");
+        assert!(!fit("Films", 320.0, 14.0, regular).is_empty());
         assert_eq!(
             welcome_measure(f32::NAN),
             WELCOME_MEASURE.min(FALLBACK_WIDTH - 2.0 * theme::PAD)
         );
         assert_eq!(
             inner_width(f32::NAN),
-            FALLBACK_WIDTH - 2.0 * page_pad(FALLBACK_WIDTH)
+            (FALLBACK_WIDTH - 2.0 * theme::PAD).max(0.0)
         );
         assert!(display_size(f32::NAN).is_finite());
         assert!(panel_width(f32::NAN) > 0.0);
         assert!(rail_width(f32::NAN) > 0.0);
+    }
+
+    #[test]
+    fn the_welcome_copy_names_films_and_series() {
+        let copy = format!("{WELCOME_HEADLINE} {WELCOME_LEAD}").to_lowercase();
+
+        assert!(copy.contains("films"), "{copy}");
+        assert!(copy.contains("series"), "{copy}");
+        assert!(!copy.contains("films only"), "{copy}");
+    }
+
+    #[test]
+    fn welcome_actions_wait_for_a_quiet_screen_and_a_typed_path() {
+        assert!(welcome_can_choose(false));
+        assert!(!welcome_can_choose(true));
+        assert!(!welcome_can_add(false, ""));
+        assert!(!welcome_can_add(false, "   "));
+        assert!(welcome_can_add(false, "/Volumes/Films"));
+        assert!(!welcome_can_add(true, "/Volumes/Films"));
+    }
+
+    #[test]
+    fn the_manager_gutter_is_the_shells_pad_and_nothing_more() {
+        assert_eq!(inner_width(1440.0), 1440.0 - 2.0 * theme::PAD);
+        assert_eq!(inner_width(600.0), 600.0 - 2.0 * theme::PAD);
+        assert_eq!(inner_width(10.0), 0.0);
+        assert_eq!(inner_width(f32::NAN), FALLBACK_WIDTH - 2.0 * theme::PAD);
+    }
+
+    #[test]
+    fn fitted_labels_and_paths_never_exceed_their_available_room() {
+        let label = "A Very Long Location Name With Several Words In It";
+        let path = "/Volumes/Archive/Films/2024/A Very Long Folder Name";
+        for room in [40.0_f32, 120.0, 240.0, 480.0] {
+            let title = fit(label, room, 14.0, theme::medium());
+            let shown_path = fit_path(path, room, 12.0, theme::regular());
+            assert!(
+                text_fit::measured_width(&title, 14.0, theme::medium()) <= room,
+                "{title} exceeds {room}"
+            );
+            assert!(
+                text_fit::measured_width(&shown_path, 12.0, theme::regular()) <= room,
+                "{shown_path} exceeds {room}"
+            );
+        }
+    }
+
+    #[test]
+    fn folder_facts_state_subfolders_without_claiming_missing_media() {
+        assert_eq!(folder_facts(0, 0), "No available media inside");
+        assert_eq!(folder_facts(0, 1), "1 subfolder");
+        assert_eq!(folder_facts(0, 2), "2 subfolders");
+        assert_eq!(folder_facts(3, 0), "3 available items inside");
+        assert_eq!(
+            folder_facts(3, 2),
+            "3 available items inside  ·  2 subfolders"
+        );
+        assert!(!folder_facts(0, 2).contains("No available media"));
+    }
+
+    #[test]
+    fn reconnected_drive_can_be_rescanned_from_sources_manager() {
+        let mut missing = browser();
+        missing.state = SourceState::Missing;
+        missing.unreadable = None;
+        assert!(
+            rescan_enabled(&missing),
+            "Rescan must stay enabled for a missing source"
+        );
+        assert!(
+            save_folders_enabled(&missing, false),
+            "a readable root can save a selection even when the stored state is stale"
+        );
+
+        let mut lost = browser();
+        lost.state = SourceState::PermissionLost;
+        lost.unreadable = Some("This folder cannot be read.".to_string());
+        assert!(rescan_enabled(&lost));
+        assert!(!save_folders_enabled(&lost, false));
+
+        let mut removed = browser();
+        removed.state = SourceState::Removed;
+        assert!(!rescan_enabled(&removed));
+
+        let mut configured_empty = browser();
+        configured_empty.selected.clear();
+        configured_empty.folders_configured = true;
+        assert!(save_folders_enabled(&configured_empty, true));
     }
 
     #[test]
@@ -3010,7 +3143,7 @@ mod tests {
         });
 
         assert_eq!(inclusion_action(Inclusion::Selected), "Exclude");
-        assert_eq!(inclusion_action(Inclusion::Included), "Included above");
+        assert_eq!(inclusion_action(Inclusion::Included), "Exclude");
         assert_eq!(
             toggle_hint(Inclusion::Excluded),
             "Press to include this folder"
