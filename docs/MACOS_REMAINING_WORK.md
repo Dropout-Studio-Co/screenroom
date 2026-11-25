@@ -74,9 +74,9 @@ in [`plans/2026-11-21-accepted-limitations.md`](plans/2026-11-21-accepted-limita
 | Missing | **0** |
 | Broken | **0** |
 | Unverified | **3 rows, all owner-or-hardware:** acceptance step 8 (4K on battery), step 12's rescan half (needs a pointer), and the Ultra width (needs a display wider than 1470 points) |
-| Blocked | **1 row carries a named blocker** (F23), plus F15's live half, which is PENDING on a run with the owner's key. F05 live is no longer blocked: 150 provider posters and a drained queue are recorded |
+| Blocked | **1 row carries a named blocker** (F23, an owner-and-legal decision). F05 live is no longer blocked: 150 provider posters and a drained queue are recorded. F15's live half completed on macOS on 2026-11-03 ([`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8); only the Windows run is deferred |
 | Not applicable to macOS | **0** of these 50 |
-| Outstanding implementation tasks | **0 open P1 and 0 open P2 after 2026-11-21.** P1-02 closed with a fenced publication pipeline and a clean 30-minute harness receipt; P1-03 (HDR) and P1-09 (VoiceOver) were removed on 2026-11-03; P1-06 is live-closed with 93 unmatched works; P1-08's session is verified and its device half stays open; P1-13 is an accepted limitation; P1-07's live calls are PENDING on a run with the owner's key |
+| Outstanding implementation tasks | **0 open macOS code tasks after 2026-11-22.** P1-02 closed with a fenced publication pipeline and a clean 30-minute harness receipt; P1-03 (HDR) and P1-09 (VoiceOver) were removed on 2026-11-03; P1-06 closed live on 2026-11-21 with 93 unmatched works, and its `Unauthorized` follow-up closed on 2026-11-22; P1-07 closed on macOS on 2026-11-03 and F15 with it ([`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8); P2-06's three UI nits closed on 2026-11-22. What is still listed is not code: P1-04's seven owner judgements, P1-08's device half (a third-party receiver), P1-13's accepted limitation, P2-06's Ultra width owner look and P2-09's upstream iced/wgpu advisories |
 | Outstanding human/device tasks | **9 after 2026-11-21, and none of them is a code task:** 7 owner judgements (sound, poster taste, smoothness, the Ultra width, a third-party renderer, the source directory, the literal *Update now* click) plus a true power cut and a Developer ID certificate |
 
 The four measures the brief asks to keep apart:
@@ -84,9 +84,9 @@ The four measures the brief asks to keep apart:
 | | Value | Meaning |
 | --- | --- | --- |
 | **Implementation** | 31 of 34 product/quality areas implemented in full (91 %), 3 partial (9 %), 0 absent | every feature area has working code behind it |
-| **Automated verification** | 33 of 34 areas have an automated check that ran | the exception is the live provider calls (F05, F15), which need an owner key |
+| **Automated verification** | **34 of 34 areas have a check that ran** | the two live provider runs used the owner's own key — F05 on 2026-11-21 and F15 on 2026-11-03 ([`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8) — and neither needs it run again |
 | **Human/device acceptance** | 7 of 15 checklist steps closed; 7 half-closed; 1 needs the owner and the hardware | see §5 |
-| **Everyday readiness** | **usable now** for 1080p and 4K at the source frame rate: 24.4 fps at 13.95 % mean CPU on 4K HEVC Main10 through the OpenGL path, against 24.2 fps at 89.8 % on the old one | SDR is the only output (HDR removed 2026-11-03); no PiP at all (withdrawn 2026-11-02); no online enrichment without an owner key, and the live subtitle provider is PENDING its four commands |
+| **Everyday readiness** | **usable now** for 1080p and 4K at the source frame rate: 24.4 fps at 13.95 % mean CPU on 4K HEVC Main10 through the OpenGL path, against 24.2 fps at 89.8 % on the old one | SDR is the only output (HDR removed 2026-11-03); no PiP at all (withdrawn 2026-11-02); no online enrichment without an owner key, and the live subtitle provider was verified on macOS on 2026-11-03 ([`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8) |
 
 **What changed in the second session, measured rather than asserted.** The
 application's own `SCREENROOM_PLAY_CHECK`, same 4K HEVC Main10 fixture, 24 fps
@@ -125,8 +125,10 @@ OpenGL path meets all three on this machine.
    saved sources with an honest external handoff, receiver discovery, and an action
    strip that runs every one of those from the keyboard.
 
-The two things that keep it from being *finished* are the 4K cost and the advanced
-features that need something the machine does not have.
+What remains between the application and *finished* is not code: the owner
+judgements P1-04 lists, hardware-dependent checks such as step 8's battery
+observation and the Ultra width, and the accepted or upstream limitations (F23,
+P2-09). The 4K zero-copy GPU path is closed by P1-01 and P1-02.
 
 ### The interface rebuild (2026-11-02)
 
@@ -295,11 +297,13 @@ than reclassified.
 - **Requirement:** F07, Q02 (G2 on-screen half).
 - **Status:** COMPLETE. The application renders through `MPV_RENDER_API_TYPE_OPENGL` into a pool of `IOSurface`s and samples them as `wgpu` textures via `texture_from_raw`/`create_texture_from_hal`, with no CPU copy. Acceptance met on the owner's M4: 24.39 fps delivered, 13.95 % mean CPU, 53.10 % peak, `uploaded_fps = 0`, against 24.24 fps at 89.82 % mean and 190.50 % peak for the software path. Implementation in `crates/screenroom-player/src/{gl_render,surface}.rs` and `apps/desktop/src/video_surface.rs`, selected in `worker.rs`; `SCREENROOM_RENDER=software` forces the old path, which is otherwise the fallback when the GL context cannot be created.
 - **Four defects found while integrating it, each now fixed and each the kind that looks like something else:** `FLIP_Y` must be 0 for a texture-backed FBO read top-down (with 1 the picture is upside down, and a symmetric pattern hides it — the Bengali subtitle check found it by lighting pixels in the top band); enabling `ADVANCED_CONTROL` hard-deadlocks the mpv core when the render thread also calls other libmpv functions, which this worker does, and libmpv said so itself (`mpv_render_context_render() not being called or stuck`); a three-slot pool starves once published frames are held, so the pool now grows to sixteen and reaps only when all slots are free; and `hwdec=auto-copy` is only needed by the software path, so the OpenGL path uses zero-copy decode, which is what took CPU from 28 % to 14 %.
-- **What is missing:** the application still converts every frame on the CPU and
-  uploads 33 MB per 4K frame. Measured: 18.7–22.0 fps delivered at 116–186 % CPU
-  (`SCREENROOM_PLAY_CHECK`), against a probe that delivers 22.9–23.7 fps at
-  27–32 % CPU through OpenGL → IOSurface → Metal (`HWDEC_EVIDENCE.md`,
-  "The zero-copy GPU path, measured").
+- **What was missing (historical baseline before P1-01 closed):** before this change,
+  the application converted every frame on the CPU and uploaded 33 MB per 4K frame.
+  Measured: 18.7–22.0 fps delivered at 116–186 % CPU (`SCREENROOM_PLAY_CHECK`),
+  against a probe that delivered 22.9–23.7 fps at 27–32 % CPU through
+  OpenGL → IOSurface → Metal (`HWDEC_EVIDENCE.md`, "The zero-copy GPU path,
+  measured"). The shipped OpenGL path now records 24.39 fps at 13.95 % mean CPU
+  with zero uploads, as the Status line above states.
 - **Where:** `crates/screenroom-player/src/render.rs` (software renderer),
   `crates/screenroom-player/src/worker.rs` (`present`),
   `apps/desktop/src/video_surface.rs` (texture upload), `apps/desktop/src/app.rs`
@@ -528,12 +532,14 @@ than reclassified.
 
 ---
 
-#### P1-07 · Subtitles: resolve from the file, then The Subtitle DB (F15) — **store and order complete, live PENDING**
+#### P1-07 · Subtitles: resolve from the file, then The Subtitle DB (F15) — **COMPLETE on macOS (2026-11-03), Windows deferred**
 
 - **Requirement:** F15.
-- **Status:** COMPLETE for the resolution order and the store. **PENDING for every
-  live call.** The provider is The Subtitle DB and only that
-  ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md),
+- **Status:** **COMPLETE and verified in the running application on macOS
+  (2026-11-03)** — the same state as the F15 row in §4.1 — with the live calls
+  recorded in [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md) §8. The Windows run
+  stays deferred (BLOCKED, no build on that machine). The provider is The Subtitle
+  DB and only that ([ADR-005](ADR-005_SUBTITLE_PROVIDER_AND_FEATURE_REMOVALS.md),
   [`SUBTITLE_PROVIDER.md`](SUBTITLE_PROVIDER.md)); OpenSubtitles is removed.
 - **The order, which is the requirement:** an embedded track in the file, then a
   sidecar beside the media, and only when neither exists may the app ask TSDB. The
@@ -939,7 +945,7 @@ check that actually ran; `Action` is what is still owed and by whom.
 | F12 | Watchlists and favourites | COMPLETE | toggle/filter tests | — | — |
 | F13 | Audio tracks and subtitles | COMPLETE | `step_5`, `step_21`, Bengali pixel test | on-screen legibility | owner |
 | F14 | Skip intro and credits | COMPLETE (manual) | marker and guard tests | — | — |
-| F15 | Subtitles: file first, then The Subtitle DB | COMPLETE store + order / PENDING live | store tests, `step_21` | run `SUBTITLE_PROVIDER.md` §8 with the owner's key | owner |
+| F15 | Subtitles: file first, then The Subtitle DB | COMPLETE on macOS (2026-11-03); Windows deferred | store tests, `step_21`, run and screenshots in `SUBTITLE_PROVIDER.md` §8 | Windows run (deferred) | owner |
 | F16 | Local recommendations | COMPLETE | recommendation tests | — | — |
 | F17 | Browse previews | COMPLETE | `step_17` | — | — |
 | F18 | Picture-in-Picture | WITHDRAWN (2026-11-02) | — | not wanted; ADR-016 withdrawn | — |
