@@ -291,8 +291,14 @@ fn scan_folder(app: &mut App, root: &Path) {
     app.new_root = root.to_string_lossy().to_string();
     let _ = app.update(Message::AddFolder);
     assert!(
+        app.scan_token.is_none(),
+        "granting a folder stages it before any scan"
+    );
+    let _ = app.update(Message::FolderToggle(String::new()));
+    let _ = app.update(Message::SaveSourceFolders);
+    assert!(
         app.scan_token.is_some(),
-        "granting a folder must start its scan"
+        "saving the staged folder must start its scan"
     );
     let deadline = Instant::now() + Duration::from_secs(180);
     while app.scan_token.is_some() {
@@ -393,8 +399,14 @@ fn step_1_a_first_run_scan_fills_the_grid_before_it_finishes() {
     app.new_root = media.root.to_string_lossy().to_string();
     let _ = app.update(Message::AddFolder);
     assert!(
+        app.scan_token.is_none(),
+        "granting a folder stages it before any scan"
+    );
+    let _ = app.update(Message::FolderToggle(String::new()));
+    let _ = app.update(Message::SaveSourceFolders);
+    assert!(
         app.scan_token.is_some(),
-        "granting a folder must start its scan"
+        "saving the staged folder must start its scan"
     );
 
     let deadline = Instant::now() + Duration::from_secs(180);
@@ -1243,8 +1255,8 @@ fn step_15_the_journey_is_reachable_from_the_keyboard_alone() {
 #[test]
 fn settings_are_operable_without_a_pointer() {
     let mut app = fresh_app();
-    let _ = app.update(command_key("3"));
-    assert_eq!(app.screen, Screen::Settings, "⌘3 reaches Settings");
+    let _ = app.update(command_key("4"));
+    assert_eq!(app.screen, Screen::Settings, "⌘4 reaches Settings");
 
     let labels = app.settings_labels();
     assert!(
@@ -1301,7 +1313,7 @@ fn settings_are_operable_without_a_pointer() {
 #[test]
 fn the_settings_cursor_walks_only_the_section_on_screen() {
     let mut app = fresh_app();
-    let _ = app.update(command_key("3"));
+    let _ = app.update(command_key("4"));
     app.settings_section = Section::Playback;
 
     let playback_rows = app.settings_labels().len();

@@ -102,7 +102,7 @@ source that consumes it:
 | Variable | Effect | Where |
 | --- | --- | --- |
 | `SCREENROOM_LIBRARY=<file>` | opens that SQLite library instead of the default one | `app.rs` |
-| `SCREENROOM_OPEN_SCREEN=library\|settings\|detail\|player` | starts on that screen; Detail opens the first Library item, Player opens it and plays | `app.rs` (`open_requested_screen`) |
+| `SCREENROOM_OPEN_SCREEN=library\|sources\|settings\|detail\|player` | starts on that screen; Detail opens the first Library item, Player opens it and plays | `app.rs` (`open_requested_screen`) |
 | `SCREENROOM_WINDOW=hidden` | builds the window hidden and never activates it | `play_check.rs` (`requests_hidden_window`) |
 | `SCREENROOM_WINDOW_WIDTH=<px>` | opens at that width, floored at the minimum the layout needs, so a breakpoint can be seen rather than inferred | `app.rs` (`verification_size`) |
 | `SCREENROOM_WINDOW_HEIGHT=<px>` | opens at that height | `app.rs` (`verification_size`) |
